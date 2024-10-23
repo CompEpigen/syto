@@ -12,7 +12,8 @@ build/
 develop-eggs/
 dist/
 downloads/
-Data/
+*.txt
+*.fa
 Logs/
 eggs/
 .eggs/
