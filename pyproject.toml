@@ -8,7 +8,10 @@ packages = [{include = "methyldl"}]
 
 [tool.poetry.dependencies]
 python = "^3.10"
-numpy = "^2.1.2"
+numpy = "2.0.2"
+transformers = "^4.46.0"
+torch = "^2.5.0"
+tensorflow = "^2.18.0"
 
 
 [tool.poetry.group.dev.dependencies]

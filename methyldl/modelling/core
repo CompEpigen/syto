@@ -1,0 +1,208 @@
+from abc import ABC, abstractmethod
+import torch.nn as nn
+import tensorflow as tf
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from transformers import BertPreTrainedModel, BertModel, BertForMaskedLM
+
+
+class BaseModel(ABC):
+    def __init__(self, config):
+        self.config = config
+        self.num_labels = config.num_labels
+
+    @abstractmethod
+    def initialize_weights(self):
+        """Initialize model weights; framework-specific"""
+        pass
+
+    @abstractmethod
+    def setup_loss(self):
+        """Set up the loss function"""
+        pass
+
+    @abstractmethod
+    def forward(self, *inputs, **kwargs):
+        """Forward pass, to be implemented by subclasses"""
+        pass
+
+    def check_model_status(self):
+        """Check the training mode of model components"""
+        # This can be generalized to ensure each part has a `training` attribute
+        for name, module in vars(self).items():
+            if hasattr(module, 'training'):
+                print(f"{name} training mode : {module.training}")
+
+    @abstractmethod
+    def load_pretrained(self, path, component):
+        """Load weights into a specific component"""
+        pass
+
+
+class ReadClassifier:
+    '''
+    Implementation of the read classifier head from the original MethylBERT paper
+    '''
+    def __init__(self, hidden_size, seq_len, framework='pytorch', dropout_prob=0.05, layer_norm_eps=1e-12):
+        self.seq_len = seq_len
+        self.framework = framework
+
+        if framework == 'pytorch':
+            self.model = nn.Sequential(
+                nn.Linear((hidden_size + 1) * (seq_len + 1), seq_len + 1),
+                nn.Dropout(dropout_prob),
+                nn.ReLU(),
+                nn.LayerNorm(seq_len + 1, eps=layer_norm_eps),
+                nn.Linear(seq_len + 1, 2)
+            )
+        elif framework == 'tensorflow':
+            self.model = tf.keras.Sequential([
+                tf.keras.layers.Dense(seq_len + 1, input_shape=((hidden_size + 1) * (seq_len + 1),)),
+                tf.keras.layers.Dropout(dropout_prob),
+                tf.keras.layers.ReLU(),
+                tf.keras.layers.LayerNormalization(epsilon=layer_norm_eps),
+                tf.keras.layers.Dense(2)
+            ])
+        else:
+            raise ValueError("Unsupported framework")
+
+    def forward(self, x):
+        return self.model(x)
+    
+    def from_pretrained_read_classifier(self, pretrained_model_name_or_path, device="cpu"):
+        try:
+            if self.framework == 'tensorflow':
+                self.model.load_weights(pretrained_model_name_or_path)
+            elif self.framework == 'pytorch':
+                self.model.load_state_dict(torch.load(pretrained_model_name_or_path, map_location=device)) 
+            print("Weights loaded successfully.")
+        except Exception as e:
+            print(f"Failed to load weights from {pretrained_model_name_or_path}: {e}")
+
+from abc import ABC, abstractmethod
+import tensorflow as tf
+import torch
+import torch.nn as nn
+from transformers import BertPreTrainedModel, BertModel
+
+class BaseModel(ABC):
+    def __init__(self, config):
+        self.config = config
+        self.num_labels = config.num_labels
+
+    @abstractmethod
+    def initialize_weights(self):
+        pass
+
+    @abstractmethod
+    def setup_loss(self, loss_type):
+        pass
+
+    @abstractmethod
+    def forward(self, *inputs, **kwargs):
+        pass
+
+class Classifier:
+    def __init__(self, hidden_size, seq_len, framework='pytorch', dropout_prob=0.05, layer_norm_eps=1e-12):
+        self.framework = framework
+        if framework == 'pytorch':
+            self.model = nn.Sequential(
+                nn.Linear((hidden_size + 1) * (seq_len + 1), seq_len + 1),
+                nn.Dropout(dropout_prob),
+                nn.ReLU(),
+                nn.LayerNorm(seq_len + 1, eps=layer_norm_eps),
+                nn.Linear(seq_len + 1, 2)
+            )
+        elif framework == 'tensorflow':
+            self.model = tf.keras.Sequential([
+                tf.keras.layers.Dense(seq_len + 1, input_shape=((hidden_size + 1) * (seq_len + 1),)),
+                tf.keras.layers.Dropout(dropout_prob),
+                tf.keras.layers.ReLU(),
+                tf.keras.layers.LayerNormalization(epsilon=layer_norm_eps),
+                tf.keras.layers.Dense(2)
+            ])
+        else:
+            raise ValueError("Unsupported framework")
+
+    def forward(self, x):
+        return self.model(x)
+
+class GenericMethylBert(BertPreTrainedModel, BaseModel):
+    def __init__(self, config, seq_len=150, framework='pytorch'):
+        super(GenericMethylBert, self).__init__(config)
+        self.seq_len = seq_len
+        self.framework = framework
+
+        if framework == 'pytorch':
+            self.bert = BertModel(config)
+            self.dropout = nn.Dropout(config.hidden_dropout_prob)
+            self.read_classifier = Classifier(
+                hidden_size=config.hidden_size,
+                seq_len=seq_len,
+                framework=framework,
+                dropout_prob=0.05,
+                layer_norm_eps=config.layer_norm_eps
+            )
+            self.dmr_encoder = nn.Embedding(num_embeddings=config.num_labels, embedding_dim=seq_len + 1)
+            self.setup_loss(config.loss)
+        elif framework == 'tensorflow':
+            self.bert = tf.keras.models.Model()  # Placeholder: TensorFlow-compatible BERT
+            self.dropout = tf.keras.layers.Dropout(config.hidden_dropout_prob)
+            self.read_classifier = Classifier(
+                hidden_size=config.hidden_size,
+                seq_len=seq_len,
+                framework=framework,
+                dropout_prob=0.05,
+                layer_norm_eps=config.layer_norm_eps
+            )
+            self.dmr_encoder = tf.keras.layers.Embedding(input_dim=config.num_labels, output_dim=seq_len + 1)
+            self.setup_loss(config.loss)
+        else:
+            raise ValueError("Unsupported framework")
+
+    def setup_loss(self, loss_type):
+        if self.framework == 'pytorch':
+            if loss_type == "bce":
+                self.loss_fn = nn.CrossEntropyLoss()
+            elif loss_type == "focal_bce":
+                self.loss_fn = FocalLoss()  # Assuming FocalLoss is defined
+        elif self.framework == 'tensorflow':
+            if loss_type == "bce":
+                self.loss_fn = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
+            elif loss_type == "focal_bce":
+                self.loss_fn = self.tf_focal_loss  # Custom TF focal loss if needed
+
+    def tf_focal_loss(self, labels, logits, gamma=2.0):
+        """Define a TensorFlow-compatible focal loss if needed."""
+        y_pred = tf.nn.softmax(logits)
+        labels = tf.cast(labels, tf.float32)
+        loss = -labels * (1 - y_pred) ** gamma * tf.math.log(y_pred + 1e-6)
+        return tf.reduce_mean(loss)
+
+    def from_pretrained_read_classifier(self, pretrained_model_name_or_path, device="cpu"):
+        if self.framework == 'pytorch':
+            device_map = torch.device(device)
+            self.read_classifier.model.load_state_dict(torch.load(pretrained_model_name_or_path, map_location=device_map))
+        elif self.framework == 'tensorflow':
+            device_name = "/CPU:0" if device == "cpu" else "/GPU:0"
+            with tf.device(device_name):
+                self.read_classifier.model.load_weights(pretrained_model_name_or_path)
+
+    def forward(self, input_ids, attention_mask, token_type_ids, labels, ctype_label):
+        if self.framework == 'pytorch':
+            bert_outputs = self.bert(input_ids, attention_mask=attention_mask, token_type_ids=token_type_ids)
+            sequence_output = self.dropout(bert_outputs[0])
+            encoded_dmr = self.dmr_encoder(labels.view(-1))
+            sequence_output = torch.cat((sequence_output, encoded_dmr.unsqueeze(-1)), axis=-1)
+            ctype_logits = self.read_classifier.forward(sequence_output.view(-1, (self.seq_len + 1) * (self.config.hidden_size + 1)))
+            loss = self.loss_fn(ctype_logits, ctype_label)
+        elif self.framework == 'tensorflow':
+            bert_outputs = self.bert([input_ids, attention_mask, token_type_ids])  # Assumes compatible inputs
+            sequence_output = self.dropout(bert_outputs[0])
+            encoded_dmr = self.dmr_encoder(labels)
+            sequence_output = tf.concat([sequence_output, tf.expand_dims(encoded_dmr, -1)], axis=-1)
+            ctype_logits = self.read_classifier.forward(tf.reshape(sequence_output, [-1, (self.seq_len + 1) * (self.config.hidden_size + 1)]))
+            loss = self.loss_fn(ctype_label, ctype_logits)
+
+        return {"loss": loss, "classification_logits": ctype_logits}
