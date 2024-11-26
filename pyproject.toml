@@ -31,5 +31,6 @@ priority = "explicit"
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
 
+
 [tool.poetry.extras]
 plotting = ["matplotlib"]

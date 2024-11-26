@@ -203,7 +203,7 @@ class BertModel(BertPreTrainedModel):
             token_type_ids = torch.zeros_like(input_ids)
 
         embedding_output = self.embeddings(input_ids, token_type_ids,
-                                           position_ids,cpg_methylation, m6a_methylation)
+                                           position_ids,cpg_methylation, m6a_methylation) #TODO remove position ids as not needed 
 
         subset_mask = []
         first_col_mask = []
@@ -427,7 +427,6 @@ class EpigenDnabert2():
             "overwrite_output_dir": True, 
             "log_level": "info",
             "find_unused_parameters": False
-
         }
 
         self.training_args = default_training_args

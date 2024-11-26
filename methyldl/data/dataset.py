@@ -174,6 +174,13 @@ def generate_example_data(sequence_length: int = 150,
         List[List[Union[str, int]]]: A list of rows where the first row is the header,
                                      and subsequent rows are synthetic data.
     """
+
+    # Validate inputs
+    if num_samples < 1:
+        raise ValueError("The number of samples (num_samples) must be at least 1.")
+    if sequence_length < 30:
+        raise ValueError("The sequence length (sequence_length) must be at least 30.")
+    
     # Create the header
     header = ["input_ids"]
     if include_cpg_methylation:
