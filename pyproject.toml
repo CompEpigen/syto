@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "methyldl"
-version = "0.1.0"
+version = "0.1.2"
 description = ""
 authors = ["Dmytro Rizdvanteskyi"]
 readme = "README.md"
@@ -30,7 +30,6 @@ priority = "explicit"
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
-
 
 [tool.poetry.extras]
 plotting = ["matplotlib"]

@@ -372,6 +372,7 @@ class TrainingArguments(transformers.TrainingArguments):
     eval_and_save_results: bool = field(default=True)
     save_model: bool = field(default=False)
     seed: int = field(default=42)
+    batch_eval_metrics: bool = field(default=False)
 
 class EpigenDnabert2():
     def __init__(self, 
@@ -385,12 +386,16 @@ class EpigenDnabert2():
         
         assert len(foundation_model_huggingface), "Must specify foundation model path hosted on Hugging Face"
 
+        # Helper method to initialize and customize the model
+        def initialize_model_with_custom_embeddings(base_model, use_cpg, use_m6a):
+            base_model.bert.embeddings = BertEmbeddings(base_model.bert, use_cpg, use_m6a)
+            return BertForSequenceClassification(base_model)
+        
         config = BertForSequenceClassification.config_class.from_pretrained(foundation_model_huggingface)
         # Does not load weights just yet, because if we have a checkpoint, the weights will be retrived from it 
-        model = transformers.AutoModelForSequenceClassification.from_config(trust_remote_code=True, config = config)
+        base_model = transformers.AutoModelForSequenceClassification.from_config(trust_remote_code=True, config = config)
+        model = initialize_model_with_custom_embeddings(base_model, use_cpg_methylation, use_m6a_methylation)
         if fine_tuned_model_path is not None:
-            model.bert.embeddings = BertEmbeddings(model.bert, use_cpg_methylation, use_m6a_methylation)
-            model = BertForSequenceClassification(model)
             checkpoint = torch.load(fine_tuned_model_path, weights_only=False, map_location=torch.device('cuda'))
             # TODO: Remove this part after proper checkpoint is generated:
             old_cpg_methylation_key = 'bert.embeddings.methylation_embeddings.weight'
@@ -401,33 +406,38 @@ class EpigenDnabert2():
 
             model.eval()
         elif load_weights:
-            model = transformers.AutoModelForSequenceClassification.from_pretrained(
+            base_model = transformers.AutoModelForSequenceClassification.from_pretrained(
                 foundation_model_huggingface,
                 trust_remote_code=True,
                 config = config)
+            model = initialize_model_with_custom_embeddings(base_model, use_cpg_methylation, use_m6a_methylation)
         self.model = model
         self.num_labels = num_labels
         self.config = config
         model_max_length = round(max_sequence_length//4+1) # BPE encoding reduces sequence length approximately by a factor of 4
 
-        default_training_args = {
-            "run_name":"dnabert2_default",
-            "per_device_train_batch_size":300,
-            "per_device_eval_batch_size":30,
-            "gradient_accumulation_steps":20,
-            "learning_rate": 3e-5,
-            "fp16": True,
-            "save_steps": 20,
-            "output_dir": "output/dnabert2_default",
-            "evaluation_strategy": "steps",
-            "eval_steps": 20, 
-            "warmup_steps": 100, 
-            "logging_steps": 100, 
-            "num_train_epochs": 250, 
-            "overwrite_output_dir": True, 
-            "log_level": "info",
-            "find_unused_parameters": False
-        }
+        #TODO: Adjust default batch size depending on the avaliable RAM and max_sequence_length
+        #torch.cuda.get_device_properties(0).total_memory / (1024**3)
+
+        default_training_args =  TrainingArguments(
+            run_name = "dnabert2_default",
+            per_device_train_batch_size = 300,
+            per_device_eval_batch_size = 30,
+            gradient_accumulation_steps = 20,
+            learning_rate = 3e-5,
+            fp16 = True,
+            save_steps = 20,
+            output_dir ="output/dnabert2_default",
+            evaluation_strategy = "steps",
+            eval_steps = 20, 
+            warmup_steps = 100, 
+            logging_steps = 100, 
+            num_train_epochs = 250, 
+            overwrite_output_dir = True, 
+            log_level = "info",
+            find_unused_parameters = False,
+            batch_eval_metrics = False,
+            eval_and_save_results = True)
 
         self.training_args = default_training_args
 
@@ -471,26 +481,56 @@ class EpigenDnabert2():
         torch.cuda.empty_cache() 
         return prediction
     
+    def safe_save_model_for_hf_trainer(self, output_dir: str):
+        """Collects the state dict and dump to disk."""
+        state_dict = self.trainer.model.state_dict()
+        if self.trainer.args.should_save:
+            cpu_state_dict = {key: value.cpu() for key, value in state_dict.items()}
+            del state_dict
+            self.trainer._save(output_dir, state_dict=cpu_state_dict)  # noqa
+
     def fine_tune(self,
-                  data_path: str,
-                  training_args: Union[TrainingArguments, None]):
+                  data_path: Optional[str] = None,
+                  training_args: Union[TrainingArguments, None] = None,
+                  train_dataset: Optional[SupervisedDataset] = None,
+                  val_dataset: Optional[SupervisedDataset] = None,
+                  test_dataset: Optional[SupervisedDataset] = None):
         
+        # Ensure that either data_path is provided or all datasets are provided
+        assert data_path or (train_dataset and val_dataset and test_dataset), (
+            "Either 'data_path' must be provided or all of 'train_dataset', 'val_dataset', and 'test_dataset' must not be None."
+        )
+
         # TODO Adding LoRA
-        train_dataset = SupervisedDataset(tokenizer=self.tokenizer, 
-                                        data_path=os.path.join(data_path, "train.csv"), 
+        train_dataset = train_dataset or SupervisedDataset(tokenizer=self.tokenizer, 
+                                        data_path_or_list=os.path.join(data_path, "train.csv"), 
                                         kmer=-1)
-        val_dataset = SupervisedDataset(tokenizer=self.tokenizer, 
-                                        data_path=os.path.join(data_path, "dev.csv"), 
+        val_dataset = val_dataset or SupervisedDataset(tokenizer=self.tokenizer, 
+                                        data_path_or_list=os.path.join(data_path, "dev.csv"), 
                                         kmer=-1)
-        test_dataset = SupervisedDataset(tokenizer=self.tokenizer, 
-                                        data_path=os.path.join(data_path, "test.csv"), 
+        test_dataset = test_dataset or SupervisedDataset(tokenizer=self.tokenizer, 
+                                        data_path_or_list=os.path.join(data_path, "test.csv"), 
                                         kmer=-1)
         
         if training_args is not None:
             self.training_args = training_args # overwritting default training args
 
         self.trainer = self._init_trainer(train_dataset=train_dataset,
-                                     val_dataset = val_dataset,
-                                     test_dataset = test_dataset,
+                                     eval_dataset = val_dataset,
+
                                      args=self.training_args)
+        
+
+        self.trainer.train()
+        if self.training_args.save_model:
+            self.trainer.save_state()
+            self.safe_save_model_for_hf_trainer(output_dir=training_args.output_dir)
+
+        # get the evaluation results from trainer
+        if training_args.eval_and_save_results:
+            results_path = os.path.join(training_args.output_dir, "results", training_args.run_name)
+            results = self.trainer.evaluate(eval_dataset=test_dataset)
+            os.makedirs(results_path, exist_ok=True)
+            with open(os.path.join(results_path, "eval_results.json"), "w") as f:
+                json.dump(results, f)
         

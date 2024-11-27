@@ -1,7 +1,9 @@
 import unittest
 
 from methyldl.data.dataset import SupervisedDataset, generate_example_data
-from methyldl.modelling.dnabert2 import EpigenDnabert2
+from methyldl.modelling.dnabert2 import EpigenDnabert2, TrainingArguments
+from unittest.mock import patch, MagicMock
+import tempfile
 
 
 class TestEpigenDnabert2Predict(unittest.TestCase):
@@ -83,3 +85,51 @@ class TestEpigenDnabert2Predict(unittest.TestCase):
 
         predictions = model.predict(dataset)
         self.assertEqual(len(predictions.predictions), 1)  # Ensure predictions work with labeled data
+
+
+
+class TestEpigenDnabert2FineTune(unittest.TestCase):
+    def test_fine_tune(
+        self, 
+    ):
+        # Generate example data using generate_example_data
+        data = generate_example_data(sequence_length=150, num_samples=10, include_cpg_methylation=True, include_labels=True)
+        # Create temp directory for results
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # Initialize model
+            model = EpigenDnabert2(
+                load_weights=False,
+                max_sequence_length=150,
+                num_labels=2,
+                use_cpg_methylation=True,
+                use_m6a_methylation=False,
+            )
+
+            data_prepared = SupervisedDataset(data, tokenizer=model.tokenizer)
+
+            # Define custom training arguments
+            training_args = TrainingArguments(
+                run_name="test_run",
+                per_device_train_batch_size=10,
+                per_device_eval_batch_size=10,
+                num_train_epochs=1,
+                output_dir=temp_dir,
+                evaluation_strategy="steps",
+                eval_steps=1,
+                save_steps=1,
+                logging_steps=1,
+                save_total_limit=1,
+                overwrite_output_dir=True,
+                save_model=False,  # Avoid saving to disk
+                eval_and_save_results=True,
+            )
+
+            # Call fine_tune with the mocked datasets and training arguments
+            model.fine_tune(
+                training_args=training_args,
+                test_dataset=data_prepared,
+                val_dataset=data_prepared,
+                train_dataset=data_prepared
+            )
+
+  

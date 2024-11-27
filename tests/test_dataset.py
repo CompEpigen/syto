@@ -12,14 +12,14 @@ class TestGenerateExampleData(unittest.TestCase):
     
     def test_include_cpg_methylation(self):
         """Test with cpg_methylation included."""
-        result = generate_example_data(include_cpg_methylation=True)
+        result = generate_example_data(include_cpg_methylation=True, cpg_proportion={ 2: 1,1: 0,0: 0})
         self.assertEqual(result[0], ["input_ids", "cpg_methylation_sequence"])
         self.assertEqual(len(result[1][0]), 150)  # Genome sequence length
         self.assertEqual(result[1][1], "2" * 150)  # cpg_methylation sequence
     
     def test_include_m6a_methylation(self):
         """Test with m6a_methylation included."""
-        result = generate_example_data(include_m6a_methylation=True)
+        result = generate_example_data(include_m6a_methylation=True, m6a_proportion={ 2: 1,1: 0,0: 0})
         self.assertEqual(result[0], ["input_ids", "m6a_methylation_sequence"])
         self.assertEqual(len(result[1][0]), 150)  # Genome sequence length
         self.assertEqual(result[1][1], "2" * 150)  # m6a_methylation sequence
@@ -40,7 +40,9 @@ class TestGenerateExampleData(unittest.TestCase):
         """Test with all features included."""
         result = generate_example_data(include_cpg_methylation=True,
                                        include_m6a_methylation=True,
-                                       include_labels=True)
+                                       include_labels=True,
+                                       cpg_proportion={ 2: 1,1: 0,0: 0},
+                                       m6a_proportion={ 2: 1,1: 0,0: 0})
         self.assertEqual(result[0], ["input_ids", "cpg_methylation_sequence", "m6a_methylation_sequence", "label"])
         self.assertEqual(len(result[1][0]), 150)  # Genome sequence length
         self.assertEqual(result[1][1], "2" * 150)  # cpg_methylation sequence
