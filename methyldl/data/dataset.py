@@ -15,7 +15,8 @@ class SupervisedDataset(Dataset):
     def __init__(self, 
                  data_path_or_list: Union[str,list], 
                  tokenizer: transformers.PreTrainedTokenizer, 
-                 kmer: int = -1):
+                 kmer: int = -1,
+                 first_n_samples: int = None):
         """
         Args:
             data_path_or_list (str or list): Path to the CSV file or a structured list.
@@ -42,7 +43,10 @@ class SupervisedDataset(Dataset):
 
         # Extract header and data
         header = data[0]
-        data = data[1:]
+        if first_n_samples is not None: 
+            data = data[1:first_n_samples]
+        else:
+            data = data[1:]
 
         # Identify indices dynamically
         indices = {col: idx for idx, col in enumerate(header)}
@@ -82,17 +86,17 @@ class SupervisedDataset(Dataset):
         # Tokenize methylation sequences if present
         if self.cpg_methylation is not None:
             self.cpg_methylation = torch.tensor([
-                self.tokenize_methyl_sequences(text, input_ids, methyl_seq)
-                for text, input_ids, methyl_seq in zip(texts, self.input_ids, self.cpg_methylation)
+                self.tokenize_methyl_sequences(input_ids, methyl_seq)
+                for input_ids, methyl_seq in zip(self.input_ids, self.cpg_methylation)
             ])
 
         if self.m6a_methylation is not None:
             self.m6a_methylation = torch.tensor([
-                self.tokenize_methyl_sequences(text, input_ids, methyl_seq)
-                for text, input_ids, methyl_seq in zip(texts, self.input_ids, self.m6a_methylation)
+                self.tokenize_methyl_sequences(input_ids, methyl_seq)
+                for input_ids, methyl_seq in zip(self.input_ids, self.m6a_methylation)
             ])
 
-    def tokenize_methyl_sequences(self, text, input_ids, methyl_seq):
+    def tokenize_methyl_sequences(self, input_ids, methyl_seq):
         methyl_seq = [int(x) for x in methyl_seq]
         token_lengths = [len(self.inversed_vocab[x]) for x in input_ids.tolist()]
         token_breaks = np.cumsum(token_lengths)
@@ -154,10 +158,6 @@ class DataCollatorForSupervisedDataset:
 
 import random
 from typing import List, Dict, Union
-
-import random
-from typing import List, Union
-
 
 def generate_example_data(sequence_length: int = 150,
                           include_cpg_methylation: bool = False,
