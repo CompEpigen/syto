@@ -1,8 +1,9 @@
 import argparse
 import multiprocessing
 from functools import partial
+from typing import List
 
-def _kmers_with_overlap(sequence:str, kmer:int=3) -> str:
+def generate_kmer_str_with_overlap(sequence:str, kmer:int=3) -> str:
     '''
         Construct k-mers with overlap from the original DNA sequence
 
@@ -13,6 +14,9 @@ def _kmers_with_overlap(sequence:str, kmer:int=3) -> str:
     '''
     return ' '.join([sequence[i:i+kmer] for i in range(len(sequence) - kmer + 1)])
 
+def get_alter_of_dna_sequence(sequence: str):
+    MAP = {"A": "T", "T": "A", "C": "G", "G": "C"}
+    return "".join([MAP[c] for c in sequence])
 
 def process_chunk(chunk, k, seq_len, valid_chromosomes):
     """Processes a chunk of the reference file."""
@@ -37,10 +41,23 @@ def process_chunk(chunk, k, seq_len, valid_chromosomes):
             while len(cur_line) >= seq_len:
                 new_line = cur_line[:seq_len]
                 cur_line = cur_line[seq_len:]
-                sentence = _kmers_with_overlap(new_line, kmer=k)
+                sentence = generate_kmer_str_with_overlap(new_line, kmer=k)
                 results.append(sentence)
     
     return results
+
+def collapse_methylation(seq:List) -> int:
+    '''
+    Computes aggregated methylation tag based on the tags applied to individual nucleotides in a given sequence seq
+    '''
+    if not seq:
+        return 2 # Other for empty sequences
+    if(any(x==1 for x in seq)):
+        return 1 #  Methylated cytosine at CpG context
+    elif(any(x==0 for x in seq)):
+        return 0 #  Unmethylated cytosine at CpG context
+    else:
+        return 2 #  Other
 
 def pretrain_data_preprocess(f_ref: str, k: int = 3, seq_len: int = 510, f_output: str = None, num_cores:int = None) -> None:
     '''
@@ -56,7 +73,7 @@ def pretrain_data_preprocess(f_ref: str, k: int = 3, seq_len: int = 510, f_outpu
             Path to the output file, an appropriate name 
             will be automatically assigned if not given
     '''
-    
+    # TODO adapt to all models by allowing argument k = -1  
     # Get number of CPU cores and use 90% of them, but not less than one
     avaliable_cpus = multiprocessing.cpu_count()
     if num_cores is None:
@@ -92,7 +109,6 @@ def pretrain_data_preprocess(f_ref: str, k: int = 3, seq_len: int = 510, f_outpu
                 fp_out.write(sentence + "\n")
 
     print(f"Processing completed. Output saved to {f_output}")
-        
 
 def parse_args():
     parser = argparse.ArgumentParser()

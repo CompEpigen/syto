@@ -13,7 +13,9 @@ develop-eggs/
 dist/
 downloads/
 *.txt
+*.csv
 *.fa
+*.bam
 Logs/
 eggs/
 .eggs/
