@@ -11,12 +11,14 @@ python = "^3.10"
 numpy = "2.0.2"
 transformers = "^4.46.0"
 torch = {version = "^2.5.0+cu121", source = "torch121"}
-tensorflow = "^2.18.0"
 scikit-learn = "^1.5.2"
 einops = "^0.8.0"
 torchvision = "^0.20.1"
 accelerate = ">=0.26.0"
-matplotlib = {version = "^3.9.2", optional = true}
+pandas = "^2.2.3"
+tensorflow = "^2.18.0"
+tensorflow-intel = "^2.18.0"
+matplotlib = "^3.10.0"
 
 
 [tool.poetry.group.dev.dependencies]
@@ -30,6 +32,3 @@ priority = "explicit"
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
-
-[tool.poetry.extras]
-plotting = ["matplotlib"]
