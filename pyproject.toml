@@ -16,8 +16,6 @@ einops = "^0.8.0"
 torchvision = "^0.20.1"
 accelerate = ">=0.26.0"
 pandas = "^2.2.3"
-tensorflow = "^2.18.0"
-tensorflow-intel = "^2.18.0"
 matplotlib = "^3.10.0"
 
 
