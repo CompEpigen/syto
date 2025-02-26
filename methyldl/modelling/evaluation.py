@@ -8,9 +8,14 @@ from typing import Union, Tuple, Any
 Manually calculate the accuracy, f1, matthews_correlation, precision, recall with sklearn.
 """
 def calculate_metric_with_sklearn(predictions: np.ndarray, labels: np.ndarray):
+    # print(predictions.shape, labels.shape)
     valid_mask = labels != -100  # Exclude padding tokens (assuming -100 is the padding token ID)
     valid_predictions = predictions[valid_mask]
     valid_labels = labels[valid_mask]
+    # print(valid_labels, valid_predictions)
+    # print(sklearn.metrics.f1_score(
+    #         valid_labels, valid_predictions, average="macro", zero_division=0
+    #     ))
     return {
         "accuracy": sklearn.metrics.accuracy_score(valid_labels, valid_predictions),
         "f1": sklearn.metrics.f1_score(
@@ -35,7 +40,6 @@ def preprocess_logits_for_metrics(logits:Union[torch.Tensor, Tuple[torch.Tensor,
     if logits.ndim == 3:
         # Reshape logits to 2D if needed
         logits = logits.reshape(-1, logits.shape[-1])
-
     return torch.argmax(logits, dim=-1)
 
 
