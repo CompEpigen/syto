@@ -204,6 +204,10 @@ class Dismir:
             self.device = device
         
         # Initialize the PyTorch model
+        self.train_data_path = train_data_path
+        self.test_data_path = test_data_path
+        self.valid_data_path = valid_data_path
+        
         self.model = DISMIRNet(max_sequence_length).to(self.device)
         
 
@@ -218,7 +222,6 @@ class Dismir:
         - G: [0,0,0,1,0]
         - Methylated C: [0,0,1,0,1]  (the last index indicates methylation)
         """
-        # We'll replicate the same logic
         # module[i]:
         #   0 -> A
         #   1 -> T
@@ -288,9 +291,9 @@ class Dismir:
         """
 
         # Load data
-        self.train_x, self.train_y = self.load_and_transform_input(train_data_path)
-        self.valid_x, self.valid_y = self.load_and_transform_input(valid_data_path)
-        self.test_x,  self.test_y  = self.load_and_transform_input(test_data_path)
+        self.train_x, self.train_y = self.load_and_transform_input(self.train_data_path)
+        self.valid_x, self.valid_y = self.load_and_transform_input(self.valid_data_path)
+        self.test_x,  self.test_y  = self.load_and_transform_input(self.test_data_path)
         
         # Convert to torch.Tensor
         self.train_x = torch.tensor(self.train_x, dtype=torch.float32)
@@ -432,7 +435,7 @@ class Dismir:
         :param methylation_sequences: list (or array-like) of methylation strings ("0"/"1")
         :param batch_size: batch size for inference
         :param threshold: classification threshold for 'positive' label
-        :return: predictions as either probability or binary label
+        :return: predictions as probability and binary label
         """
         self.model.eval()
         
@@ -458,7 +461,6 @@ class Dismir:
         all_outputs = np.array(all_outputs)
         predicted_labels = (all_outputs >= threshold).astype(int)
         
-        # Return both the probabilities and the thresholded labels, 
-        # or adapt to your needs.
+        # Returns probabilities and the thresholded labels, 
         return all_outputs, predicted_labels
 
