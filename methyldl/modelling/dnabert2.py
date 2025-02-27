@@ -1,48 +1,29 @@
 import os
-import csv
-import copy
 import json
-import logging
 import gc
 from dataclasses import dataclass, field
-from typing import Any, Optional, Dict, Sequence, Tuple, List, Union
+from typing import  Optional, Dict, Tuple, List, Union
 from transformers.models.bert.modeling_bert import BertPreTrainedModel
-from transformers.modeling_outputs import (MaskedLMOutput,
-                                           SequenceClassifierOutput)
+from transformers.modeling_outputs import (SequenceClassifierOutput)
 
-from transformers.models.bert.configuration_bert import BertConfig
 from transformers.modeling_utils import PreTrainedModel
 from transformers.training_args import TrainingArguments
 from transformers.data.data_collator import DataCollator
-from transformers.tokenization_utils_base import PreTrainedTokenizerBase
 from transformers.trainer_callback import (
-    CallbackHandler,
-    DefaultFlowCallback,
-    PrinterCallback,
-    ProgressCallback,
-    TrainerCallback,
-    TrainerControl,
-    TrainerState,
+    TrainerCallback
 )
-from transformers.trainer_utils import EvalPrediction
 import torch
 import torch.nn as nn
 from typing import Optional, Callable
 
 import torch
 import transformers
-import sklearn
-import numpy as np
 from torch.utils.data import Dataset
 
-# from peft import (
-#     LoraConfig,
-#     get_peft_model,
-#     get_peft_model_state_dict,
-# )
-
 from methyldl.modelling.evaluation import preprocess_logits_for_metrics, compute_metrics
+from methyldl.modelling.utils import calculate_batch_size
 from methyldl.data.dataset import *
+from safetensors.torch import load_file
 
 class BertEmbeddings(nn.Module):
     """Construct the embeddings for words, ignoring position.
@@ -373,6 +354,13 @@ class TrainingArguments(transformers.TrainingArguments):
     save_model: bool = field(default=False)
     seed: int = field(default=42)
     batch_eval_metrics: bool = field(default=False)
+    remove_unused_columns: bool = field(default=False)
+    eval_accumulation_steps: int = field(default=8)
+    torch_empty_cache_steps: int = field(default=10)
+    prediction_loss_only: bool = field(default=False)
+    gradient_checkpointing: bool = field(default=False)
+    skip_memory_metrics: bool = field(default=True)
+    auto_find_batch_size: bool = field(default=False)
 
 class EpigenDnabert2():
     def __init__(self, 
@@ -396,7 +384,7 @@ class EpigenDnabert2():
         base_model = transformers.AutoModelForSequenceClassification.from_config(trust_remote_code=True, config = config)
         model = initialize_model_with_custom_embeddings(base_model, use_cpg_methylation, use_m6a_methylation)
         if fine_tuned_model_path is not None:
-            checkpoint = torch.load(fine_tuned_model_path, weights_only=False, map_location=torch.device('cuda'))
+            checkpoint = load_file(fine_tuned_model_path)
             # TODO: Remove this part after proper checkpoint is generated:
             old_cpg_methylation_key = 'bert.embeddings.methylation_embeddings.weight'
             if old_cpg_methylation_key in checkpoint.keys():
@@ -416,13 +404,12 @@ class EpigenDnabert2():
         self.config = config
         model_max_length = round(max_sequence_length//4+1) # BPE encoding reduces sequence length approximately by a factor of 4
 
-        #TODO: Adjust default batch size depending on the avaliable RAM and max_sequence_length
-        #torch.cuda.get_device_properties(0).total_memory / (1024**3)
+        recomended_batch_size = calculate_batch_size(gb_per_seq = 0.029, cpu_batch_size=300)
 
         default_training_args =  TrainingArguments(
             run_name = "dnabert2_default",
-            per_device_train_batch_size = 300,
-            per_device_eval_batch_size = 30,
+            per_device_train_batch_size = recomended_batch_size,
+            per_device_eval_batch_size = int(recomended_batch_size/2),
             gradient_accumulation_steps = 20,
             learning_rate = 3e-5,
             fp16 = True,
@@ -437,7 +424,15 @@ class EpigenDnabert2():
             log_level = "info",
             find_unused_parameters = False,
             batch_eval_metrics = False,
-            eval_and_save_results = True)
+            eval_and_save_results = True,
+            remove_unused_columns=False,
+            eval_accumulation_steps = 8,
+            torch_empty_cache_steps = 10,
+            prediction_loss_only=False,
+            gradient_checkpointing=False,
+            skip_memory_metrics=True,
+            auto_find_batch_size=False,
+            )
 
         self.training_args = default_training_args
 
