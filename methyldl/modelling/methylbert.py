@@ -2,18 +2,12 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.modules.loss import _Loss
-from transformers import BertPreTrainedModel, BertModel, BertForMaskedLM
-from torch.optim import Adam, AdamW
-from torch.utils.data import DataLoader
-from torch.optim.lr_scheduler import LambdaLR
-from torch.amp import GradScaler
+from transformers import BertPreTrainedModel, BertModel
 import warnings, random 
 import numpy as np
 
-from sklearn.metrics import roc_curve, auc, accuracy_score
 
 from dataclasses import dataclass
-from typing import Optional, Tuple
 import torch
 from transformers.modeling_outputs import ModelOutput
 
@@ -21,16 +15,16 @@ import os
 import json
 import gc
 import numpy as np
-from typing import Optional, Union, Dict, List, Callable, Tuple, Any
+from typing import Optional, Tuple, Union, List
+from methyldl.modelling.utils import calculate_batch_size
 
 from transformers import (
     AutoTokenizer,
     Trainer,
     TrainingArguments,
-    BertConfig,
-    # possibly MethylBERTConfig if you have a custom config
+    BertConfig
 )
-from torch.optim import AdamW
+
 
 from collections import OrderedDict
 import itertools
@@ -326,7 +320,8 @@ class MethylBert:
         load_weights: bool = True,
         fine_tuned_model_path: Optional[str] = None,
         num_labels: int = 2,
-        num_dmr_labels:int = 100
+        num_dmr_labels:int = 100,
+        output_dir:str = "tmp_trainer"
     ):
         """
         :param foundation_model_path: local or HF repo ID for the base BERT config/weights
@@ -342,6 +337,7 @@ class MethylBert:
             # or raise an error
             raise ValueError("Must provide a custom_config dictionary.")
         self._config = custom_config
+        self.output_dir = output_dir
 
         # 2) Load the base BERT config
         if os.path.isdir(foundation_model_path):
@@ -358,37 +354,44 @@ class MethylBert:
         self.seq_len = seq_len
 
         # 3) Build your custom MethylBertEmbeddedDMR
-        if not load_weights and fine_tuned_model_path is None:
-            # from_config only
+        if not load_weights:
+            # (a) Create a model *without* loading any weights
+            print("Initializing MethylBertEmbeddedDMR from config only (no pretrained weights).")
             self.model = MethylBertEmbeddedDMR(config, seq_len=seq_len)
         else:
-            # load from foundation model path or local dir
-            self.model = MethylBertEmbeddedDMR.from_pretrained(
-                foundation_model_path,
-                config=config,
-                seq_len=seq_len,
-            )
+            # (b) If load_weights=True and a fine_tuned_model_path is provided, load from that
+            if fine_tuned_model_path:
+                print(f"Loading MethylBertEmbeddedDMR weights from fine_tuned_model_path: {fine_tuned_model_path}")
+                self.model = MethylBertEmbeddedDMR.from_pretrained(
+                    pretrained_model_name_or_path=fine_tuned_model_path,
+                    config=config,
+                    seq_len=seq_len,
+                    use_safetensors=True
+                )
+            else:
+                # (c) Otherwise, load from the foundation base
+                print(f"Loading MethylBertEmbeddedDMR weights from foundation_model_path: {foundation_model_path}")
+                self.model = MethylBertEmbeddedDMR.from_pretrained(
+                    foundation_model_path,
+                    config=config,
+                    seq_len=seq_len
+                )
 
-        # 4) If you have a fine-tuned checkpoint, load it
-        if fine_tuned_model_path is not None:
-            print(f"Loading fine-tuned checkpoint from {fine_tuned_model_path}")
-            self.model = MethylBertEmbeddedDMR.from_pretrained(
-                fine_tuned_model_path,
-                config=config,
-                seq_len=seq_len,
-            )
+   
 
         # 5) Tokenizer (optional)
         try:
             self.tokenizer = AutoTokenizer.from_pretrained(foundation_model_path)
         except:
             self.tokenizer = None
+        
+        recomended_batch_size = calculate_batch_size(gb_per_seq = 0.0135, cpu_batch_size=700)
+
 
         # 6) Create default TrainingArguments from your config
         #    We feed in your hyperparams below:
         default_training_args = TrainingArguments(
-            output_dir="output/methylbert_default",
-            # HPC config from your dictionary:
+            output_dir=self.output_dir,
             learning_rate=self._config["lr"],
             warmup_steps=self._config["warmup_step"],
             weight_decay=self._config["weight_decay"],
@@ -404,9 +407,9 @@ class MethylBert:
             eval_steps=self._config["eval_freq"],
             save_steps=self._config["eval_freq"],  # or some multiple
             # Other defaults
-            per_device_train_batch_size=750,
-            per_device_eval_batch_size=375,
-            num_train_epochs=150,   # you can override later
+            per_device_train_batch_size=recomended_batch_size,
+            per_device_eval_batch_size=int(recomended_batch_size/2),
+            num_train_epochs=40,   # you can override later
             evaluation_strategy="steps",  # Evaluate every X steps
             remove_unused_columns=False,
             eval_accumulation_steps = 8,
@@ -415,7 +418,10 @@ class MethylBert:
             gradient_checkpointing=True,
             skip_memory_metrics=True,
             auto_find_batch_size=False,
-            save_total_limit=10,
+            save_total_limit=5,
+            load_best_model_at_end = True,
+            metric_for_best_model = "f1"
+            # eval_and_save_results=True
             # label_names=["ctype_label"]
         )
 
@@ -427,7 +433,8 @@ class MethylBert:
                       train_dataset=None, 
                       eval_dataset=None,
                       data_collator=None,
-                      custom_training_args=None):
+                      custom_training_args=None,
+                      prediction_mode = False):
         """
         Internal method to build a HF Trainer.
         """
@@ -438,6 +445,12 @@ class MethylBert:
         if data_collator is None:
             # default to a finetune data collator, or pretrain, or ...
             data_collator = methylbert_finetune_collator  # default is one for fine-tuning
+
+        args=self.training_args
+        if prediction_mode:
+              args.eval_strategy = "no"
+              args.do_train = False
+              args.do_eval = False
 
         trainer = Trainer(
             model=self.model,
@@ -496,11 +509,25 @@ class MethylBert:
             print("Test results:", results)
 
         # Save final model
-        if self.trainer.args.should_save:
-            self.trainer.save_model(self.trainer.args.output_dir)
-            self.safe_save_model_for_hf_trainer(self.trainer.args.output_dir)
+        # if self.training_args.save_model:
+        if True:
+            self.trainer.save_state()
+            self.safe_save_model_for_hf_trainer(output_dir=self.output_dir)
 
-    def predict(self, dataset, data_collator=None):
+        # get the evaluation results from trainer
+        # if training_args.eval_and_save_results:
+        if True:
+            results_path = os.path.join(self.output_dir, "results", training_args.run_name)
+            results = self.trainer.evaluate(eval_dataset=test_dataset)
+            os.makedirs(results_path, exist_ok=True)
+            with open(os.path.join(results_path, "eval_results.json"), "w") as f:
+                json.dump(results, f)
+
+        # if self.trainer.args.should_save:
+        #     self.trainer.save_model(self.trainer.args.output_dir)
+        #     self.safe_save_model_for_hf_trainer(self.trainer.args.output_dir)
+
+    def predict(self, dataset, data_collator=methylbert_finetune_collator):
         """
         Use Hugging Face Trainer for prediction on a dataset.
         """
@@ -508,6 +535,7 @@ class MethylBert:
             # build a trainer for inference
             self.trainer = self._init_trainer(
                 data_collator=data_collator,
+                prediction_mode=True
                 # no train or val dataset
             )
         predictions = self.trainer.predict(dataset)
@@ -670,220 +698,284 @@ class MethylBertDataset(Dataset):
 		return self.lines.shape[0] if type(self.lines) == np.array else len(self.lines)
 
 
+
+
+import gc
+import torch
+import numpy as np
+import random
+import multiprocessing as mp
+from functools import partial
+from copy import deepcopy
+
 class MethylBertPretrainDataset(MethylBertDataset):
-	def __init__(self, f_path: str, vocab: MethylVocab, seq_len: int, random_len=False, n_cores=50):
+    def __init__(self, f_path: str, vocab: MethylVocab, seq_len: int, random_len=False, n_cores=10):
 
-		self.vocab = vocab
-		self.seq_len = seq_len
-		self.f_path = f_path
-		self.random_len = random_len
+        self.vocab = vocab
+        self.seq_len = seq_len
+        self.f_path = f_path
+        self.random_len = random_len
 
-		# Define a range of tokens to mask based on k-mers 
-		self.mask_list = self._get_mask()
+        # Define a range of tokens to mask based on k-mers
+        self.mask_list = self._get_mask()
 
-		# Read all text files and convert the raw sequence into tokens
-		with open(self.f_path, "r") as f_input:
-			print("Open data : %s"%f_input)
-			raw_seqs = f_input.read().splitlines()
+        # Read all text files and convert the raw sequence into tokens
+        with open(self.f_path, "r") as f_input:
+            print("Open data : %s" % f_input)
+            raw_seqs = f_input.read().splitlines()
 
-		print("Total number of sequences : ", len(raw_seqs))
+        print("Total number of sequences : ", len(raw_seqs))
+        num_lines = len(raw_seqs)
 
-		# Multiprocessing for the sequence tokenisation
-		with mp.Pool(n_cores) as pool:
-			line_labels = pool.map(partial(_line2tokens_pretrain, 
-								           tokenizer=self.vocab, 
-								           max_len=self.seq_len), raw_seqs)
-			del raw_seqs
-			print("Lines are processed")
-			self.lines = torch.squeeze(torch.tensor(np.array(line_labels, dtype=np.int16)))
-		del line_labels
-		gc.collect()
+        # Fix 1: Disable multiprocessing for small datasets
+        if num_lines < 10000:
+            # Just run in the main process
+            line_labels = map(
+                partial(_line2tokens_pretrain, tokenizer=self.vocab, max_len=self.seq_len), 
+                raw_seqs
+            )
+            line_labels = list(line_labels)
+        else:
+            # Multiprocessing for the sequence tokenization
+            with mp.Pool(n_cores) as pool:
+                line_labels = pool.map(
+                    partial(_line2tokens_pretrain, tokenizer=self.vocab, max_len=self.seq_len),
+                    raw_seqs
+                )
+        
+        del raw_seqs
+        print("Lines are processed")
+        self.lines = torch.squeeze(torch.tensor(np.array(line_labels, dtype=np.int16)))
+        del line_labels
+        gc.collect()
 
-	def __getitem__(self, index): 
+    def __getitem__(self, index):
 
-		dna_seq = self.lines[index].clone()
+        dna_seq = self.lines[index].clone()
 
-		# Random len
-		if self.random_len and np.random.random() < 0.5:
-			dna_seq = dna_seq[:random.randint(5, self.seq_len)] 
-		
-		# Padding
-		if dna_seq.shape[0] < self.seq_len:
-			pad_num = self.seq_len-dna_seq.shape[0]
-			dna_seq = torch.cat((dna_seq, 
-								torch.tensor([self.vocab.pad_index for i in range(pad_num)], dtype=torch.int16)))
+        # Random len
+        if self.random_len and np.random.random() < 0.5:
+            dna_seq = dna_seq[:random.randint(5, self.seq_len)]
 
-		# Mask 
-		masked_dna_seq, dna_seq, bert_mask = self._masking(dna_seq)
-		#print(dna_seq, masked_dna_seq,"\n=============================================\n")
-		return {"bert_input": masked_dna_seq,
-				"bert_label": dna_seq,
-				"bert_mask" : bert_mask}
-	
-	def subset_data(self, n_seq: int):
-		self.lines = random.sample(self.lines, n_seq)
+        # Padding
+        if dna_seq.shape[0] < self.seq_len:
+            pad_num = self.seq_len - dna_seq.shape[0]
+            dna_seq = torch.cat(
+                (
+                    dna_seq,
+                    torch.tensor([self.vocab.pad_index for _ in range(pad_num)], dtype=torch.int16)
+                )
+            )
 
-	def _get_mask(self):
-		'''
-			Relative positions from the centre of masked region 
-			e.g) [-1, 0, 1] for 3-mers 
-		'''
-		half_length = int(self.vocab.kmers/2)
-		mask_list = [-1*half_length + i for i in range(half_length)] + [i for i in range(1, half_length+1)]
-		if self.vocab.kmers % 2 == 0:
-			mask_list = mask_list[:-1]
+        # Mask
+        masked_dna_seq, dna_seq, bert_mask = self._masking(dna_seq)
 
-		return mask_list
+        return {
+            "bert_input": masked_dna_seq,
+            "bert_label": dna_seq,
+            "bert_mask": bert_mask
+        }
 
-	def _masking(self, inputs: torch.Tensor, threshold=0.15):
-		""" 
-			Moidfied version of masking token function
-			Originally developed by Huggingface (datacollator) and DNABERT
-			
-			https://github.com/huggingface/transformers/blob/9a24b97b7f304fa1ceaaeba031241293921b69d3/src/transformers/data/data_collator.py#L747
+    def subset_data(self, n_seq: int):
+        self.lines = random.sample(self.lines, n_seq)
 
-			https://github.com/jerryji1993/DNABERT/blob/bed72fc0694a7b04f7e980dc9ce986e2bb785090/examples/run_pretrain.py#L251
+    def _get_mask(self):
+        """
+        Relative positions from the center of masked region
+        e.g) [-1, 0, 1] for 3-mers
+        """
+        half_length = int(self.vocab.kmers / 2)
+        mask_list = [-1 * half_length + i for i in range(half_length)] + [i for i in range(1, half_length + 1)]
+        if self.vocab.kmers % 2 == 0:
+            mask_list = mask_list[:-1]
 
-			Added additional tasks to handle each sequence
-			Lines using tokenizer were modified due to different tokenizer object structure
+        return mask_list
 
-		"""
+    def _masking(self, inputs: torch.Tensor, threshold=0.15):
+        """
+        Modified version of a token masking function
+        Originally developed by Huggingface (datacollator) and DNABERT
 
-		labels = inputs.clone()
+        https://github.com/huggingface/transformers/blob/9a24b97b7f304fa1ceaaeba031241293921b69d3/src/transformers/data/data_collator.py#L747
+        https://github.com/jerryji1993/DNABERT/blob/bed72fc0694a7b04f7e980dc9ce986e2bb785090/examples/run_pretrain.py#L251
 
-		# Sample tokens with given probability threshold
-		probability_matrix = torch.full(labels.shape, threshold) # tensor filled with 0.15
+        Added additional tasks to handle each sequence.
+        Lines using tokenizer were modified due to different tokenizer object structure.
+        """
 
-		# Handle special tokens and padding
-		special_tokens_mask = [
-			val < 5 for val in labels.tolist()
-		]
-		probability_matrix.masked_fill_(torch.tensor(special_tokens_mask, dtype=torch.bool), value=0.0)
-		#padding_mask = labels.eq(self.vocab.pad_index)
-		#probability_matrix.masked_fill_(padding_mask, value=0.0)
+        labels = inputs.clone()
 
-		masked_indices = torch.bernoulli(probability_matrix).bool() # get masked tokens based on bernoulli only within non-special tokens		
+        # Sample tokens with given probability threshold
+        probability_matrix = torch.full(labels.shape, threshold)  # tensor filled with 0.15
 
-		# change masked indices
-		masked_index = deepcopy(masked_indices)
-		
-		# This function handles each sequence
-		end = torch.where(probability_matrix!=0)[0].tolist()[-1] # end of the sequence
-		mask_centers = set(torch.where(masked_index==1)[0].tolist()) # mask locations
+        # Handle special tokens (sub-5) -- adjust to your actual logic
+        special_tokens_mask = [val < 5 for val in labels.tolist()]
+        probability_matrix.masked_fill_(torch.tensor(special_tokens_mask, dtype=torch.bool), value=0.0)
 
-		new_centers = deepcopy(mask_centers)
-		for center in mask_centers:
-			for mask_number in self.mask_list:# add neighbour loci 
-				current_index = center + mask_number 
-				if current_index <= end and current_index >= 0:
-					new_centers.add(current_index)
+        # If you want to also mask out padding (uncomment if needed):
+        # padding_mask = labels.eq(self.vocab.pad_index)
+        # probability_matrix.masked_fill_(padding_mask, value=0.0)
 
-		new_centers = list(new_centers)
-		
-		masked_indices[new_centers] = True
-		
-		# Avoid loss calculation on unmasked tokens
-		labels[~masked_indices] = -100 
+        masked_indices = torch.bernoulli(probability_matrix).bool()
 
-		# 80% of the time, we replace masked input tokens with tokenizer.mask_token ([MASK])
-		indices_replaced = torch.bernoulli(torch.full(labels.shape, 0.8)).bool() & masked_indices
-		inputs[indices_replaced] = self.vocab.mask_index
+        # Identify the end of sequence (non-zero probability region)
+        end = torch.where(probability_matrix != 0)[0].tolist()[-1]
+        mask_centers = set(torch.where(masked_indices == 1)[0].tolist())
+        new_centers = deepcopy(mask_centers)
 
-		# 10% of the time, we replace masked input tokens with random word
-		indices_random = torch.bernoulli(torch.full(labels.shape, 0.5)).bool() & masked_indices & ~indices_replaced
-		random_words = torch.randint(len(self.vocab), labels.shape, dtype=torch.int16)
-		inputs[indices_random] = random_words[indices_random]
+        # Extend mask to neighbors (k-mers)
+        for center in mask_centers:
+            for mask_number in self.mask_list:
+                current_index = center + mask_number
+                if 0 <= current_index <= end:
+                    new_centers.add(current_index)
 
-		# The rest of the time (10% of the time) we keep the masked input tokens unchanged
+        new_centers = list(new_centers)
+        masked_indices[new_centers] = True
 
-		# Special tokens (SOS, EOS)
-		if end < inputs.shape[0]:
-			inputs[end] = self.vocab.eos_index
-		else:
-			inputs[-1] = self.vocab.eos_index
+        # Set labels for unmasked tokens to -100 so they don't contribute to loss
+        labels[~masked_indices] = -100
 
-		labels = torch.cat((torch.tensor([-100]), labels))
-		inputs = torch.cat((torch.tensor([self.vocab.sos_index]), inputs))
-		masked_index = torch.cat((torch.tensor([False]), masked_index))
+        # 80% of the time, replace masked tokens with [MASK]
+        indices_replaced = torch.bernoulli(torch.full(labels.shape, 0.8)).bool() & masked_indices
+        inputs[indices_replaced] = self.vocab.mask_index
+
+        # 10% of the time, replace masked tokens with random token
+        indices_random = torch.bernoulli(torch.full(labels.shape, 0.5)).bool() & masked_indices & ~indices_replaced
+        random_words = torch.randint(len(self.vocab), labels.shape, dtype=torch.int16)
+        inputs[indices_random] = random_words[indices_random]
+
+        # The remaining 10% of the time, keep the original token
+
+        # Special token: EOS (end) 
+        if end < inputs.shape[0]:
+            inputs[end] = self.vocab.eos_index
+        else:
+            inputs[-1] = self.vocab.eos_index
+
+        # Add SOS (start) token at the beginning
+        labels = torch.cat((torch.tensor([-100]), labels))
+        inputs = torch.cat((torch.tensor([self.vocab.sos_index]), inputs))
+        masked_indices = torch.cat((torch.tensor([False]), masked_indices))
+
+        return inputs, labels, masked_indices
 
 
-		return inputs, labels, masked_index
+
 
 class MethylBertFinetuneDataset(MethylBertDataset):
-	def __init__(self, f_path: str, vocab: MethylVocab, seq_len: int, n_cores: int=10, n_seqs = None):
-		'''
-		MethylBERT dataset
+    def __init__(
+        self,
+        data_source: Union[str, List[List[Union[str, int]]]],
+        vocab: MethylVocab,
+        seq_len: int,
+        n_cores: int=10,
+        n_seqs: int=None
+    ):
+        """
+        MethylBERT dataset that can read either from a file path (TSV) or from
+        a list-of-lists structure (as returned by generate_example_data).
 
-		f_path: str
-			File path to the processed input file
-		vocab: MethylVocab
-			MethylVocab object to convert DNA and methylation pattern sequences
-		seq_len: int
-			Length for the processed sequences
-		n_cores: int
-			Number of cores for multiprocessing
-		n_seqs: int
-			Number of sequences to subset the input (default: None, do not make a subset)
+        data_source : Union[str, List[List[Union[str, int]]]]
+            - If str, it's assumed to be a file path (TSV).
+            - If list, it's assumed to be the in-memory data (first row is header).
+        vocab : MethylVocab
+            MethylVocab object to convert DNA and methylation pattern sequences
+        seq_len : int
+            Length for the processed sequences
+        n_cores : int
+            Number of cores for multiprocessing
+        n_seqs : int
+            Number of sequences to subset the input (default: None, do not make a subset)
+        """
+        self.vocab = vocab
+        self.seq_len = seq_len
 
-		'''
-		self.vocab = vocab
-		self.seq_len = seq_len
-		self.f_path = f_path
+        # If data_source is a path, read from file. Otherwise, assume it's already a list of rows.
+        if isinstance(data_source, str):
+            # File path case
+            self.f_path = data_source
+            with open(data_source, "r") as f_input:
+                lines = f_input.read().splitlines()
+        else:
+            # List of lists case; ensure "dmr_label" is present
+            self.f_path = None  # Not relevant here, but you can store or ignore
+            header = data_source[0]
+            if "dmr_label" not in header:
+                header.append("dmr_label")
+                for row in data_source[1:]:
+                    row.append("0")  # default label = 0 if not present
+            
+            if "dmr_ctype" not in header:
+                header.append("dmr_ctype")
+                for row in data_source[1:]:
+                    row.append("0")  # default label = 0 if not present
 
-		# Read all text files and convert the raw sequence into tokens
-		with open(self.f_path, "r") as f_input:
-			raw_seqs = f_input.read().splitlines()
+            # Convert each row into a tab-delimited string
+            lines = ["\t".join(map(str, row)) for row in data_source]
 
-		# Check if there's a header 
-		headers = raw_seqs[0].split("\t")
-		raw_seqs = raw_seqs[1:]
+        # First line is header, subsequent lines are data
+        headers = lines[0].split("\t")
+        raw_seqs = lines[1:]
 
-		if n_seqs is not None:
-			raw_seqs = raw_seqs[:n_seqs]
-		print("Total number of sequences : ", len(raw_seqs))
+        if n_seqs is not None:
+            raw_seqs = raw_seqs[:n_seqs]
 
-		# Multiprocessing for the sequence tokenisation
-		with mp.Pool(n_cores) as pool:
-			self.lines = pool.map(partial(_line2tokens_finetune, 
-								   tokenizer=self.vocab, max_len=self.seq_len, headers=headers), raw_seqs)
-			del raw_seqs
-		gc.collect()
-		self.set_dmr_labels = set([l["dmr_label"] for l in self.lines])
+        print("Total number of sequences : ", len(raw_seqs))
 
-		self.ctype_label_count = self._get_cls_num()
-		print("# of reads in each label: ", self.ctype_label_count)
-		
-		
-	def _get_cls_num(self):
-		# unique labels
-		ctype_labels=[l["ctype_label"] for l in self.lines]
-		labels = list(set(ctype_labels))
-		label_count = np.zeros(len(labels))
-		for l in labels:
-			label_count[l] = sum(np.array(ctype_labels) == l)
-		return label_count
+        # Tokenize all lines (parallel)
+        with mp.Pool(n_cores) as pool:
+            self.lines = pool.map(
+                partial(
+                    _line2tokens_finetune,
+                    tokenizer=self.vocab,
+                    max_len=self.seq_len,
+                    headers=headers
+                ),
+                raw_seqs
+            )
 
-	def num_dmrs(self):
-		return max(len(self.set_dmr_labels), max(self.set_dmr_labels)+1) # +1 is for the label 0
-	
-	def subset_data(self, n_seq):
-		self.lines = self.lines[:n_seq]
+        del raw_seqs
+        gc.collect()
 
-	def __getitem__(self, index): 
+        # For classification or downstream tasks
+        self.set_dmr_labels = set([l["dmr_label"] for l in self.lines])
+        self.ctype_label_count = self._get_cls_num()
+        print("# of reads in each label: ", self.ctype_label_count)
 
-		item = deepcopy(self.lines[index])
-		item["dna_seq"] = torch.squeeze(torch.tensor(np.array(item["dna_seq"], dtype=np.int32)))
-		item["methyl_seq"] = torch.squeeze(torch.tensor(np.array(item["methyl_seq"], dtype=np.int8)))
-		
-		# Special tokens (SOS, EOS)
-		end = torch.where(item["dna_seq"]!=self.vocab.pad_index)[0].tolist()[-1] + 1 # end of the read
-		if end < item["dna_seq"].shape[0]:
-			item["dna_seq"][end] = self.vocab.eos_index
-			item["methyl_seq"][end] = 2
-		else:
-			item["dna_seq"][-1] = self.vocab.eos_index
-			item["methyl_seq"][-1] = 2
-		item["dna_seq"] = torch.cat((torch.tensor([self.vocab.sos_index]), item["dna_seq"]))
-		item["methyl_seq"] = torch.cat((torch.tensor([2]), item["methyl_seq"]))
-		return item
-	
+    def _get_cls_num(self):
+        """Example method for counting class label distribution."""
+        ctype_labels = [l["ctype_label"] for l in self.lines]
+        labels = list(set(ctype_labels))
+        label_count = np.zeros(len(labels), dtype=int)
+        for i, lval in enumerate(labels):
+            label_count[i] = ctype_labels.count(lval)
+        return label_count
+
+    def num_dmrs(self):
+        """Number of possible DMR classes."""
+        return max(len(self.set_dmr_labels), max(self.set_dmr_labels) + 1)
+
+    def subset_data(self, n_seq):
+        """Optional method to truncate the dataset to n_seq rows."""
+        self.lines = self.lines[:n_seq]
+
+    def __getitem__(self, index):
+        """Return tokenized item, including special tokens."""
+        item = deepcopy(self.lines[index])
+        item["dna_seq"] = torch.squeeze(torch.tensor(np.array(item["dna_seq"], dtype=np.int32)))
+        item["methyl_seq"] = torch.squeeze(torch.tensor(np.array(item["methyl_seq"], dtype=np.int8)))
+
+        # Special tokens (SOS, EOS)
+        end_idx = torch.where(item["dna_seq"] != self.vocab.pad_index)[0].tolist()[-1] + 1  # end of the read
+        if end_idx < item["dna_seq"].shape[0]:
+            item["dna_seq"][end_idx] = self.vocab.eos_index
+            item["methyl_seq"][end_idx] = 2
+        else:
+            item["dna_seq"][-1] = self.vocab.eos_index
+            item["methyl_seq"][-1] = 2
+
+        item["dna_seq"] = torch.cat((torch.tensor([self.vocab.sos_index]), item["dna_seq"]))
+        item["methyl_seq"] = torch.cat((torch.tensor([2]), item["methyl_seq"]))
+
+        return item

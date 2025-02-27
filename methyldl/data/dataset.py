@@ -238,3 +238,37 @@ def generate_example_data(sequence_length: int = 150,
 
     return data
 
+def generate_example_data_for_methylbert(sequence_length: int = 150,
+                          include_cpg_methylation: bool = False,
+                          include_m6a_methylation: bool = False,
+                          include_labels: bool = False,
+                          num_samples: int = 1,
+                          cpg_proportion: Dict[int, float] = {2: 1, 1: 1, 0: 1},
+                          m6a_proportion: Dict[int, float] = {2: 1, 1: 1, 0: 1}) -> List[List[Union[str, int]]]:
+    '''
+    Wrapper for generate example data method that does some transformation specific for methylbert
+    
+    '''
+
+    if sequence_length > 512:
+        samples_coeff = sequence_length//512+1
+        sequence_length = int(sequence_length/samples_coeff)
+        num_samples = num_samples*samples_coeff
+
+    synthetic_data = generate_example_data(
+                    sequence_length=sequence_length+3,
+                    include_cpg_methylation=True,
+                    include_m6a_methylation=False,
+                    include_labels=True,
+                    num_samples=num_samples # Single sample per repeat
+                )
+
+    synthetic_data[0][0] = "dna_seq"
+    synthetic_data[0][1] = "methyl_seq"
+    synthetic_data[0][2] = "ctype"
+
+    for row in range(1,len(synthetic_data)):
+        synthetic_data[row][0] = " ".join([synthetic_data[row][0][i:(i+3)] for i in range(sequence_length)])
+        synthetic_data[row][1] = synthetic_data[row][1][:sequence_length]
+
+    return synthetic_data
