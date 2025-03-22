@@ -481,17 +481,17 @@ class MethylBert:
         )
 
         train_dataset = train_dataset or MethylBertFinetuneDataset(
-              f_path=os.path.join(data_path, "train.txt"),
+              data_source=os.path.join(data_path, "train.txt"),
               vocab=MethylVocab(k=3),
               seq_len=self.seq_len
               )
         val_dataset = val_dataset or MethylBertFinetuneDataset(
-              f_path=os.path.join(data_path, "dev.txt"),
+              data_source=os.path.join(data_path, "dev.txt"),
               vocab=MethylVocab(k=3),
               seq_len=self.seq_len
               )
         test_dataset = test_dataset or MethylBertFinetuneDataset(
-              f_path=os.path.join(data_path, "test.txt"),
+              data_source=os.path.join(data_path, "test.txt"),
               vocab=MethylVocab(k=3),
               seq_len=self.seq_len
               )
