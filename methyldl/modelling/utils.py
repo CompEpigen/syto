@@ -11,3 +11,6 @@ def calculate_batch_size(gb_per_seq:int,cpu_batch_size:int, utilization_coeff:fl
     else:
         recomended_batch_size = cpu_batch_size # assuming at least 16 gb of RAM if run on CPU
     return recomended_batch_size
+
+def exists(v):
+    return v is not None
