@@ -16,66 +16,7 @@ from methyldl.modelling.minirnns.helpers import g, log_g
 from methyldl.modelling.utils import exists
 
 
-# class minGRU(Module):
-#     def __init__(self,
-#                  dim,
-#                  expansion_factor,
-#                  use_init_hidden_state,
-#                  **kwargs):
-#         super().__init__()
-#         dim_inner = int(dim * expansion_factor)
-#         self.to_hidden_and_gate = Linear(dim, dim_inner * 2)
-#         self.to_out = Linear(dim_inner, dim)
-
-#         self.init_hidden_state = nn.Parameter(
-#             torch.randn(dim_inner), requires_grad=True) if use_init_hidden_state else None
-
-#     def forward(self, x, prev_state=None):
-#         seq_len = x.shape[1]
-#         hidden, gate = self.to_hidden_and_gate(x).chunk(2, dim=-1)
-
-#         if seq_len == 1:
-#             # handle sequential
-#             tilde_h = g(hidden)
-#             gate = gate.sigmoid()
-
-#             if exists(prev_state):
-#                 (prev_hidden, _) = prev_state
-#                 out = (1-gate) * prev_hidden + gate * tilde_h
-#             elif exists(self.init_hidden_state):
-#                 prev_hidden = g(self.init_hidden_state)
-#                 out = (1-gate) * prev_hidden + gate * tilde_h
-#             else:
-#                 out = gate * tilde_h
-
-#             (next_hidden, next_log_hidden) = (out[:, -1:], out[:, -1:].log())
-#         else:
-#             log_coeffs = -F.softplus(gate)
-
-#             log_z = -F.softplus(-gate)
-#             log_tilde_h = log_g(hidden)
-#             log_values = log_z + log_tilde_h
-
-#             if exists(prev_state) or exists(self.init_hidden_state):
-#                 if exists(prev_state):
-#                     (_, prev_log_hidden) = prev_state
-#                 else:
-#                     prev_log_hidden = log_g(self.init_hidden_state)
-#                 prev_log_hidden = prev_log_hidden.repeat((log_values.shape[0], 1, 1))
-#                 log_values = torch.cat((prev_log_hidden, log_values), dim=1)
-#                 log_coeffs = F.pad(log_coeffs, (0, 0, 1, 0))
-
-#             log_out = associative_scan_log(
-#                 log_coeffs, log_values, return_log=True)
-
-#             out = torch.exp(log_out[:, -seq_len:])
-
-#             (next_hidden, next_log_hidden) = (out[:, -1:], log_out[:, -1:])
-
-#         out = self.to_out(out)
-#         return out, (next_hidden, next_log_hidden)
-
-class minGRU(nn.Module):
+class MinGRUCell(nn.Module):
     def __init__(
         self,
         input_dim: int,
@@ -186,6 +127,56 @@ class minGRU(nn.Module):
 
         return out, (next_hidden, next_log_hidden)
 
+class MinGRU(nn.Module):
+    """
+    A stacked mini-GRU with `num_layers`.
+    """
+    def __init__(
+        self,
+        input_dim: int,
+        hidden_dim: int,
+        num_layers: int = 1,
+        use_init_hidden_state: bool = False,
+        batch_first: bool = True,
+    ):
+        super().__init__()
+        self.num_layers = num_layers
+        self.hidden_dim = hidden_dim
+        self.batch_first = batch_first
+
+        # Build a stack of SingleMinGRU
+        self.layers = nn.ModuleList()
+        for layer_idx in range(num_layers):
+            # for the first layer, input_dim -> hidden_dim
+            # for subsequent layers, hidden_dim -> hidden_dim
+            layer_input_dim = input_dim if layer_idx == 0 else hidden_dim
+
+            self.layers.append(
+                MinGRUCell(
+                    input_dim=layer_input_dim,
+                    hidden_dim=hidden_dim,
+                    use_init_hidden_state=use_init_hidden_state,
+                    batch_first=batch_first
+                )
+            )
+    def forward(self, x, prev_states=None):
+        """
+        x: shape = (batch, seq_len, input_dim) or (seq_len, batch, input_dim)
+        prev_states: optionally a list of states for each layer:
+                     [ (h0_layer0, log_h0_layer0), (h0_layer1, log_h0_layer1), ... ]
+        """
+        # If no previous states, pass None for each layer
+        if prev_states is None:
+            prev_states = [None] * self.num_layers
+        assert len(prev_states) == self.num_layers
+
+        output = x
+        next_states = []
+        for layer_idx, (layer, prev_state) in enumerate(zip(self.layers, prev_states)):
+            output, next_state = layer(output, prev_state)
+            next_states.append(next_state)
+
+        return output, next_states
 
 class BiMinGRU(nn.Module):
     """
@@ -196,7 +187,8 @@ class BiMinGRU(nn.Module):
         input_dim: int,
         hidden_dim: int,
         use_init_hidden_state: bool = False,
-        batch_first: bool = True
+        batch_first: bool = True,
+        num_layers = 1
     ):
         """
         If batch_first=True, we assume input is (batch, seq_len, dim).
@@ -206,8 +198,8 @@ class BiMinGRU(nn.Module):
         self.batch_first = batch_first
 
         # forward and backward miniGRU
-        self.fwd_gru = minGRU(input_dim, hidden_dim, use_init_hidden_state, batch_first=batch_first)
-        self.bwd_gru = minGRU(input_dim, hidden_dim, use_init_hidden_state, batch_first=batch_first)
+        self.fwd_gru = MinGRU(input_dim = input_dim, hidden_dim = hidden_dim, use_init_hidden_state = use_init_hidden_state, batch_first=batch_first,num_layers=num_layers)
+        self.bwd_gru = MinGRU(input_dim = input_dim, hidden_dim = hidden_dim, use_init_hidden_state = use_init_hidden_state, batch_first=batch_first,num_layers=num_layers)
 
     def forward(
         self,
@@ -229,6 +221,7 @@ class BiMinGRU(nn.Module):
         """
         # -- Forward direction --
         out_fwd, next_state_fwd = self.fwd_gru(x, prev_state_fwd)
+        next_state_fwd = next_state_fwd[-1] # last layer only
 
         # We need to flip x along the time dimension. That dimension is:
         #   dim=1 if batch_first=True, else dim=0
@@ -236,7 +229,8 @@ class BiMinGRU(nn.Module):
         x_reversed = torch.flip(x, dims=[seq_dim])
 
         # -- Backward direction --
-        out_bwd_reversed, next_state_bwd = self.bwd_gru(x_reversed, prev_state_bwd)
+        out_bwd_reversed, next_state_bwd = self.bwd_gru(x_reversed, prev_state_bwd) # last layer only
+        next_state_bwd = next_state_bwd[-1]  # last layer only
 
         # Flip the backward output back
         out_bwd = torch.flip(out_bwd_reversed, dims=[seq_dim])
@@ -259,7 +253,7 @@ class BiMinGRU(nn.Module):
         return out, next_state
 
 
-class minLSTM(Module):
+class MinLSTMCell(Module):
     def __init__(self,
                  dim,
                  expansion_factor,
@@ -343,9 +337,3 @@ class minLSTM(Module):
 
         out = self.to_out(out)
         return out, (next_hidden, next_log_hidden)
-
-
-sequence_modules = {
-    'minGRU': minGRU,
-    'minLSTM': minLSTM,
-}

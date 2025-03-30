@@ -130,7 +130,7 @@ class DISMIRNet(nn.Module):
                             batch_first=True,
                             bidirectional=True)
         elif flavor =="minigru":
-            rnn = BiMinGRU(input_dim=100,hidden_dim=max_sequence_length//2,batch_first=True,use_init_hidden_state=False)
+            rnn = BiMinGRU(input_dim=100,hidden_dim=max_sequence_length//2,batch_first=True,use_init_hidden_state=False, num_layers=1)
 
         self.rnn = rnn
         
