@@ -251,7 +251,7 @@ def generate_example_data_for_methylbert(sequence_length: int = 150,
     '''
 
     if sequence_length > 512:
-        samples_coeff = sequence_length//512+1
+        samples_coeff = sequence_length//512 + int(bool(sequence_length%512))
         sequence_length = int(sequence_length/samples_coeff)
         num_samples = num_samples*samples_coeff
 
