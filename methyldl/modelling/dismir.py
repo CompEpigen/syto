@@ -11,6 +11,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
+from methyldl.modelling.minirnns.minRNNs import BiMinGRU
 
 
 
@@ -106,7 +107,7 @@ class DISMIRNet(nn.Module):
     9. Dense -> ReLU
     10. Dense -> Sigmoid
     """
-    def __init__(self, max_sequence_length):
+    def __init__(self, max_sequence_length, flavor ="lstm"):
         super(DISMIRNet, self).__init__()
         self.max_sequence_length = max_sequence_length
         
@@ -122,11 +123,16 @@ class DISMIRNet(nn.Module):
         #   input_size = 100 (from the 100 output channels of conv1)
         #   hidden_size = max_sequence_length//2 (same as the Keras code)
         #   batch_first=True => data shape = (batch_size, seq_len, features)
-        self.lstm = nn.LSTM(input_size=100,
+        if flavor == "lstm":
+            rnn = nn.LSTM(input_size=100,
                             hidden_size=max_sequence_length//2,
                             num_layers=1,
                             batch_first=True,
                             bidirectional=True)
+        elif flavor =="minigru":
+            rnn = BiMinGRU(input_dim=100,hidden_dim=max_sequence_length//2,batch_first=True,use_init_hidden_state=False, num_layers=1)
+
+        self.rnn = rnn
         
         # 3) Second convolution block
         # After bidir LSTM, the feature size becomes 2*(hidden_size) = max_sequence_length
@@ -164,7 +170,7 @@ class DISMIRNet(nn.Module):
         
         # LSTM: expecting shape (batch, seq_len, features=100)
         x = x.permute(0, 2, 1)  # (batch, seq_len/2, 100)
-        x, _ = self.lstm(x)     # (batch, seq_len/2, 2*hidden_size) = (batch, seq_len/2, max_sequence_length)
+        x, _ = self.rnn(x)     # (batch, seq_len/2, 2*hidden_size) = (batch, seq_len/2, max_sequence_length)
         
         # Second conv block: shape -> (batch, max_sequence_length, seq_len/2)
         x = x.permute(0, 2, 1)  # (batch, in_channels=max_sequence_length, seq_len/2)
@@ -194,7 +200,7 @@ class Dismir:
     2. Model creation (DISMIRNet)
     3. Training loop with a simplistic early-stopping approach
     """
-    def __init__(self, max_sequence_length, train_data_path, test_data_path, valid_data_path, device=None):
+    def __init__(self, max_sequence_length, train_data_path, test_data_path, valid_data_path, device=None, flavour="lstm"):
         self.max_sequence_length = max_sequence_length
         
         # Use CUDA if available
@@ -208,7 +214,7 @@ class Dismir:
         self.test_data_path = test_data_path
         self.valid_data_path = valid_data_path
         
-        self.model = DISMIRNet(max_sequence_length).to(self.device)
+        self.model = DISMIRNet(max_sequence_length, flavour).to(self.device)
         
 
     def conv_onehot(self, dna_seq, c_methylation_seq):
@@ -255,6 +261,8 @@ class Dismir:
                     onehot[i, j] = module[3]
                 # Else remain zeros if unexpected character
         return onehot
+    
+    
 
     def load_and_transform_input(self, data_path):
         """

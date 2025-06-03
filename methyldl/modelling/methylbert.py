@@ -31,14 +31,14 @@ import itertools
 from methyldl.modelling.evaluation import compute_metrics,preprocess_logits_for_metrics
 
 default_methylbert_config = OrderedDict([
-    ("lr", 1e-4),
-    ("beta", (0.9, 0.999)),
-    ("weight_decay", 0.01),
+    ("lr", 0.0004),
+    ("beta", (0.9, 0.98)),
+    ("weight_decay", 0.1),
     ("warmup_step", 100),
     ("eps", 1e-6),
     ("with_cuda", True),
-    ("log_freq", 20),
-    ("eval_freq", 20),
+    ("log_freq", 10),
+    ("eval_freq", 10),
     ("n_hidden", None),
     ("decrease_steps", 200),
     ("eval", False),
@@ -47,6 +47,10 @@ default_methylbert_config = OrderedDict([
     ("max_grad_norm", 1.0),
     ("save_freq", None),
     ("loss", "bce"),
+    ("adam_beta1", 0.9),
+    ("adam_beta2", 0.98),
+    ("seed", 950410),
+    
 ])
 
 def methylbert_finetune_collator(features):
@@ -385,7 +389,7 @@ class MethylBert:
         except:
             self.tokenizer = None
         
-        recomended_batch_size = calculate_batch_size(gb_per_seq = 0.0135, cpu_batch_size=700)
+        recomended_batch_size = calculate_batch_size(gb_per_seq = 0.0135*2, cpu_batch_size=700/2)
 
 
         # 6) Create default TrainingArguments from your config
@@ -409,7 +413,7 @@ class MethylBert:
             # Other defaults
             per_device_train_batch_size=recomended_batch_size,
             per_device_eval_batch_size=int(recomended_batch_size/2),
-            num_train_epochs=40,   # you can override later
+            num_train_epochs=100,   # you can override later
             evaluation_strategy="steps",  # Evaluate every X steps
             remove_unused_columns=False,
             eval_accumulation_steps = 8,
@@ -420,7 +424,8 @@ class MethylBert:
             auto_find_batch_size=False,
             save_total_limit=5,
             load_best_model_at_end = True,
-            metric_for_best_model = "f1"
+            metric_for_best_model = "f1",
+            run_name="methylBERT"
             # eval_and_save_results=True
             # label_names=["ctype_label"]
         )
@@ -486,7 +491,7 @@ class MethylBert:
               seq_len=self.seq_len
               )
         val_dataset = val_dataset or MethylBertFinetuneDataset(
-              data_source=os.path.join(data_path, "dev.txt"),
+              data_source=os.path.join(data_path, "valid.txt"),
               vocab=MethylVocab(k=3),
               seq_len=self.seq_len
               )
@@ -660,35 +665,37 @@ def _line2tokens_pretrain(l, tokenizer, max_len=120):
 
 
 def _line2tokens_finetune(l, tokenizer, max_len=150, headers=None):
-	# Check the header
-	if not all([h in headers for h in ["dna_seq", "methyl_seq", "ctype", "dmr_ctype", "dmr_label"]]):
-		raise ValueError("The header must contain dna_seq, methyl_seq, ctype, dmr_ctype, dmr_label")
+    # Check the header
+    if not all([h in headers for h in ["dna_seq", "methyl_seq", "ctype", "dmr_ctype", "dmr_label"]]):
+        raise ValueError("The header must contain dna_seq, methyl_seq, ctype, dmr_ctype, dmr_label")
+    
+    max_len = min(max_len, 511) # Cannot have more then 510 tokens in sequence due to positional embeddings 
 
 	# Separate n-mers tokens and labels from each line 
-	l = l.strip().split("\t")
-	if len(headers) == len(l):
-		l = {k: v for k, v in zip(headers, l)}
-	else:
-		print(headers, l)
-		raise ValueError(f"Only {len(headers)} elements are in the input file header, whereas the line has {len(l)} elements.")
-
-	l["dna_seq"] = l["dna_seq"].split(" ")
-	l["dna_seq"] = [[f] for f in tokenizer.to_seq(l["dna_seq"])]
-	l["methyl_seq"] = [int(m) for m in l["methyl_seq"]]
+    l = l.strip().split("\t")
+    if len(headers) == len(l):
+        l = {k: v for k, v in zip(headers, l)}
+    else:
+        print(headers, l)
+        raise ValueError(f"Only {len(headers)} elements are in the input file header, whereas the line has {len(l)} elements.")
+    
+    l["dna_seq"] = l["dna_seq"].split(" ")
+    l["dna_seq"] = [[f] for f in tokenizer.to_seq(l["dna_seq"])]
+    l["methyl_seq"] = [int(m) for m in l["methyl_seq"]]
 
 	# Cell-type label is binary (whether the cell type corresponds to the DMR cell type)
-	l["ctype_label"] = int(l["ctype"] == l["dmr_ctype"]) 
-	l["dmr_label"] = int(l["dmr_label"])
-
-	if len(l["dna_seq"]) > max_len:
-		l["dna_seq"] = l["dna_seq"][:max_len]
-		l["methyl_seq"] = l["methyl_seq"][:max_len]
-	else:
-		cur_seq_len=len(l["dna_seq"])
-		l["dna_seq"] = l["dna_seq"]+[[tokenizer.pad_index] for k in range(max_len-cur_seq_len)]
-		l["methyl_seq"] = l["methyl_seq"] + [2 for k in range(max_len-cur_seq_len)]
-
-	return l
+    l["ctype_label"] = int(l["ctype"] == l["dmr_ctype"]) 
+    l["dmr_label"] = int(l["dmr_label"])
+    
+    if len(l["dna_seq"]) > max_len:
+        l["dna_seq"] = l["dna_seq"][:max_len]
+        l["methyl_seq"] = l["methyl_seq"][:max_len]
+    else:
+        cur_seq_len=len(l["dna_seq"])
+        l["dna_seq"] = l["dna_seq"]+[[tokenizer.pad_index] for k in range(max_len-cur_seq_len)]
+        l["methyl_seq"] = l["methyl_seq"] + [2 for k in range(max_len-cur_seq_len)]
+    
+    return l
 
 class MethylBertDataset(Dataset):
 	def __init__(self):
