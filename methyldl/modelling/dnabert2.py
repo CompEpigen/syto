@@ -471,9 +471,50 @@ class EpigenDnabert2():
                              compute_metrics=compute_metrics)
 
     def predict(self, test_dataset):
-        prediction = self.trainer.predict(test_dataset)
+
+        def preprocess_logits_for_prediction(logits:Union[torch.Tensor, Tuple[torch.Tensor]], _):
+
+            if isinstance(logits, tuple):  # Unpack logits if it's a tuple
+                logits = logits[0]
+
+            if logits.ndim == 3:
+                # Reshape logits to 2D if needed
+                logits = logits.reshape(-1, logits.shape[-1])
+            return torch.sigmoid(logits)[:,1]
+
+        
+        if self.model_max_length > 300:
+            training_args = TrainingArguments(
+                evaluation_strategy = "no",
+                save_strategy = "no",
+                gradient_checkpointing=False,
+                skip_memory_metrics=True,
+                auto_find_batch_size=True,
+                )
+        else:
+            training_args = TrainingArguments(
+                evaluation_strategy = "no",
+                save_strategy = "no",
+                gradient_checkpointing=False,
+                skip_memory_metrics=True,
+                auto_find_batch_size=False,
+                per_device_eval_batch_size = 250
+                )
+        prediction_trainer = transformers.Trainer(
+            model=self.model,
+            args=training_args,
+            data_collator=self.data_collator,
+            tokenizer=self.tokenizer,
+            preprocess_logits_for_metrics=preprocess_logits_for_prediction,
+            compute_metrics=None  # Also remove compute_metrics to avoid issues
+        )
+    
+        prediction = prediction_trainer.predict(test_dataset)
         gc.collect()
         torch.cuda.empty_cache() 
+        # prediction = self.trainer.predict(test_dataset)
+        # gc.collect()
+        # torch.cuda.empty_cache() 
         return prediction
     
     def safe_save_model_for_hf_trainer(self, output_dir: str):
@@ -489,7 +530,8 @@ class EpigenDnabert2():
                   training_args: Union[TrainingArguments, None] = None,
                   train_dataset: Optional[SupervisedDataset] = None,
                   val_dataset: Optional[SupervisedDataset] = None,
-                  test_dataset: Optional[SupervisedDataset] = None):
+                  test_dataset: Optional[SupervisedDataset] = None,
+                  data_interface: str = "csv"):
         
         # Ensure that either data_path is provided or all datasets are provided
         assert data_path or (train_dataset and val_dataset and test_dataset), (
@@ -497,15 +539,19 @@ class EpigenDnabert2():
         )
 
         # TODO Adding LoRA
+        print("Starting to initialize datasets")
         train_dataset = train_dataset or SupervisedDataset(tokenizer=self.tokenizer, 
-                                        data_path_or_list=os.path.join(data_path, "train.csv"), 
-                                        kmer=-1)
+                                        data_path_or_list=os.path.join(data_path, "train"), 
+                                        kmer=-1,data_interface=data_interface)
+        print("Train is initialized")
         val_dataset = val_dataset or SupervisedDataset(tokenizer=self.tokenizer, 
-                                        data_path_or_list=os.path.join(data_path, "valid.csv"), 
-                                        kmer=-1)
+                                        data_path_or_list=os.path.join(data_path, "valid"), 
+                                        kmer=-1,data_interface=data_interface)
+        print("Val is initialized")
         test_dataset = test_dataset or SupervisedDataset(tokenizer=self.tokenizer, 
-                                        data_path_or_list=os.path.join(data_path, "test.csv"), 
-                                        kmer=-1)
+                                        data_path_or_list=os.path.join(data_path, "test"), 
+                                        kmer=-1,data_interface=data_interface)
+        print("Test is initialized")
         
         if training_args is not None:
             self.training_args = training_args # overwritting default training args
@@ -515,7 +561,7 @@ class EpigenDnabert2():
 
                                      args=self.training_args)
         
-
+        print("All datasets are successfully initiated")
         self.trainer.train()
         if self.training_args.save_model:
             self.trainer.save_state()
