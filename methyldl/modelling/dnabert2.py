@@ -20,7 +20,7 @@ import torch
 import transformers
 from torch.utils.data import Dataset
 
-from methyldl.modelling.evaluation import preprocess_logits_for_metrics, compute_metrics
+from methyldl.modelling.evaluation import preprocess_logits_for_metrics, compute_metrics,preprocess_logits_for_prediction,keep_logits_only
 from methyldl.modelling.utils import calculate_batch_size
 from methyldl.data.dataset import *
 from safetensors.torch import load_file
@@ -51,6 +51,7 @@ class BertEmbeddings(nn.Module):
         # LayerNorm and dropout from the base embeddings
         self.LayerNorm = model.embeddings.LayerNorm
         self.dropout = model.embeddings.dropout
+        # self.n_labels = n_labels
 
         # Register token type IDs for cases where token_type_ids are not passed
         self.register_buffer('token_type_ids',
@@ -340,7 +341,7 @@ class TrainingArguments(transformers.TrainingArguments):
     logging_steps: int = field(default=100)
     save_steps: int = field(default=100)
     eval_steps: int = field(default=100)
-    evaluation_strategy: str = field(default="steps"),
+    eval_strategy: str = field(default="steps"),
     warmup_steps: int = field(default=50)
     weight_decay: float = field(default=0.01)
     learning_rate: float = field(default=1e-4)
@@ -370,9 +371,11 @@ class EpigenDnabert2():
                   max_sequence_length: int = 150,
                   num_labels:int =2,
                   use_cpg_methylation=True, 
-                  use_m6a_methylation=False):
+                  use_m6a_methylation=False,
+                  trust_remote_code=True):
         
         assert len(foundation_model_huggingface), "Must specify foundation model path hosted on Hugging Face"
+
 
         # Helper method to initialize and customize the model
         def initialize_model_with_custom_embeddings(base_model, use_cpg, use_m6a):
@@ -381,8 +384,11 @@ class EpigenDnabert2():
         
         config = BertForSequenceClassification.config_class.from_pretrained(foundation_model_huggingface)
         # Does not load weights just yet, because if we have a checkpoint, the weights will be retrived from it 
-        base_model = transformers.AutoModelForSequenceClassification.from_config(trust_remote_code=True, config = config)
+        base_model = transformers.AutoModelForSequenceClassification.from_config(trust_remote_code=trust_remote_code, config = config)
         model = initialize_model_with_custom_embeddings(base_model, use_cpg_methylation, use_m6a_methylation)
+        model.classifier = nn.Linear(768,out_features=num_labels,bias=True)
+        self.num_labels=num_labels
+        model.num_labels = num_labels
         if fine_tuned_model_path is not None:
             checkpoint = load_file(fine_tuned_model_path)
             # TODO: Remove this part after proper checkpoint is generated:
@@ -396,7 +402,7 @@ class EpigenDnabert2():
         elif load_weights:
             base_model = transformers.AutoModelForSequenceClassification.from_pretrained(
                 foundation_model_huggingface,
-                trust_remote_code=True,
+                trust_remote_code=trust_remote_code,
                 config = config)
             model = initialize_model_with_custom_embeddings(base_model, use_cpg_methylation, use_m6a_methylation)
         self.model = model
@@ -415,7 +421,7 @@ class EpigenDnabert2():
             fp16 = True,
             save_steps = 10,
             output_dir ="output/dnabert2_default",
-            evaluation_strategy = "steps",
+            eval_strategy = "steps",
             eval_steps = 10, 
             warmup_steps = 100, 
             logging_steps = 100, 
@@ -442,7 +448,7 @@ class EpigenDnabert2():
             model_max_length=model_max_length,
             padding_side="right",
             use_fast=True,
-            trust_remote_code=True,
+            trust_remote_code=trust_remote_code,
         )
         self.data_collator = DataCollatorForSupervisedDataset(tokenizer=self.tokenizer)
         self.trainer = self._init_trainer() # default trainer to use for predictions 
@@ -457,61 +463,73 @@ class EpigenDnabert2():
         model_init: Optional[Callable[[], PreTrainedModel]] = None,
         callbacks: Optional[List[TrainerCallback]] = None,
         optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None)):
+        if self.num_labels==2:
+            return transformers.Trainer(model=self.model,
+                                args = args,
+                                data_collator=self.data_collator,
+                                train_dataset = train_dataset,
+                                eval_dataset = eval_dataset,
+                                model_init = model_init,
+                                callbacks = callbacks,
+                                optimizers = optimizers,
+                                tokenizer=self.tokenizer,
+                                preprocess_logits_for_metrics=preprocess_logits_for_metrics,
+                                compute_metrics=compute_metrics)
+        elif self.num_labels>2:
+            return transformers.Trainer(model=self.model,
+                                args = args,
+                                data_collator=self.data_collator,
+                                train_dataset = train_dataset,
+                                eval_dataset = eval_dataset,
+                                model_init = model_init,
+                                callbacks = callbacks,
+                                optimizers = optimizers,
+                                tokenizer=self.tokenizer)
 
-        return transformers.Trainer(model=self.model,
-                             args = args,
-                             data_collator=self.data_collator,
-                             train_dataset = train_dataset,
-                             eval_dataset = eval_dataset,
-                             model_init = model_init,
-                             callbacks = callbacks,
-                             optimizers = optimizers,
-                             tokenizer=self.tokenizer,
-                             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
-                             compute_metrics=compute_metrics)
-
-    def predict(self, test_dataset):
-
-        def preprocess_logits_for_prediction(logits:Union[torch.Tensor, Tuple[torch.Tensor]], _):
-
-            if isinstance(logits, tuple):  # Unpack logits if it's a tuple
-                logits = logits[0]
-
-            if logits.ndim == 3:
-                # Reshape logits to 2D if needed
-                logits = logits.reshape(-1, logits.shape[-1])
-            return torch.sigmoid(logits)[:,1]
-
-        
-        if self.model_max_length > 300:
+    def predict(self, test_dataset,batch_size = None, clear_cache=True):
+        if batch_size is not None:
             training_args = TrainingArguments(
-                evaluation_strategy = "no",
-                save_strategy = "no",
-                gradient_checkpointing=False,
-                skip_memory_metrics=True,
-                auto_find_batch_size=True,
-                )
+                    eval_strategy = "no",
+                    save_strategy = "no",
+                    gradient_checkpointing=False,
+                    skip_memory_metrics=True,
+                    auto_find_batch_size=False,
+                    per_device_eval_batch_size = batch_size
+                    )
         else:
             training_args = TrainingArguments(
-                evaluation_strategy = "no",
-                save_strategy = "no",
-                gradient_checkpointing=False,
-                skip_memory_metrics=True,
-                auto_find_batch_size=False,
-                per_device_eval_batch_size = 250
-                )
-        prediction_trainer = transformers.Trainer(
-            model=self.model,
-            args=training_args,
-            data_collator=self.data_collator,
-            tokenizer=self.tokenizer,
-            preprocess_logits_for_metrics=preprocess_logits_for_prediction,
-            compute_metrics=None  # Also remove compute_metrics to avoid issues
-        )
+                    eval_strategy = "no",
+                    save_strategy = "no",
+                    gradient_checkpointing=False,
+                    skip_memory_metrics=True,
+                    auto_find_batch_size=True
+                    )
+        if self.num_labels==2:
+            prediction_trainer = transformers.Trainer(
+                model=self.model,
+                args=training_args,
+                data_collator=self.data_collator,
+                tokenizer=self.tokenizer,
+                preprocess_logits_for_metrics=preprocess_logits_for_prediction,
+                compute_metrics=None  # Also remove compute_metrics to avoid issues
+            )
+
+        
+        elif self.num_labels>2:
+            prediction_trainer = transformers.Trainer(
+                model=self.model,
+                args=training_args,
+                data_collator=self.data_collator,
+                tokenizer=self.tokenizer,
+                compute_metrics=None,
+                preprocess_logits_for_metrics =  keep_logits_only
+            )
+        
     
         prediction = prediction_trainer.predict(test_dataset)
-        gc.collect()
-        torch.cuda.empty_cache() 
+        if clear_cache:
+            gc.collect()
+            torch.cuda.empty_cache() 
         # prediction = self.trainer.predict(test_dataset)
         # gc.collect()
         # torch.cuda.empty_cache() 
@@ -531,6 +549,7 @@ class EpigenDnabert2():
                   train_dataset: Optional[SupervisedDataset] = None,
                   val_dataset: Optional[SupervisedDataset] = None,
                   test_dataset: Optional[SupervisedDataset] = None,
+                  callbacks: Optional[List[TrainerCallback]] = None,
                   data_interface: str = "csv"):
         
         # Ensure that either data_path is provided or all datasets are provided
@@ -548,18 +567,18 @@ class EpigenDnabert2():
                                         data_path_or_list=os.path.join(data_path, "valid"), 
                                         kmer=-1,data_interface=data_interface)
         print("Val is initialized")
-        test_dataset = test_dataset or SupervisedDataset(tokenizer=self.tokenizer, 
-                                        data_path_or_list=os.path.join(data_path, "test"), 
-                                        kmer=-1,data_interface=data_interface)
-        print("Test is initialized")
+        # test_dataset = test_dataset or SupervisedDataset(tokenizer=self.tokenizer, 
+        #                                 data_path_or_list=os.path.join(data_path, "test"), 
+        #                                 kmer=-1,data_interface=data_interface)
+        # print("Test is initialized")
         
         if training_args is not None:
             self.training_args = training_args # overwritting default training args
 
         self.trainer = self._init_trainer(train_dataset=train_dataset,
                                      eval_dataset = val_dataset,
-
-                                     args=self.training_args)
+                                     args=self.training_args,
+                                     callbacks=callbacks)
         
         print("All datasets are successfully initiated")
         self.trainer.train()
@@ -567,11 +586,11 @@ class EpigenDnabert2():
             self.trainer.save_state()
             self.safe_save_model_for_hf_trainer(output_dir=training_args.output_dir)
 
-        # get the evaluation results from trainer
-        if training_args.eval_and_save_results:
-            results_path = os.path.join(training_args.output_dir, "results", training_args.run_name)
-            results = self.trainer.evaluate(eval_dataset=test_dataset)
-            os.makedirs(results_path, exist_ok=True)
-            with open(os.path.join(results_path, "eval_results.json"), "w") as f:
-                json.dump(results, f)
+        # # get the evaluation results from trainer
+        # if training_args.eval_and_save_results:
+        #     results_path = os.path.join(training_args.output_dir, "results", training_args.run_name)
+        #     results = self.trainer.evaluate(eval_dataset=test_dataset)
+        #     os.makedirs(results_path, exist_ok=True)
+        #     with open(os.path.join(results_path, "eval_results.json"), "w") as f:
+        #         json.dump(results, f)
         

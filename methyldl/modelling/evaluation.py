@@ -42,10 +42,29 @@ def preprocess_logits_for_metrics(logits:Union[torch.Tensor, Tuple[torch.Tensor,
         logits = logits.reshape(-1, logits.shape[-1])
     return torch.argmax(logits, dim=-1)
 
+def preprocess_logits_for_prediction(logits:Union[torch.Tensor, Tuple[torch.Tensor]], _):
+    if isinstance(logits, tuple):  # Unpack logits if it's a tuple
+        logits = logits[0]
+    if logits.ndim == 3:
+        # Reshape logits to 2D if needed
+        logits = logits.reshape(-1, logits.shape[-1])
+    return torch.sigmoid(logits)[:,1]
+
+
+def keep_logits_only(raw_model_output, labels):
+    """
+    We want to keep only the first item so that the Trainer
+    concatenates an (N, num_labels) tensor nothing else.
+    """
+    if isinstance(raw_model_output, tuple):
+        raw_model_output = raw_model_output[0]          # grab logits
+    # (if it is already a Tensor, we just fall through)
+    return raw_model_output
+
 
 """
 Compute metrics used for huggingface trainer.
 """ 
 def compute_metrics(eval_pred):
     predictions, labels = eval_pred
-    return calculate_metric_with_sklearn(predictions, labels)
+    return calculate_metric_with_sklearn(predictions>0.5, labels)
