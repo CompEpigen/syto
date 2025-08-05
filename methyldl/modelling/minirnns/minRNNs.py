@@ -46,7 +46,8 @@ class MinGRUCell(nn.Module):
     def forward(
         self,
         x: Tensor,
-        prev_state=None
+        prev_state=None,
+        parallel_scan = True
     ):
         """
         Inputs:
@@ -67,7 +68,7 @@ class MinGRUCell(nn.Module):
         hidden, gate = self.to_hidden_and_gate(x).chunk(2, dim=-1)
 
         # --------- If seq_len == 1, do a trivial step-by-step update --------- #
-        if seq_len == 1:
+        if seq_len == 1 or not parallel_scan:
             tilde_h = g(hidden)         # shape = (batch, 1, dim_inner)
             gate_sig = gate.sigmoid()   # shape = (batch, 1, dim_inner)
 
@@ -85,7 +86,7 @@ class MinGRUCell(nn.Module):
             next_hidden = out[:, -1:]               # (batch, 1, dim_inner)
             next_log_hidden = out[:, -1:].log()     # (batch, 1, dim_inner)
 
-        # ------------- If seq_len > 1, do your log-scan approach ------------- #
+        # ------------- If seq_len > 1, do log-scan approach ------------- #
         else:
             # log-space "coeffs" and "values"
             log_coeffs = -F.softplus(gate)            # log(1 - sigmoid(gate)) in effect
@@ -110,7 +111,7 @@ class MinGRUCell(nn.Module):
                 # Also adjust log_coeffs with a pad
                 log_coeffs = F.pad(log_coeffs, (0, 0, 1, 0))
 
-            # Perform your log-space prefix-scan
+            # Perform log-space prefix-scan
             log_out = associative_scan_log(log_coeffs, log_values, return_log=True)
             # We only want the last seq_len steps for the final "output" portion
             out = torch.exp(log_out[:, -seq_len:])   # shape = (batch, seq_len, dim_inner)
@@ -159,7 +160,7 @@ class MinGRU(nn.Module):
                     batch_first=batch_first
                 )
             )
-    def forward(self, x, prev_states=None):
+    def forward(self, x, prev_states=None,parallel_scan=True):
         """
         x: shape = (batch, seq_len, input_dim) or (seq_len, batch, input_dim)
         prev_states: optionally a list of states for each layer:
@@ -173,7 +174,7 @@ class MinGRU(nn.Module):
         output = x
         next_states = []
         for layer_idx, (layer, prev_state) in enumerate(zip(self.layers, prev_states)):
-            output, next_state = layer(output, prev_state)
+            output, next_state = layer.forward(output, prev_state,parallel_scan)
             next_states.append(next_state)
 
         return output, next_states
@@ -205,7 +206,8 @@ class BiMinGRU(nn.Module):
         self,
         x: Tensor,
         prev_state_fwd=None,
-        prev_state_bwd=None
+        prev_state_bwd=None,
+        parallel_scan = True
     ):
         """
         Inputs:
@@ -220,7 +222,7 @@ class BiMinGRU(nn.Module):
                       each shape = (batch, 1, 2*dim_inner) always given the code.
         """
         # -- Forward direction --
-        out_fwd, next_state_fwd = self.fwd_gru(x, prev_state_fwd)
+        out_fwd, next_state_fwd = self.fwd_gru(x, prev_state_fwd,parallel_scan)
         next_state_fwd = next_state_fwd[-1] # last layer only
 
         # We need to flip x along the time dimension. That dimension is:
@@ -229,7 +231,7 @@ class BiMinGRU(nn.Module):
         x_reversed = torch.flip(x, dims=[seq_dim])
 
         # -- Backward direction --
-        out_bwd_reversed, next_state_bwd = self.bwd_gru(x_reversed, prev_state_bwd) # last layer only
+        out_bwd_reversed, next_state_bwd = self.bwd_gru(x_reversed, prev_state_bwd,parallel_scan) # last layer only
         next_state_bwd = next_state_bwd[-1]  # last layer only
 
         # Flip the backward output back

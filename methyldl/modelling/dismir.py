@@ -193,7 +193,7 @@ class DISMIRNet(nn.Module):
                         start, end = n // 4, n // 2
                         param.data[start:end].fill_(1.0)  # Forget gate bias = 1
     
-    def forward(self, x):
+    def forward(self, x,parallel_scan=True):
         """
         x shape expected: (batch_size, max_sequence_length, 5)
         PyTorch Conv1d expects: (batch_size, in_channels, seq_len)
@@ -210,7 +210,10 @@ class DISMIRNet(nn.Module):
         
         # LSTM: expecting shape (batch, seq_len, features=100)
         x = x.permute(0, 2, 1)  # (batch, seq_len/2, 100)
-        x, _ = self.rnn(x)     # (batch, seq_len/2, 2*hidden_size) = (batch, seq_len/2, max_sequence_length)
+        if isinstance(self.rnn, BiMinGRU) and not parallel_scan:
+            x, _ = self.rnn(x, parallel_scan=False)     # (batch, seq_len/2, 2*hidden_size) = (batch, seq_len/2, max_sequence_length)
+        else:
+            x, _ = self.rnn(x)     # (batch, seq_len/2, 2*hidden_size) = (batch, seq_len/2, max_sequence_length)
         
         # Second conv block: shape -> (batch, max_sequence_length, seq_len/2)
         x = x.permute(0, 2, 1)  # (batch, in_channels=max_sequence_length, seq_len/2)
@@ -922,7 +925,7 @@ class Dismir:
         
         return self._validate_variable_length(loader, criterion)
     
-    def predict(self, dna_sequences, methylation_sequences, batch_size=128, threshold=0.5):
+    def predict(self, dna_sequences, methylation_sequences, batch_size=128, threshold=0.5,parallel_scan=True):
         """
         Predict on arbitrary sequences using the trained model.
         :param dna_sequences: list (or array-like) of DNA strings
@@ -946,7 +949,7 @@ class Dismir:
         with torch.no_grad():
             for (X_batch,) in loader:
                 X_batch = X_batch.to(self.device)
-                outputs = self.model(X_batch)   # shape: (batch_size, 1)
+                outputs = self.model.forward(X_batch, parallel_scan=parallel_scan)   # shape: (batch_size, 1)
                 # Squeeze to get shape [batch_size]
                 outputs = outputs.squeeze(-1).cpu().numpy()
                 all_outputs.extend(outputs)
