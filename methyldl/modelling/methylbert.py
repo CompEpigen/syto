@@ -5,6 +5,9 @@ from torch.nn.modules.loss import _Loss
 from transformers import BertPreTrainedModel, BertModel
 import warnings, random 
 import numpy as np
+from transformers.trainer_callback import (
+    TrainerCallback
+)
 
 
 from dataclasses import dataclass
@@ -28,7 +31,7 @@ from transformers import (
 
 from collections import OrderedDict
 import itertools
-from methyldl.modelling.evaluation import compute_metrics,preprocess_logits_for_metrics
+from methyldl.modelling.evaluation import compute_metrics,preprocess_logits_for_metrics,preprocess_logits_for_prediction
 
 default_methylbert_config = OrderedDict([
     ("lr", 0.0004),
@@ -325,7 +328,8 @@ class MethylBert:
         fine_tuned_model_path: Optional[str] = None,
         num_labels: int = 2,
         num_dmr_labels:int = 100,
-        output_dir:str = "tmp_trainer"
+        output_dir:str = "tmp_trainer",
+        batch_size = None
     ):
         """
         :param foundation_model_path: local or HF repo ID for the base BERT config/weights
@@ -389,7 +393,10 @@ class MethylBert:
         except:
             self.tokenizer = None
         
-        recomended_batch_size = calculate_batch_size(gb_per_seq = 0.0135*2, cpu_batch_size=700/2)
+        if batch_size is None:
+            recomended_batch_size = calculate_batch_size(gb_per_seq = 0.0135*2, cpu_batch_size=700/2)
+        else:
+            recomended_batch_size = batch_size
 
 
         # 6) Create default TrainingArguments from your config
@@ -405,16 +412,15 @@ class MethylBert:
             fp16=self._config["amp"],  # automatic mixed precision
             max_grad_norm=self._config["max_grad_norm"],
             gradient_accumulation_steps=self._config["gradient_accumulation_steps"],
-
             # Logging & saving frequency from your config:
             logging_steps=self._config["log_freq"],
             eval_steps=self._config["eval_freq"],
             save_steps=self._config["eval_freq"],  # or some multiple
             # Other defaults
             per_device_train_batch_size=recomended_batch_size,
-            per_device_eval_batch_size=int(recomended_batch_size/2),
+            per_device_eval_batch_size=recomended_batch_size,
             num_train_epochs=100,   # you can override later
-            evaluation_strategy="steps",  # Evaluate every X steps
+            eval_strategy="steps",  # Evaluate every X steps
             remove_unused_columns=False,
             eval_accumulation_steps = 8,
             torch_empty_cache_steps = 10,
@@ -424,7 +430,7 @@ class MethylBert:
             auto_find_batch_size=False,
             save_total_limit=5,
             load_best_model_at_end = True,
-            metric_for_best_model = "f1",
+            metric_for_best_model = "eval_loss",
             run_name="methylBERT"
             # eval_and_save_results=True
             # label_names=["ctype_label"]
@@ -439,7 +445,9 @@ class MethylBert:
                       eval_dataset=None,
                       data_collator=None,
                       custom_training_args=None,
-                      prediction_mode = False):
+                      prediction_mode = False,
+                      callbacks=None,
+                      batch_size=None):
         """
         Internal method to build a HF Trainer.
         """
@@ -453,9 +461,15 @@ class MethylBert:
 
         args=self.training_args
         if prediction_mode:
-              args.eval_strategy = "no"
-              args.do_train = False
-              args.do_eval = False
+            args.eval_strategy = "no"
+            args.do_train = False
+            args.do_eval = False
+            preprocessing_function = preprocess_logits_for_prediction
+        else:
+            preprocessing_function = preprocess_logits_for_prediction     
+
+        if batch_size is not None:
+                args.per_device_eval_batch_size = batch_size   
 
         trainer = Trainer(
             model=self.model,
@@ -464,8 +478,9 @@ class MethylBert:
             eval_dataset=eval_dataset,
             tokenizer=self.tokenizer,
             data_collator=data_collator,
-            preprocess_logits_for_metrics=preprocess_logits_for_metrics,
-            compute_metrics=compute_metrics
+            preprocess_logits_for_metrics=preprocessing_function,
+            compute_metrics=compute_metrics,
+            callbacks = callbacks
         )
         return trainer
 
@@ -476,13 +491,14 @@ class MethylBert:
         val_dataset=None,
         test_dataset=None,
         data_collator=None,
-        training_args=None
+        training_args=None,
+        callbacks: Optional[List[TrainerCallback]] = None,
     ):
         """
         Fine-tune your model on a training set, optional validation set, etc.
         """
-        assert data_path or (train_dataset and val_dataset and test_dataset), (
-            "Either 'data_path' must be provided or all of 'train_dataset', 'val_dataset', and 'test_dataset' must not be None."
+        assert data_path or (train_dataset and val_dataset), (
+            "Either 'data_path' must be provided or all of 'train_dataset' and 'val_dataset' must not be None."
         )
 
         train_dataset = train_dataset or MethylBertFinetuneDataset(
@@ -495,44 +511,45 @@ class MethylBert:
               vocab=MethylVocab(k=3),
               seq_len=self.seq_len
               )
-        test_dataset = test_dataset or MethylBertFinetuneDataset(
-              data_source=os.path.join(data_path, "test.txt"),
-              vocab=MethylVocab(k=3),
-              seq_len=self.seq_len
-              )
+        # test_dataset = test_dataset or MethylBertFinetuneDataset(
+        #       data_source=os.path.join(data_path, "test.txt"),
+        #       vocab=MethylVocab(k=3),
+        #       seq_len=self.seq_len
+        #       )
         self.trainer = self._init_trainer(
             train_dataset=train_dataset,
             eval_dataset=val_dataset,
             data_collator=data_collator,
-            custom_training_args=training_args
+            custom_training_args=training_args,
+            callbacks = callbacks
         )
 
         self.trainer.train()
 
-        if test_dataset:
-            results = self.trainer.evaluate(test_dataset)
-            print("Test results:", results)
+        # if test_dataset:
+        #     results = self.trainer.evaluate(test_dataset)
+        #     print("Test results:", results)
 
-        # Save final model
-        # if self.training_args.save_model:
-        if True:
-            self.trainer.save_state()
-            self.safe_save_model_for_hf_trainer(output_dir=self.output_dir)
+        # # Save final model
+        # # if self.training_args.save_model:
+        # if True:
+        #     self.trainer.save_state()
+        #     self.safe_save_model_for_hf_trainer(output_dir=self.output_dir)
 
         # get the evaluation results from trainer
         # if training_args.eval_and_save_results:
-        if True:
-            results_path = os.path.join(self.output_dir, "results", training_args.run_name)
-            results = self.trainer.evaluate(eval_dataset=test_dataset)
-            os.makedirs(results_path, exist_ok=True)
-            with open(os.path.join(results_path, "eval_results.json"), "w") as f:
-                json.dump(results, f)
+        # if True:
+        #     results_path = os.path.join(self.output_dir, "results", training_args.run_name)
+        #     results = self.trainer.evaluate(eval_dataset=test_dataset)
+        #     os.makedirs(results_path, exist_ok=True)
+        #     with open(os.path.join(results_path, "eval_results.json"), "w") as f:
+        #         json.dump(results, f)
 
         # if self.trainer.args.should_save:
         #     self.trainer.save_model(self.trainer.args.output_dir)
         #     self.safe_save_model_for_hf_trainer(self.trainer.args.output_dir)
 
-    def predict(self, dataset, data_collator=methylbert_finetune_collator):
+    def predict(self, dataset, data_collator=methylbert_finetune_collator, batch_size = None,clear_cache=True):
         """
         Use Hugging Face Trainer for prediction on a dataset.
         """
@@ -540,12 +557,14 @@ class MethylBert:
             # build a trainer for inference
             self.trainer = self._init_trainer(
                 data_collator=data_collator,
-                prediction_mode=True
+                prediction_mode=True,
+                batch_size = batch_size
                 # no train or val dataset
             )
         predictions = self.trainer.predict(dataset)
-        gc.collect()
-        torch.cuda.empty_cache()
+        if clear_cache:
+            gc.collect()
+            torch.cuda.empty_cache()
         return predictions
 
     def safe_save_model_for_hf_trainer(self, output_dir: str):
@@ -867,9 +886,6 @@ class MethylBertPretrainDataset(MethylBertDataset):
 
         return inputs, labels, masked_indices
 
-
-
-
 class MethylBertFinetuneDataset(MethylBertDataset):
     def __init__(
         self,
@@ -908,15 +924,16 @@ class MethylBertFinetuneDataset(MethylBertDataset):
             # List of lists case; ensure "dmr_label" is present
             self.f_path = None  # Not relevant here, but you can store or ignore
             header = data_source[0]
+            print(header)
             if "dmr_label" not in header:
                 header.append("dmr_label")
                 for row in data_source[1:]:
-                    row.append("0")  # default label = 0 if not present
+                    row.append(0)  # default label = 0 if not present
             
             if "dmr_ctype" not in header:
                 header.append("dmr_ctype")
                 for row in data_source[1:]:
-                    row.append("0")  # default label = 0 if not present
+                    row.append(1)  # default label = 1 if not present
 
             # Convert each row into a tab-delimited string
             lines = ["\t".join(map(str, row)) for row in data_source]
