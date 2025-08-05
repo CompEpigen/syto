@@ -175,3 +175,8 @@ cython_debug/
 /Tutorials/mlruns
 /Tutorials/output
 /mlartifacts
+/EDA/mlruns
+/EDA/output
+/EDA/tmp_trainer
+/Tutorials/dismir
+/Tutorials/temp
