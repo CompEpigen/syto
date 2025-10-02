@@ -24,6 +24,7 @@ from methyldl.modelling.evaluation import preprocess_logits_for_metrics, compute
 from methyldl.modelling.utils import calculate_batch_size
 from methyldl.data.dataset import *
 from safetensors.torch import load_file
+from transformers.models.bert.configuration_bert import BertConfig
 
 class BertEmbeddings(nn.Module):
     """Construct the embeddings for words, ignoring position.
@@ -372,7 +373,8 @@ class EpigenDnabert2():
                   num_labels:int =2,
                   use_cpg_methylation=True, 
                   use_m6a_methylation=False,
-                  trust_remote_code=True):
+                  trust_remote_code=True,
+                  use_triton=True):
         
         assert len(foundation_model_huggingface), "Must specify foundation model path hosted on Hugging Face"
 
@@ -383,8 +385,15 @@ class EpigenDnabert2():
             return BertForSequenceClassification(base_model)
         
         config = BertForSequenceClassification.config_class.from_pretrained(foundation_model_huggingface)
+        config = BertConfig(**config.to_dict(),use_triton=use_triton)
         # Does not load weights just yet, because if we have a checkpoint, the weights will be retrived from it 
-        base_model = transformers.AutoModelForSequenceClassification.from_config(trust_remote_code=trust_remote_code, config = config)
+        # base_model = transformers.AutoModelForSequenceClassification.from_config(trust_remote_code=trust_remote_code, config = config)
+        base_model = transformers.AutoModelForSequenceClassification.from_pretrained(
+                foundation_model_huggingface,
+                trust_remote_code=trust_remote_code,
+                config = config,
+                local_files_only=True,  
+                cache_dir=None)  
         model = initialize_model_with_custom_embeddings(base_model, use_cpg_methylation, use_m6a_methylation)
         model.classifier = nn.Linear(768,out_features=num_labels,bias=True)
         self.num_labels=num_labels
@@ -441,7 +450,7 @@ class EpigenDnabert2():
             )
 
         self.training_args = default_training_args
-
+        self.max_sequence_length = max_sequence_length
         self.model_max_length = model_max_length
         self.tokenizer = transformers.AutoTokenizer.from_pretrained(
             foundation_model_huggingface,
@@ -497,13 +506,43 @@ class EpigenDnabert2():
                     per_device_eval_batch_size = batch_size
                     )
         else:
-            training_args = TrainingArguments(
-                    eval_strategy = "no",
-                    save_strategy = "no",
-                    gradient_checkpointing=False,
-                    skip_memory_metrics=True,
-                    auto_find_batch_size=True
-                    )
+            # TODO Must be a better way
+            # Also, when using Flash Attention, we are forced to have batch size as multiples of 64 to avoid race conditions.
+            if self.max_sequence_length <= 1000:
+                training_args = TrainingArguments(
+                        eval_strategy = "no",
+                        save_strategy = "no",
+                        gradient_checkpointing=False,
+                        skip_memory_metrics=True,
+                        auto_find_batch_size=False,
+                        per_device_eval_batch_size = 64*6
+                        )
+            elif self.max_sequence_length <= 2000:
+                training_args = TrainingArguments(
+                        eval_strategy = "no",
+                        save_strategy = "no",
+                        gradient_checkpointing=False,
+                        skip_memory_metrics=True,
+                        auto_find_batch_size=False,
+                        per_device_eval_batch_size = 64*3
+                        )
+            elif self.max_sequence_length <= 3000:
+                training_args = TrainingArguments(
+                        eval_strategy = "no",
+                        save_strategy = "no",
+                        gradient_checkpointing=False,
+                        skip_memory_metrics=True,
+                        auto_find_batch_size=False,
+                        per_device_eval_batch_size = 64
+                        )
+            else:
+                training_args = TrainingArguments(
+                        eval_strategy = "no",
+                        save_strategy = "no",
+                        gradient_checkpointing=False,
+                        skip_memory_metrics=True,
+                        auto_find_batch_size=True
+                        )
         if self.num_labels==2:
             prediction_trainer = transformers.Trainer(
                 model=self.model,

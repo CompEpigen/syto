@@ -166,37 +166,110 @@ class AbstractMLFlowExperiment:
             print(f"Error calculating stats for {data_path}: {e}")
             return {}
     
-    def _calculate_metrics(self, y_true, y_pred_proba, y_pred_binary,best_treshold):
-        """Calculate comprehensive metrics."""
+    def _calculate_metrics(self, y_true, y_pred_proba, y_pred_binary, best_treshold=0.5):
+        """Calculate comprehensive metrics, handling NaN values."""
         try:
+            # Convert to numpy arrays if not already
+            y_true = np.array(y_true)
+            y_pred_proba = np.array(y_pred_proba)
+            y_pred_binary = np.array(y_pred_binary)
             
+            # Track NaN statistics
+            nan_mask_true = np.isnan(y_true)
+            nan_mask_proba = np.isnan(y_pred_proba)
+            nan_mask_binary = np.isnan(y_pred_binary)
+            nan_mask_any = nan_mask_true | nan_mask_proba | nan_mask_binary
+            
+            num_total = len(y_true)
+            num_nans_true = np.sum(nan_mask_true)
+            num_nans_proba = np.sum(nan_mask_proba)
+            num_nans_binary = np.sum(nan_mask_binary)
+            num_nans_any = np.sum(nan_mask_any)
+            
+            # Filter out NaN values for metric calculation
+            valid_mask = ~nan_mask_any
+            y_true_clean = y_true[valid_mask]
+            y_pred_proba_clean = y_pred_proba[valid_mask]
+            y_pred_binary_clean = y_pred_binary[valid_mask]
+            
+            # Initialize metrics with NaN tracking
             metrics = {
-                'accuracy': float(accuracy_score(y_true, y_pred_binary)),
-                'precision': float(precision_score(y_true, y_pred_binary, zero_division=0)),
-                'recall': float(recall_score(y_true, y_pred_binary, zero_division=0)),
-                'f1_score': float(f1_score(y_true, y_pred_binary, zero_division=0)),
-                'roc_auc': float(roc_auc_score(y_true, y_pred_proba)) if len(np.unique(y_true)) > 1 else 0.0,
-                "mcc":float(matthews_corrcoef(y_true,y_pred_binary)),
-                "threshold": best_treshold
+                'num_total_samples': int(num_total),
+                'num_nans_predictions_proba': int(num_nans_proba),
+                'nan_percentage': float(num_nans_proba / num_total * 100) if num_total > 0 else 0.0,
+                'threshold': float(best_treshold)
             }
             
-            # Confusion matrix
-            cm = confusion_matrix(y_true, y_pred_binary)
-            if cm.shape == (2, 2):
-                tn, fp, fn, tp = cm.ravel()
+            # Only calculate metrics if we have valid samples
+            if len(y_true_clean) > 0:
                 metrics.update({
-                    'true_negatives': int(tn),
-                    'false_positives': int(fp),
-                    'false_negatives': int(fn),
-                    'true_positives': int(tp),
-                    'specificity': float(tn / (tn + fp)) if (tn + fp) > 0 else 0.0,
-                    'sensitivity': float(tp / (tp + fn)) if (tp + fn) > 0 else 0.0
+                    'accuracy': float(accuracy_score(y_true_clean, y_pred_binary_clean)),
+                    'precision': float(precision_score(y_true_clean, y_pred_binary_clean, zero_division=0)),
+                    'recall': float(recall_score(y_true_clean, y_pred_binary_clean, zero_division=0)),
+                    'f1_score': float(f1_score(y_true_clean, y_pred_binary_clean, zero_division=0)),
+                    'mcc': float(matthews_corrcoef(y_true_clean, y_pred_binary_clean))
+                })
+                
+                # ROC AUC requires at least 2 classes and no NaN in probabilities
+                if len(np.unique(y_true_clean)) > 1:
+                    metrics['roc_auc'] = float(roc_auc_score(y_true_clean, y_pred_proba_clean))
+                else:
+                    metrics['roc_auc'] = 0.0
+                    
+                # Confusion matrix
+                cm = confusion_matrix(y_true_clean, y_pred_binary_clean)
+                if cm.shape == (2, 2):
+                    tn, fp, fn, tp = cm.ravel()
+                    metrics.update({
+                        'true_negatives': int(tn),
+                        'false_positives': int(fp),
+                        'false_negatives': int(fn),
+                        'true_positives': int(tp),
+                        'specificity': float(tn / (tn + fp)) if (tn + fp) > 0 else 0.0,
+                        'sensitivity': float(tp / (tp + fn)) if (tp + fn) > 0 else 0.0
+                    })
+                else:
+                    # Handle edge case where only one class is present
+                    metrics.update({
+                        'true_negatives': 0,
+                        'false_positives': 0,
+                        'false_negatives': 0,
+                        'true_positives': 0,
+                        'specificity': 0.0,
+                        'sensitivity': 0.0
+                    })
+            else:
+                # No valid samples - set all metrics to 0 or NaN
+                print(f"Warning: No valid samples found after removing NaNs. Total samples: {num_total}, NaN samples: {num_nans_any}")
+                metrics.update({
+                    'accuracy': 0.0,
+                    'precision': 0.0,
+                    'recall': 0.0,
+                    'f1_score': 0.0,
+                    'roc_auc': 0.0,
+                    'mcc': 0.0,
+                    'true_negatives': 0,
+                    'false_positives': 0,
+                    'false_negatives': 0,
+                    'true_positives': 0,
+                    'specificity': 0.0,
+                    'sensitivity': 0.0
                 })
             
+            # Add warning if significant NaN percentage
+            if metrics['nan_percentage'] > 5.0:
+                print(f"Warning: {metrics['nan_percentage']:.2f}% of samples contain NaN values")
+                
             return metrics
+            
         except Exception as e:
             print(f"Error calculating metrics: {e}")
-            return {}
+            # Return partial metrics with error information
+            return {
+                'error': str(e),
+                'num_total_samples': len(y_true) if 'y_true' in locals() else 0,
+                'num_nans_total': int(np.sum(np.isnan(y_true))) if 'y_true' in locals() else 0
+            }
     
     def _aggregate_predictions(self, data_chunked, predictions):
         data_chunked["predictions_proba"] = predictions
@@ -298,7 +371,7 @@ class DismirMLflowExperiment(AbstractMLFlowExperiment):
                  model_flavor="minigru",
                  splits = ["train", "valid", "test", "rest"]
                  ):
-        super.__init__(data_path,
+        super().__init__(data_path,
                        experiment_name,
                        tracking_uri,
                        max_sequence_length,
@@ -517,7 +590,8 @@ class EpigenBERT2MLflowExperiment(TransformersMLFLowExperiment):
                  use_cpg_methylation=True,
                  use_m6a_methylation=False,
                  foundation_model_huggingface="zhihan1996/DNABERT-2-117M",
-                 splits = ['train', 'valid', 'test', 'rest']):
+                 splits = ['train', 'valid', 'test', 'rest'],
+                 use_triton = False):
         """
         Initialize the EpigenBERT2 experiment wrapper.
         
@@ -526,7 +600,7 @@ class EpigenBERT2MLflowExperiment(TransformersMLFLowExperiment):
             use_m6a_methylation (bool): Whether to use m6A methylation
             foundation_model_huggingface (str): Hugging Face model path
         """
-        super.__init__(data_path,
+        super().__init__(data_path,
                        experiment_name,
                        tracking_uri,
                        max_sequence_length,
@@ -535,6 +609,7 @@ class EpigenBERT2MLflowExperiment(TransformersMLFLowExperiment):
         self.use_cpg_methylation = use_cpg_methylation
         self.use_m6a_methylation = use_m6a_methylation
         self.foundation_model_huggingface = foundation_model_huggingface
+        self.use_triton = use_triton
     
     
     def _progressive_predict(self, data_df, checkpoint_path, split_name):
@@ -563,7 +638,8 @@ class EpigenBERT2MLflowExperiment(TransformersMLFLowExperiment):
                 max_sequence_length=self.max_sequence_length,
                 use_cpg_methylation=self.use_cpg_methylation,
                 use_m6a_methylation=self.use_m6a_methylation,
-                foundation_model_huggingface=self.foundation_model_huggingface
+                foundation_model_huggingface=self.foundation_model_huggingface,
+                use_triton=self.use_triton
             )
             
             test_dataset = SupervisedDataset(
@@ -572,11 +648,10 @@ class EpigenBERT2MLflowExperiment(TransformersMLFLowExperiment):
                 kmer=-1,
                 data_interface="pandas"
             )
-            
-            result = epigenbert.predict(test_dataset, batch_size=200)
+            epigenbert.model.eval()
+            result = epigenbert.predict(test_dataset, batch_size=None)
             predictions = result.predictions if hasattr(result, 'predictions') else result[0]
             labels = result.label_ids if hasattr(result, 'label_ids') else result[1]
-            
             # Clean up
             del epigenbert
             gc.collect()
@@ -592,6 +667,7 @@ class EpigenBERT2MLflowExperiment(TransformersMLFLowExperiment):
         
         # Generate sequence length ranges
         sequence_ranges = list(reversed(range(1000, max_read_length + 1000, 1000)))
+        sequence_ranges = list((range(1000, max_read_length + 1000, 1000)))
         
         for max_seq_len in tqdm(sequence_ranges, desc=f"Processing {split_name}"):
             # Filter data for current sequence length range
@@ -626,10 +702,10 @@ class EpigenBERT2MLflowExperiment(TransformersMLFLowExperiment):
             )
             
             # Make predictions
-            result = epigenbert.predict(test_dataset, batch_size=200)
+            result = epigenbert.predict(test_dataset, batch_size=None)
             predictions = result.predictions if hasattr(result, 'predictions') else result[0]
             labels = result.label_ids if hasattr(result, 'label_ids') else result[1]
-            
+
             # Store results
             all_predictions.extend(predictions)
             all_labels.extend(labels)
@@ -854,7 +930,8 @@ class EpigenBERT2MLflowExperiment(TransformersMLFLowExperiment):
                     use_cpg_methylation=self.use_cpg_methylation,
                     use_m6a_methylation=self.use_m6a_methylation,
                     max_sequence_length=self.max_sequence_length,
-                    foundation_model_huggingface=self.foundation_model_huggingface
+                    foundation_model_huggingface=self.foundation_model_huggingface,
+                    use_triton=self.use_triton
                 )
                 print(f"Weights sum for -2 layer: {np.sum(list(model_instance.model.parameters())[-2].to("cpu").detach().numpy())}")
                 training_args.seed = seed
@@ -897,7 +974,7 @@ class EpigenBERT2MLflowExperiment(TransformersMLFLowExperiment):
             mlflow.log_param("best_checkpoint", checkpoint_path)
                         # Log model artifacts
             print(f"Logging model artifacts for dataset {dataset_name}")
-            checkpoint_folder_path = str(checkpoint_path).replace("\model.safetensors", "")
+            checkpoint_folder_path = str(checkpoint_path).replace("\model.safetensors", "").replace("/model.safetensors", "")
             if os.path.exists(checkpoint_folder_path):
                 mlflow.log_artifacts(checkpoint_folder_path, f"model")
 
@@ -905,6 +982,11 @@ class EpigenBERT2MLflowExperiment(TransformersMLFLowExperiment):
             all_predictions = {}
             all_metrics = {}
             
+            # Clean up model instance before calculation of metrics
+            del model_instance
+            gc.collect()
+            torch.cuda.empty_cache() 
+
             for split in self.splits:
                 print(f"Calculating metrics for {split} split...")
                 metrics, predictions_df = self._make_predictions_and_calculate_metrics(
@@ -984,7 +1066,7 @@ class MethylBertMLflowExperiment(TransformersMLFLowExperiment):
         Args:
             foundation_model_huggingface - path to foundational model
         """
-        super.__init__(data_path,
+        super().__init__(data_path,
                        experiment_name,
                        tracking_uri,
                        max_sequence_length,
@@ -1295,7 +1377,7 @@ class MethylBertMLflowExperiment(TransformersMLFLowExperiment):
                 mlflow.log_param("best_checkpoint", checkpoint_path)
                             # Log model artifacts
                 print(f"Logging model artifacts for dataset {dataset_name}")
-                checkpoint_folder_path = str(checkpoint_path).replace("\model.safetensors", "")
+                checkpoint_folder_path = str(checkpoint_path).replace("\model.safetensors", "").replace("/model.safetensors", "")
                 if os.path.exists(checkpoint_folder_path):
                     mlflow.log_artifacts(checkpoint_folder_path, f"model")
 
