@@ -22,7 +22,8 @@ class SupervisedDataset(Dataset):
                  tokenizer: transformers.PreTrainedTokenizer, 
                  kmer: int = -1,
                  first_n_samples: int = None,
-                 data_interface:str = "csv"):
+                 data_interface:str = "csv",
+                 lazy_tokenization = False):
         """
         Args:
             data_path_or_list (str or list): Path to the CSV file or a structured list.
@@ -35,6 +36,7 @@ class SupervisedDataset(Dataset):
         self.inversed_vocab = {y: x for (x, y) in tokenizer.vocab.items()}
         self.cpg_methylation = None
         self.m6a_methylation = None
+        self.lazy_tokenization = lazy_tokenization
 
         # Determine input type
         if data_interface == "csv":
@@ -90,30 +92,32 @@ class SupervisedDataset(Dataset):
             self.labels = labels.to_list()
             self.cpg_methylation = methylation.to_list()
             texts = dna.to_list()
+        if not lazy_tokenization:
+            # Tokenize genome sequences
+            output = tokenizer(
+                texts,
+                return_tensors="pt",
+                padding="longest",
+                max_length=tokenizer.model_max_length,
+                truncation=True,
+            )
+            self.input_ids = output["input_ids"]
+            self.attention_mask = output["attention_mask"]
 
-        # Tokenize genome sequences
-        output = tokenizer(
-            texts,
-            return_tensors="pt",
-            padding="longest",
-            max_length=tokenizer.model_max_length,
-            truncation=True,
-        )
-        self.input_ids = output["input_ids"]
-        self.attention_mask = output["attention_mask"]
+            # Tokenize methylation sequences if present
+            if self.cpg_methylation is not None:
+                self.cpg_methylation = torch.tensor([
+                    self.tokenize_methyl_sequences(input_ids, methyl_seq)
+                    for input_ids, methyl_seq in zip(self.input_ids, self.cpg_methylation)
+                ])
 
-        # Tokenize methylation sequences if present
-        if self.cpg_methylation is not None:
-            self.cpg_methylation = torch.tensor([
-                self.tokenize_methyl_sequences(input_ids, methyl_seq)
-                for input_ids, methyl_seq in zip(self.input_ids, self.cpg_methylation)
-            ])
-
-        if self.m6a_methylation is not None:
-            self.m6a_methylation = torch.tensor([
-                self.tokenize_methyl_sequences(input_ids, methyl_seq)
-                for input_ids, methyl_seq in zip(self.input_ids, self.m6a_methylation)
-            ])
+            if self.m6a_methylation is not None:
+                self.m6a_methylation = torch.tensor([
+                    self.tokenize_methyl_sequences(input_ids, methyl_seq)
+                    for input_ids, methyl_seq in zip(self.input_ids, self.m6a_methylation)
+                ])
+        else:
+            self.texts = texts
 
     def tokenize_methyl_sequences(self, input_ids, methyl_seq):
         methyl_seq = [int(x) for x in methyl_seq]
@@ -126,21 +130,38 @@ class SupervisedDataset(Dataset):
         ]
 
     def __len__(self):
-        return len(self.input_ids)
+        if self.lazy_tokenization:
+            return len(self.texts)
+        else:
+            return len(self.input_ids)
 
     def __getitem__(self, i) -> Dict[str, torch.Tensor]:
-        item = {
-            "input_ids": self.input_ids[i],
-            "attention_mask": self.attention_mask[i],
-        }
+        if self.lazy_tokenization:
+            encoded = self.tokenizer(
+            self.texts[i],
+            return_tensors="pt",
+            max_length=self.tokenizer.model_max_length,
+            truncation=True,
+            )
+            item = {
+                "input_ids": encoded["input_ids"].squeeze(0),
+                "attention_mask": encoded["attention_mask"].squeeze(0)
+            }
+            if self.cpg_methylation is not None:
+                item["cpg_methylation"] = torch.tensor(self.tokenize_methyl_sequences(encoded["input_ids"].squeeze(0), self.cpg_methylation[i]))
+            if self.m6a_methylation is not None:
+                item["m6a_methylation"] = torch.tensor(self.tokenize_methyl_sequences(encoded["input_ids"].squeeze(0), self.m6a_methylation[i]))
+        else:
+            item = {
+                "input_ids": self.input_ids[i],
+                "attention_mask": self.attention_mask[i],
+            }
+            if self.cpg_methylation is not None:
+                item["cpg_methylation"] = self.cpg_methylation[i]
+            if self.m6a_methylation is not None:
+                item["m6a_methylation"] = self.m6a_methylation[i]
         if self.labels is not None:
             item["labels"] = torch.tensor(self.labels[i])
-
-        if self.cpg_methylation is not None:
-            item["cpg_methylation"] = self.cpg_methylation[i]
-
-        if self.m6a_methylation is not None:
-            item["m6a_methylation"] = self.m6a_methylation[i]
 
         return item
 
