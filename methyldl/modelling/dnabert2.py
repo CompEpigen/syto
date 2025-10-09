@@ -235,9 +235,16 @@ class BertForSequenceClassification(BertPreTrainedModel):
     e.g., GLUE tasks.
     """
 
-    def __init__(self, prertained_model):
+    def __init__(self, prertained_model, num_labels=None):
         super().__init__(prertained_model.config)
-        self.num_labels = prertained_model.config.num_labels
+        # Overwritting num_labels if those were provided during constructio since the foundational model features classifier with 2 labels
+        # Sometimes, one need to overwrite it before fine-tunning for multi-label learning
+        # TODO: Think about more elegant way
+        if num_labels is not None:
+            self.num_labels = num_labels
+            self.config.num_labels = num_labels
+        else:
+            self.num_labels = prertained_model.config.num_labels
         self.config = prertained_model.config
 
         self.bert = BertModel(prertained_model.bert) # Reconstructing original model 
@@ -380,9 +387,9 @@ class EpigenDnabert2():
 
 
         # Helper method to initialize and customize the model
-        def initialize_model_with_custom_embeddings(base_model, use_cpg, use_m6a):
+        def initialize_model_with_custom_embeddings(base_model, use_cpg, use_m6a, num_labels=None):
             base_model.bert.embeddings = BertEmbeddings(base_model.bert, use_cpg, use_m6a)
-            return BertForSequenceClassification(base_model)
+            return BertForSequenceClassification(base_model, num_labels=num_labels)
         
         config = BertForSequenceClassification.config_class.from_pretrained(foundation_model_huggingface)
         config = BertConfig(**config.to_dict(),use_triton=use_triton)
@@ -394,7 +401,7 @@ class EpigenDnabert2():
                 config = config,
                 local_files_only=True,  
                 cache_dir=None)  
-        model = initialize_model_with_custom_embeddings(base_model, use_cpg_methylation, use_m6a_methylation)
+        model = initialize_model_with_custom_embeddings(base_model, use_cpg_methylation, use_m6a_methylation,num_labels=num_labels)
         model.classifier = nn.Linear(768,out_features=num_labels,bias=True)
         self.num_labels=num_labels
         model.num_labels = num_labels
@@ -413,7 +420,8 @@ class EpigenDnabert2():
                 foundation_model_huggingface,
                 trust_remote_code=trust_remote_code,
                 config = config)
-            model = initialize_model_with_custom_embeddings(base_model, use_cpg_methylation, use_m6a_methylation)
+            model = initialize_model_with_custom_embeddings(base_model, use_cpg_methylation, use_m6a_methylation,num_labels=num_labels)
+            model.classifier = nn.Linear(768,out_features=num_labels,bias=True)
         self.model = model
         self.num_labels = num_labels
         self.config = config
