@@ -25,6 +25,8 @@ gputil = "^1.4.0"
 
 [tool.poetry.group.dev.dependencies]
 ipykernel = "^6.29.5"
+coverage = "^7.10.7"
+parameterized = "^0.9.0"
 
 [[tool.poetry.source]]
 name = "torch128"
@@ -34,3 +36,38 @@ priority = "explicit"
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
+
+[tool.coverage.run]
+source_pkgs = ["methyldl"]
+omit = [
+    "*/tests/*",
+    "*/test_*",
+    "*/__init__.py",
+    "*/tmp/*",
+    "/tmp/*",
+    "*/_remote_module_non_scriptable.py",
+    "*/site-packages/*",
+    "*/.venv/*",
+    "*/venv/*",
+]
+disable_warnings = ["no-data-collected", "module-not-measured"]
+command_line = "-m unittest discover -v"
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]
+precision = 2
+skip_empty = false
+ignore_errors = true  # This helps with the temp file issue
+skip_covered = false  # Also show fully covered files
+show_missing = false  # Show which lines are missing
+
+[tool.coverage.html]
+directory = "htmlcov"
+show_contexts = true
