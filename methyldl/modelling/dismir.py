@@ -2,11 +2,6 @@ import numpy as np
 import pandas as pd
 import os
 import os.path
-# from tensorflow.keras.models import Sequential
-# from tensorflow.keras import layers
-# from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
-# from tensorflow.keras import optimizers
-
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -16,88 +11,9 @@ from collections import defaultdict
 import time
 
 
-
-# class Dismir_TF:
-#     def __init__(self, max_sequence_length, train_data_path, test_data_path, valid_data_path):
-#         self.max_sequence_length = max_sequence_length
-#         self._init_model()
-#         self._initialize_inputs(train_data_path, test_data_path, valid_data_path)
-
-#     def _init_model(self):
-#         model = Sequential()
-#         model.add(layers.Convolution1D(input_shape=(self.max_sequence_length, 5),
-#                                     filters=100,
-#                                     kernel_size=10,
-#                                     padding="same",
-#                                     activation="relu"
-#                                     ))
-#         model.add(layers.MaxPooling1D(pool_size=2, strides=2))
-#         model.add(layers.Dropout(0.2))
-#         model.add(layers.Bidirectional(layers.LSTM(int(self.max_sequence_length/2), return_sequences=True)))
-#         model.add(layers.Convolution1D(input_shape=(int(self.max_sequence_length/2), 132),
-#                                     filters=100,
-#                                     kernel_size=3,
-#                                     padding="same",
-#                                     activation="relu"
-#                                     ))
-#         model.add(layers.MaxPooling1D(pool_size=2, strides=2))
-#         model.add(layers.Dropout(0.2))
-#         model.add(layers.Flatten())
-#         model.add(layers.Dense(750, activation='relu', kernel_regularizer=None, bias_regularizer=None))
-#         model.add(layers.Dropout(0.2))
-#         model.add(layers.Dense(300, activation='relu', kernel_regularizer=None, bias_regularizer=None))
-#         model.add(layers.Dense(1, activation='sigmoid', kernel_regularizer=None, bias_regularizer=None))
-#         sgd = optimizers.SGD(learning_rate=0.05, weight_decay=1e-6, momentum=0.9, nesterov=True)
-#         model.compile(optimizer=sgd, loss='binary_crossentropy', metrics=['accuracy'])
-#         self.model = model
-
-#     # transform sequence into one-hot code (0/1/2/3 to one-hot) and add methylation state channel
-#     def conv_onehot(self,dna_seq, c_methylation_seq):
-#         module = np.array([[1, 0, 0, 0, 0], [0, 1, 0, 0, 0], [0, 0, 1, 0, 0], [0, 0, 0, 1, 0], [0, 0, 1, 0, 1]])
-#         onehot = np.zeros((len(dna_seq), self.max_sequence_length, 5), dtype='int')
-#         for i in range(len(dna_seq)):
-#             tmp, tmp_methylation_seq = dna_seq[i], c_methylation_seq[i]
-#             tmp_onehot = np.zeros((self.max_sequence_length, 5), dtype='int')
-#             for j in range(len(tmp)):
-#                 if tmp_methylation_seq[j] == "1":
-#                     tmp_onehot[j] = module[4]
-#                 elif tmp[j] == "A":
-#                     tmp_onehot[j] = module[0]
-#                 elif tmp[j] == "T":
-#                     tmp_onehot[j] = module[1]
-#                 elif tmp[j] == "C":
-#                     tmp_onehot[j] = module[2]
-#                 elif tmp[j] == "G":
-#                     tmp_onehot[j] = module[3]
-
-#             onehot[i] = tmp_onehot
-#         return onehot
-    
-#     def load_and_transform_input(self, data_path):
-#         data = pd.read_csv(data_path)
-#         dna, methylation, labels = data["input_ids"],data["methylation_ids"], data["label"]
-#         features = self.conv_onehot(dna, methylation)
-#         return(features, labels)
-
-    
-#     def _initialize_inputs(self, train_data_path, test_data_path, valid_data_path):
-#         self.train_x, self.train_y = self.load_and_transform_input(train_data_path)
-#         self.validation_data = self.load_and_transform_input(valid_data_path)
-#         self.test_data = self.load_and_transform_input(test_data_path)
-
-#     def train(self,train_dir,verbose,epochs,batch_size):
-#         early_stopping = EarlyStopping(monitor='val_loss', patience=10)
-#         history = self.model.fit(self.train_x, self.train_y, epochs=epochs, batch_size=batch_size, validation_data=self.validation_data,
-#                         callbacks=[EarlyStopping(patience=10), ModelCheckpoint(filepath=train_dir + 'weight.h5', save_best_only=True)],
-#                         shuffle=True, verbose=verbose)
-        
-
-
-
-
 class DISMIRNet(nn.Module):
     """
-    PyTorch model mirroring the structure of the Keras model:
+    PyTorch model mirroring the structure of the original Keras model from the paper:
     1. Conv1D -> ReLU -> MaxPool
     2. Dropout
     3. Bidirectional LSTM
@@ -154,44 +70,7 @@ class DISMIRNet(nn.Module):
         self.fc2 = nn.Linear(750, 300)
         self.fc3 = nn.Linear(300, 1)
         self.sigmoid = nn.Sigmoid()
-         # Initialize weights properly
-        # self._initialize_weights()
-    
-    def _initialize_weights(self):
-        """Apply proper initialization schemes to all layers"""
-        for name, module in self.named_modules():
-            if isinstance(module, nn.Conv1d):
-                # He/Kaiming initialization for ReLU activations
-                nn.init.kaiming_normal_(module.weight, mode='fan_out', nonlinearity='relu')
-                if module.bias is not None:
-                    nn.init.constant_(module.bias, 0)
-            
-            elif isinstance(module, nn.Linear):
-                if 'fc3' in name:  # Final layer before sigmoid
-                    # Xavier initialization for sigmoid activation
-                    nn.init.xavier_normal_(module.weight)
-                    # Small positive bias for sigmoid to avoid saturation
-                    if module.bias is not None:
-                        nn.init.constant_(module.bias, 0.1)
-                else:
-                    # He initialization for ReLU activations
-                    nn.init.kaiming_normal_(module.weight, nonlinearity='relu')
-                    if module.bias is not None:
-                        nn.init.constant_(module.bias, 0)
-            
-            elif isinstance(module, nn.LSTM):
-                # LSTM initialization following best practices
-                for name, param in module.named_parameters():
-                    if 'weight_ih' in name:  # Input-to-hidden weights
-                        nn.init.xavier_normal_(param)
-                    elif 'weight_hh' in name:  # Hidden-to-hidden weights
-                        nn.init.orthogonal_(param)
-                    elif 'bias' in name:
-                        # Initialize forget gate bias to 1 for better gradient flow
-                        param.data.fill_(0)
-                        n = param.size(0)
-                        start, end = n // 4, n // 2
-                        param.data[start:end].fill_(1.0)  # Forget gate bias = 1
+
     
     def forward(self, x,parallel_scan=True):
         """
@@ -238,6 +117,7 @@ class DISMIRNet(nn.Module):
 class VariableLengthDataset(Dataset):
     """
     Custom dataset for variable-length sequences that handles chunking.
+    TODO: Initialization via providing dataset from RAM instead of from disk
     """
     def __init__(self, data_path, max_sequence_length, conv_onehot_func):
         self.max_sequence_length = max_sequence_length
@@ -319,50 +199,6 @@ class VariableLengthDataset(Dataset):
         label = torch.tensor(self.read_labels[read_id], dtype=torch.float32)
         
         return chunks, weights, label, read_id
-
-
-class VariableLengthPredictionDataset(Dataset):
-    """Dataset for variable-length prediction."""
-    def __init__(self, dna_sequences, methylation_sequences, max_sequence_length, conv_onehot_func):
-        self.dna_sequences = dna_sequences
-        self.methylation_sequences = methylation_sequences
-        self.max_sequence_length = max_sequence_length
-        self.conv_onehot = conv_onehot_func
-        
-    def __len__(self):
-        return len(self.dna_sequences)
-    
-    def __getitem__(self, idx):
-        dna_seq = self.dna_sequences[idx]
-        meth_seq = self.methylation_sequences[idx]
-        
-        # Create chunks
-        chunks = []
-        weights = []
-        
-        for start in range(0, len(dna_seq), self.max_sequence_length):
-            end = min(start + self.max_sequence_length, len(dna_seq))
-            
-            # Extract chunk
-            chunk_dna = dna_seq[start:end]
-            chunk_methylation = meth_seq[start:end]
-            
-            # Convert to one-hot
-            chunk_onehot = self.conv_onehot([chunk_dna], [chunk_methylation])[0]
-            chunks.append(chunk_onehot)
-            
-            # Calculate CpG count
-            cpg_count = sum(1 for i in range(len(chunk_dna)-1) if chunk_dna[i:i+2] == 'CG')
-            weights.append(max(cpg_count, 1))
-        
-        # Normalize weights
-        total_weight = sum(weights)
-        normalized_weights = [w / total_weight for w in weights]
-        
-        chunks_tensor = torch.tensor(np.array(chunks), dtype=torch.float32)
-        weights_tensor = torch.tensor(normalized_weights, dtype=torch.float32)
-        
-        return chunks_tensor, weights_tensor, idx
 
 class ChunkAwareBatchSampler:
     """
@@ -523,6 +359,7 @@ class Dismir:
         labels = data["label"]
         features = self.conv_onehot(dna, methylation)
         return features, labels
+    
     def train(self,
               train_dir="./",
               verbose=1,
