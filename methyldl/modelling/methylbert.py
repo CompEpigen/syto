@@ -3,19 +3,15 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.modules.loss import _Loss
 from transformers import BertPreTrainedModel, BertModel
-import warnings, random 
+import random 
 import numpy as np
 from transformers.trainer_callback import (
     TrainerCallback
 )
 
-
 from dataclasses import dataclass
-import torch
 from transformers.modeling_outputs import ModelOutput
-
 import os
-import json
 import gc
 import numpy as np
 from typing import Optional, Tuple, Union, List
@@ -28,10 +24,16 @@ from transformers import (
     BertConfig
 )
 
-
 from collections import OrderedDict
 import itertools
 from methyldl.modelling.evaluation import compute_metrics,preprocess_logits_for_metrics,preprocess_logits_for_prediction
+
+from torch.utils.data import Dataset
+import numpy as np
+from copy import deepcopy
+import multiprocessing as mp
+from functools import partial
+
 
 default_methylbert_config = OrderedDict([
     ("lr", 0.0004),
@@ -56,35 +58,17 @@ default_methylbert_config = OrderedDict([
     
 ])
 
+
 def methylbert_finetune_collator(features):
     """
-    Convert a list of items (dicts) from MethylBertFinetuneDataset 
-    into a single batch dict.
+    Batch features that are already in the correct format.
     """
-    # Each `features[i]` has { "dna_seq", "methyl_seq", "ctype_label", "dmr_label", ... }
-    dna_seq = [f["dna_seq"] for f in features]         # List[Tensor]
-    methyl_seq = [f["methyl_seq"] for f in features]   # List[Tensor]
-    ctype_label = [f["ctype_label"] for f in features]
-    dmr_label = [f["dmr_label"] for f in features]
-
-    # pad into a single tensor if needed:
-    batch_dna_seq = torch.stack(dna_seq, dim=0)        # shape [batch_size, seq_len]
-    batch_methyl_seq = torch.stack(methyl_seq, dim=0)  # shape [batch_size, seq_len]
-    batch_ctype_label = torch.tensor(ctype_label, dtype=torch.long)
-    batch_dmr_label = torch.tensor(dmr_label, dtype=torch.long)
-
-    # Return a dict matching your model.forward(...) signature
-    # "input_ids" -> dna_seq
-    # "token_type_ids" -> methyl_seq
-    # "ctype_label" -> ctype_label
-    # "labels" -> dmr_label  (the MethylBert model expects `labels` to be the DMR label)
     return {
-        "input_ids": batch_dna_seq,
-        "token_type_ids": batch_methyl_seq,
-        "labels": batch_ctype_label,
-        "dmr_ids": batch_dmr_label,
+        "input_ids": torch.stack([f["input_ids"] for f in features]),
+        "token_type_ids": torch.stack([f["token_type_ids"] for f in features]),
+        "labels": torch.tensor([f["labels"] for f in features], dtype=torch.long),
+        "dmr_ids": torch.tensor([f["dmr_ids"] for f in features], dtype=torch.long),
     }
-
 
 def methylbert_pretrain_collator(features):
     """
@@ -580,39 +564,6 @@ class MethylBert:
     def __str__(self):
         return str(self.model)
 
-
-# def get_dna_seq(tokens, tokenizer):
-# 	# Convert n-mers tokens into a DNA sequence
-# 	seq = tokenizer.from_seq(tokens)
-# 	seq = [s for s in seq if "<" not in s]
-	
-# 	seq = seq[0][0] + "".join([s[1] for s in seq]) + seq[-1][-1]
-	
-# 	return seq
-
-# def set_seed(seed: int):
-# 	"""
-# 	Helper function for reproducible behavior to set the seed in ``random``, ``numpy``, ``torch`` and/or ``tf`` (if
-# 	installed).
-
-# 	Args:
-# 		seed (:obj:`int`): The seed to set.
-# 	"""
-# 	random.seed(seed)
-# 	np.random.seed(seed)
-# 	torch.manual_seed(seed)
-# 	torch.cuda.manual_seed_all(seed)
-
-from torch.utils.data import Dataset
-import torch, gc
-
-import numpy as np
-from copy import deepcopy
-import multiprocessing as mp
-from functools import partial
-import random
-import pandas as pd
-
 class MethylVocab(object):
     def __init__(self, k: int=3):
         '''
@@ -656,7 +607,6 @@ class MethylVocab(object):
             sentence = sequence.split()
 
         seq = [self.stoi.get(kmer, self.unk_index) for kmer in sequence]
-
         return seq
 
     def from_seq(self, seq, join=False, with_pad=False):
@@ -664,7 +614,7 @@ class MethylVocab(object):
                  if idx < len(self.itos)
                  else "<%d>" % idx
                  for idx in seq
-                 if not with_pad or idx != self.pad_index]
+                 if with_pad or idx != self.pad_index]
 
         return " ".join(words) if join else words
 
@@ -676,7 +626,7 @@ def _line2tokens_pretrain(l, tokenizer, max_len=120):
 
 	l = l.strip().split(" ")
 
-	tokened = [tokenizer.to_seq(b) for b in l]
+	tokened = [tokenizer.to_seq([b]) for b in l]
 	if len(tokened) > max_len:
 		return tokened[:max_len]
 	else:
@@ -724,16 +674,6 @@ class MethylBertDataset(Dataset):
 		return self.lines.shape[0] if type(self.lines) == np.array else len(self.lines)
 
 
-
-
-import gc
-import torch
-import numpy as np
-import random
-import multiprocessing as mp
-from functools import partial
-from copy import deepcopy
-
 class MethylBertPretrainDataset(MethylBertDataset):
     def __init__(self, f_path: str, vocab: MethylVocab, seq_len: int, random_len=False, n_cores=10):
 
@@ -750,8 +690,8 @@ class MethylBertPretrainDataset(MethylBertDataset):
             print("Open data : %s" % f_input)
             raw_seqs = f_input.read().splitlines()
 
-        print("Total number of sequences : ", len(raw_seqs))
         num_lines = len(raw_seqs)
+        print("Total number of sequences : ", num_lines)
 
         # Fix 1: Disable multiprocessing for small datasets
         if num_lines < 10000:
@@ -761,6 +701,7 @@ class MethylBertPretrainDataset(MethylBertDataset):
                 raw_seqs
             )
             line_labels = list(line_labels)
+
         else:
             # Multiprocessing for the sequence tokenization
             with mp.Pool(n_cores) as pool:
@@ -772,13 +713,15 @@ class MethylBertPretrainDataset(MethylBertDataset):
         del raw_seqs
         print("Lines are processed")
         self.lines = torch.squeeze(torch.tensor(np.array(line_labels, dtype=np.int16)))
+        if num_lines == 1:
+            # Wrapping in one more dimension for this edge case
+            self.lines = torch.unsqueeze(self.lines, 0) 
         del line_labels
         gc.collect()
 
     def __getitem__(self, index):
 
         dna_seq = self.lines[index].clone()
-
         # Random len
         if self.random_len and np.random.random() < 0.5:
             dna_seq = dna_seq[:random.randint(5, self.seq_len)]
@@ -914,7 +857,7 @@ class MethylBertFinetuneDataset(MethylBertDataset):
         self.vocab = vocab
         self.seq_len = seq_len
 
-        # If data_source is a path, read from file. Otherwise, assume it's already a list of rows.
+        # If data_source is a path, reads from file. Otherwise, assumes it's already a list of rows.
         if isinstance(data_source, str):
             # File path case
             self.f_path = data_source
@@ -922,7 +865,7 @@ class MethylBertFinetuneDataset(MethylBertDataset):
                 lines = f_input.read().splitlines()
         else:
             # List of lists case; ensure "dmr_label" is present
-            self.f_path = None  # Not relevant here, but you can store or ignore
+            self.f_path = None  # Not relevant here, but one can store or ignore
             header = data_source[0]
             print(header)
             if "dmr_label" not in header:
@@ -987,19 +930,25 @@ class MethylBertFinetuneDataset(MethylBertDataset):
     def __getitem__(self, index):
         """Return tokenized item, including special tokens."""
         item = deepcopy(self.lines[index])
-        item["dna_seq"] = torch.squeeze(torch.tensor(np.array(item["dna_seq"], dtype=np.int32)))
-        item["methyl_seq"] = torch.squeeze(torch.tensor(np.array(item["methyl_seq"], dtype=np.int8)))
+        dna_seq = torch.squeeze(torch.tensor(np.array(item["dna_seq"], dtype=np.int32)))
+        methyl_seq = torch.squeeze(torch.tensor(np.array(item["methyl_seq"], dtype=np.int8)))
 
         # Special tokens (SOS, EOS)
-        end_idx = torch.where(item["dna_seq"] != self.vocab.pad_index)[0].tolist()[-1] + 1  # end of the read
-        if end_idx < item["dna_seq"].shape[0]:
-            item["dna_seq"][end_idx] = self.vocab.eos_index
-            item["methyl_seq"][end_idx] = 2
+        end_idx = torch.where(dna_seq != self.vocab.pad_index)[0].tolist()[-1] + 1  # end of the read
+        if end_idx < dna_seq.shape[0]:
+            dna_seq[end_idx] = self.vocab.eos_index
+            methyl_seq[end_idx] = 2
         else:
-            item["dna_seq"][-1] = self.vocab.eos_index
-            item["methyl_seq"][-1] = 2
+            dna_seq[-1] = self.vocab.eos_index
+            methyl_seq[-1] = 2
 
-        item["dna_seq"] = torch.cat((torch.tensor([self.vocab.sos_index]), item["dna_seq"]))
-        item["methyl_seq"] = torch.cat((torch.tensor([2]), item["methyl_seq"]))
+        dna_seq = torch.cat((torch.tensor([self.vocab.sos_index]), dna_seq))
+        methyl_seq = torch.cat((torch.tensor([2]), methyl_seq))
 
-        return item
+        # Return in model's expected format
+        return {
+            "input_ids": dna_seq,           # Model expects input_ids
+            "token_type_ids": methyl_seq,   # Model expects token_type_ids
+            "labels": item["ctype_label"],  # Model expects labels
+            "dmr_ids": item["dmr_label"]    # Model expects dmr_ids
+        }
