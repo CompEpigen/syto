@@ -140,4 +140,5 @@ class TestEpigenDnabert2FineTune(unittest.TestCase):
         """Test with use_triton=True."""
         self._run_fine_tune_test(use_triton=True)
 
-  
+if __name__ == '__main__':
+    unittest.main()
