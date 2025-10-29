@@ -180,3 +180,23 @@ cython_debug/
 /EDA/tmp_trainer
 /Tutorials/dismir
 /Tutorials/temp
+
+# Singularity/Docker artifacts
+*.sif
+*.simg
+*.def
+container/definitions/*.def
+
+# Keep directory structure
+!container/definitions/.gitkeep
+!container/images/.gitkeep
+
+# Cache directories
+cache/
+outputs/
+data/
+
+# HPC logs
+*.out
+*.err
+slurm-*.out
