@@ -116,8 +116,19 @@ fi
 RECIPE_NAME="$1"
 shift
 
+# ==========================================
+# Overlay setup
+# ==========================================
+OVERLAY_DIR="${SCRIPT_DIR}/temp_test_dir"
+KEEP_OVERLAY=false
+
+# Parse additional argument
 while [ $# -gt 0 ]; do
     case "$1" in
+        --keep-overlay)
+            KEEP_OVERLAY=true
+            ;;
+        # (keep other options as-is)
         --quick)
             QUICK_TEST=true
             TEST_IMPORTS=false
@@ -149,6 +160,38 @@ while [ $# -gt 0 ]; do
     esac
     shift
 done
+
+# ==========================================
+# Create temporary overlay directory
+# ==========================================
+print_info "Creating overlay directory: ${OVERLAY_DIR}"
+mkdir -p "$OVERLAY_DIR"
+
+# Define a cleanup function
+cleanup() {
+    if [ "$KEEP_OVERLAY" = false ]; then
+        print_info "Cleaning up overlay directory: ${OVERLAY_DIR}"
+        rm -rf "$OVERLAY_DIR"
+    else
+        print_warning "Overlay directory kept for debugging: ${OVERLAY_DIR}"
+    fi
+}
+trap cleanup EXIT
+
+# ==========================================
+# Apptainer wrapper functions
+# ==========================================
+apptainer_exec_wrapper() {
+    # Generic wrapper for all Apptainer operations
+    local subcmd="$1"
+    shift
+    apptainer "$subcmd" --overlay "$OVERLAY_DIR" "$@"
+}
+
+# Convenience wrappers
+appt_exec()     { apptainer_exec_wrapper exec "$@"; }
+appt_inspect()  { apptainer_exec_wrapper inspect "$@"; }
+appt_runhelp()  { apptainer_exec_wrapper run-help "$@"; }
 
 # Define image path
 IMAGE_FILE="${IMAGE_DIR}/${RECIPE_NAME}.sif"
@@ -456,10 +499,11 @@ if [ "$TEST_COVERAGE" = true ]; then
     print_info "=== Test Category 8: Package Unit Tests ==="
     echo ""
     
-    print_test "Running MethylDL unit tests (this may take ~40 seconds)..."
+    print_test "Running MethylDL unit tests (this may take ~80 seconds)..."
     
     # Run both coverage run AND coverage report in the same exec
-    unit_test_output=$(apptainer exec --writable-tmpfs --nv "$IMAGE_FILE" bash -c 'coverage run && coverage report --skip-empty' 2>&1)
+    # unit_test_output=$(apptainer exec --writable-tmpfs --nv "$IMAGE_FILE" bash -c 'coverage run && coverage report --skip-empty' 2>&1)
+    unit_test_output=$(appt_exec --nv "$IMAGE_FILE" bash -c 'cd /workspace/methyldl && coverage run && coverage report --skip-empty' 2>&1)
     unit_test_exit=$?
     
     if [ $unit_test_exit -eq 0 ]; then
