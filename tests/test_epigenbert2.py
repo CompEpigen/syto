@@ -123,6 +123,7 @@ class TestEpigenDnabert2FineTune(unittest.TestCase):
                 overwrite_output_dir=True,
                 save_model=False,
                 eval_and_save_results=True,
+                report_to=[]
             )
             
             model.fine_tune(
