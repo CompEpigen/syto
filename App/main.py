@@ -20,7 +20,7 @@ from methyldl.modelling.experiment_wrappers import (
     EpigenBERT2MLflowExperiment, 
     MethylBertMLflowExperiment
 )
-from transformers import TrainingArguments
+from methyldl.modelling.dnabert2 import TrainingArguments #TODO - must be different for MethylBERT 
 
 def setup_logging(verbose: bool = False):
     """Configure logging for the application."""
@@ -69,26 +69,21 @@ def create_experiment(config: Dict[str, Any], logger: logging.Logger) -> Any:
     
     # MLflow configuration
     mlflow_config = config.get('mlflow', {})
-    use_mlflow = mlflow_config.get('enabled', False)
     
     experiment_name = None
     tracking_uri = None
     
-    if use_mlflow:
-        experiment_name = mlflow_config.get('experiment_name')
-        tracking_uri = mlflow_config.get('tracking_uri')
-        
-        if not experiment_name:
-            raise ValueError("MLflow is enabled but 'experiment_name' is not provided")
-        
-        logger.info(f"MLflow enabled - Experiment: {experiment_name}")
-        if tracking_uri:
-            logger.info(f"MLflow tracking URI: {tracking_uri}")
-    else:
-        # Create a default experiment name for non-MLflow tracking
-        import datetime
-        experiment_name = f"{model_arch}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
-        logger.info(f"MLflow disabled - Using local tracking with name: {experiment_name}")
+
+    experiment_name = mlflow_config.get('experiment_name')
+    tracking_uri = mlflow_config.get('tracking_uri')
+    
+    if not experiment_name:
+        raise ValueError("MLflow is enabled but 'experiment_name' is not provided")
+    
+    logger.info(f"MLflow enabled - Experiment: {experiment_name}")
+    if tracking_uri:
+        logger.info(f"MLflow tracking URI: {tracking_uri}")
+
     
     # Model-specific parameters
     model_config = config['model']
@@ -233,12 +228,6 @@ Examples:
                        help='Specific datasets to train on (default: all)')
     
     # MLflow overrides
-    parser.add_argument('--mlflow', 
-                       action='store_true',
-                       help='Enable MLflow tracking')
-    parser.add_argument('--no-mlflow', 
-                       action='store_true',
-                       help='Disable MLflow tracking')
     parser.add_argument('--mlflow-uri', 
                        type=str,
                        help='MLflow tracking URI')
@@ -287,13 +276,6 @@ Examples:
         if args.datasets:
             config['datasets'] = args.datasets
             logger.info(f"Override: datasets = {args.datasets}")
-        
-        # MLflow overrides
-        if args.mlflow or args.no_mlflow:
-            if 'mlflow' not in config:
-                config['mlflow'] = {}
-            config['mlflow']['enabled'] = args.mlflow and not args.no_mlflow
-            logger.info(f"Override: MLflow enabled = {config['mlflow']['enabled']}")
         
         if args.mlflow_uri:
             if 'mlflow' not in config:
