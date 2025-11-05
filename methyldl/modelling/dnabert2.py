@@ -597,7 +597,8 @@ class EpigenDnabert2():
                   val_dataset: Optional[SupervisedDataset] = None,
                   test_dataset: Optional[SupervisedDataset] = None,
                   callbacks: Optional[List[TrainerCallback]] = None,
-                  data_interface: str = "csv"):
+                  data_interface: str = "csv",
+                  resume_from_checkpoint: Optional[Union[bool, str]] = None):
         
         # Ensure that either data_path is provided or all datasets are provided
         assert data_path or (train_dataset and val_dataset and test_dataset), (
@@ -628,7 +629,20 @@ class EpigenDnabert2():
                                      callbacks=callbacks)
         
         print("All datasets are successfully initiated")
-        self.trainer.train()
+        # Determine checkpoint resumption strategy
+        checkpoint_path = None
+        if resume_from_checkpoint is not None:
+            if isinstance(resume_from_checkpoint, bool) and resume_from_checkpoint:
+                # Resume from the last checkpoint in output_dir
+                checkpoint_path = True
+            elif isinstance(resume_from_checkpoint, str):
+                # Resume from specific checkpoint path
+                checkpoint_path = resume_from_checkpoint
+        elif hasattr(self, 'resume_from_checkpoint') and self.resume_from_checkpoint:
+            # Use checkpoint path from initialization if provided
+            checkpoint_path = self.resume_from_checkpoint
+
+        self.trainer.train(resume_from_checkpoint=checkpoint_path)
         if self.training_args.save_model:
             self.trainer.save_state()
             self.safe_save_model_for_hf_trainer(output_dir=training_args.output_dir)
