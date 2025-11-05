@@ -305,8 +305,8 @@ class AbstractMLFlowExperiment:
             **training_kwargs: Arguments to pass to train_chromosome method (used if training_args is None)
         """
         print(f"Starting full experiment: {self.experiment_name}")
-        print(f"Training {len(self.data_dirs)} chromosome folders")
-        print(f"Chromosome folders: {list(self.data_dirs.keys())}")
+        print(f"Training {len(self.data_dirs)} dataset folders")
+        print(f"Dataset folders: {list(self.data_dirs.keys())}")
         
         all_results = {}
         failed_datasets = []
@@ -319,7 +319,7 @@ class AbstractMLFlowExperiment:
                     results = self.train_dataset(dataset_name, **training_kwargs)
                 all_results[dataset_name] = results
             except Exception as e:
-                print(f"Failed to train chromosome {dataset_name}: {e}")
+                print(f"Failed to train dataset {dataset_name}: {e}")
                 failed_datasets.append(dataset_name)
                 continue
 
@@ -915,9 +915,9 @@ class EpigenBERT2MLflowExperiment(TransformersMLFLowExperiment):
             print(f"Starting fine-tuning for dataset {dataset_name}")
             attempt = 0
             while attempt <= max_retries:
-                print(f"\n=== Training attempt {attempt + 1}/{max_retries + 1} for chromosome {dataset_name} ===")
+                print(f"\n=== Training attempt {attempt + 1}/{max_retries + 1} for dataset {dataset_name} ===")
                             # Initialize model
-                print(f"Initializing EpigenBERT2 model for chromosome {dataset_name}")
+                print(f"Initializing EpigenBERT2 model for dataset {dataset_name}")
                 seed = int(time.time() * 1000) % 2**32
                 # seed = 894526933
                 torch.manual_seed(seed)
@@ -934,6 +934,7 @@ class EpigenBERT2MLflowExperiment(TransformersMLFLowExperiment):
                 print(f"Weights sum for -2 layer: {np.sum(list(model_instance.model.parameters())[-2].to("cpu").detach().numpy())}")
                 training_args.seed = seed
                 print(f"Seed for training args is {training_args.seed}")
+
                 model_instance.fine_tune(
                     data_path=str(data_dir),
                     training_args=training_args,
