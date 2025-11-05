@@ -63,46 +63,26 @@ def split_long_reads(df: pd.DataFrame, max_read_length: int) -> pd.DataFrame:
     def split_single_read(row: pd.Series) -> List[Dict]:
         """Split a single read into chunks if it exceeds max_read_length"""
         # Extract relevant fields directly from the pandas Series
-        read_name = row['read_name']
-        input_ids = row['input_ids']
         methylation_ids = row['methylation_ids']
-        chromosome = row['chromosome']
-        original_file = row['original_file']
-        label = row['label']
-        
         # Get the actual sequence length
-        sequence_length = len(input_ids)
+        sequence_length = len(methylation_ids)
         
         # If the read is within the max length, return as is
         if sequence_length <= max_read_length:
-            return [{
-                'read_name': read_name,
-                'input_ids': input_ids,
-                'methylation_ids': methylation_ids,
-                'chromosome': chromosome,
-                'original_file': original_file,
-                'label': label,
-                'num_cpgs': count_cpgs(methylation_ids)
-            }]
+            return [{**row.to_dict(), 'num_cpgs': count_cpgs(methylation_ids)}]
+
         
         # Split the read into chunks
         chunks = []
-        for i in range(0, sequence_length, max_read_length):
-            end_idx = min(i + max_read_length, sequence_length)
-            
-            # Extract the chunk
-            chunk_input_ids = input_ids[i:end_idx]
-            chunk_methylation_ids = methylation_ids[i:end_idx]
-            
-            chunks.append({
-                'read_name': read_name,
-                'input_ids': chunk_input_ids,
-                'methylation_ids': chunk_methylation_ids,
-                'chromosome': chromosome,
-                'original_file': original_file,
-                'label': label,
-                'num_cpgs': count_cpgs(chunk_methylation_ids)
-            })
+        for start in range(0, sequence_length, max_read_length):
+            end = start + max_read_length
+
+            chunk = row.to_dict()
+            chunk['input_ids'] = row["input_ids"][start:end]
+            chunk['methylation_ids'] = methylation_ids[start:end]
+            chunk['num_cpgs'] = count_cpgs(chunk['methylation_ids'])
+
+            chunks.append(chunk)
         
         return chunks
     

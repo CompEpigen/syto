@@ -454,7 +454,8 @@ class TestMethylBertFineTune(unittest.TestCase):
                 save_steps=2,
                 logging_steps=1,
                 save_total_limit=1,
-                load_best_model_at_end=False
+                load_best_model_at_end=False,
+                report_to=[] 
             )
             
             # This should run without errors

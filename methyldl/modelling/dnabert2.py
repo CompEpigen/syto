@@ -615,10 +615,6 @@ class EpigenDnabert2():
                                         data_path_or_list=os.path.join(data_path, "valid"), 
                                         kmer=-1,data_interface=data_interface)
         print("Val is initialized")
-        # test_dataset = test_dataset or SupervisedDataset(tokenizer=self.tokenizer, 
-        #                                 data_path_or_list=os.path.join(data_path, "test"), 
-        #                                 kmer=-1,data_interface=data_interface)
-        # print("Test is initialized")
         
         if training_args is not None:
             self.training_args = training_args # overwritting default training args
@@ -646,12 +642,3 @@ class EpigenDnabert2():
         if self.training_args.save_model:
             self.trainer.save_state()
             self.safe_save_model_for_hf_trainer(output_dir=training_args.output_dir)
-
-        # # get the evaluation results from trainer
-        # if training_args.eval_and_save_results:
-        #     results_path = os.path.join(training_args.output_dir, "results", training_args.run_name)
-        #     results = self.trainer.evaluate(eval_dataset=test_dataset)
-        #     os.makedirs(results_path, exist_ok=True)
-        #     with open(os.path.join(results_path, "eval_results.json"), "w") as f:
-        #         json.dump(results, f)
-        
