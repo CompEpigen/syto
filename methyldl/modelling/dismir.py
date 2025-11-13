@@ -25,9 +25,10 @@ class DISMIRNet(nn.Module):
     9. Dense -> ReLU
     10. Dense -> Sigmoid
     """
-    def __init__(self, max_sequence_length, flavor ="lstm"):
+    def __init__(self, max_sequence_length, flavor ="lstm", num_labels=2):
         super(DISMIRNet, self).__init__()
         self.max_sequence_length = max_sequence_length
+        self.num_labels = num_labels
         
         # 1) First convolution block
         # Keras: Conv1D(filters=100, kernel_size=10, padding='same', activation='relu')
@@ -68,7 +69,7 @@ class DISMIRNet(nn.Module):
         self.fc1 = nn.Linear(100 * (max_sequence_length // 4), 750)
         self.drop3 = nn.Dropout(p=0.2)
         self.fc2 = nn.Linear(750, 300)
-        self.fc3 = nn.Linear(300, 1)
+        self.fc3 = nn.Linear(300, num_labels)
         self.sigmoid = nn.Sigmoid()
 
     
@@ -110,8 +111,9 @@ class DISMIRNet(nn.Module):
         x = self.drop3(x)
         x = self.fc2(x)       # (batch, 300)
         x = self.relu(x)
-        x = self.fc3(x)       # (batch, 1)
-        x = self.sigmoid(x)
+        x = self.fc3(x)       # (batch, num_labels)
+        if self.num_labels>1:
+            x = self.sigmoid(x)
         return x
 
 class VariableLengthDataset(Dataset):
@@ -283,8 +285,9 @@ class Dismir:
     2. Model creation (DISMIRNet)
     3. Training loop with a simplistic early-stopping approach
     """
-    def __init__(self, max_sequence_length, train_data_path, test_data_path, valid_data_path, device=None, flavour="lstm"):
+    def __init__(self, max_sequence_length, train_data_path, test_data_path, valid_data_path, device=None, flavour="lstm", num_labels=2):
         self.max_sequence_length = max_sequence_length
+        self.num_labels = num_labels
         
         # Use CUDA if available
         if device is None:
@@ -298,7 +301,7 @@ class Dismir:
         self.valid_data_path = valid_data_path
         self.history = []
         
-        self.model = DISMIRNet(max_sequence_length, flavour).to(self.device)
+        self.model = DISMIRNet(max_sequence_length, flavour,num_labels).to(self.device)
         
 
     def conv_onehot(self, dna_seq, c_methylation_seq):
@@ -406,16 +409,25 @@ class Dismir:
         
         # Convert to torch.Tensor
         self.train_x = torch.tensor(self.train_x, dtype=torch.float32)
-        self.train_y = torch.tensor(self.train_y.values, dtype=torch.float32).view(-1, 1)
         self.valid_x = torch.tensor(self.valid_x, dtype=torch.float32)
-        self.valid_y = torch.tensor(self.valid_y.values, dtype=torch.float32).view(-1, 1)
         self.test_x = torch.tensor(self.test_x, dtype=torch.float32)
-        self.test_y = torch.tensor(self.test_y.values, dtype=torch.float32).view(-1, 1)
+
+        # Handle labels differently based on num_labels
+        if self.num_labels == 1:
+            # Binary classification with BCELoss - keep as (batch_size, 1)
+            criterion = nn.BCELoss()
+            self.train_y = torch.tensor(self.train_y.values, dtype=torch.float32).view(-1, 1)
+            self.valid_y = torch.tensor(self.valid_y.values, dtype=torch.float32).view(-1, 1)
+            self.test_y = torch.tensor(self.test_y.values, dtype=torch.float32).view(-1, 1)
+        else:
+            # Multi-class classification with CrossEntropyLoss - squeeze to (batch_size,)
+            criterion = nn.CrossEntropyLoss()
+            self.train_y = torch.tensor(self.train_y.values, dtype=torch.long).squeeze()
+            self.valid_y = torch.tensor(self.valid_y.values, dtype=torch.long).squeeze()
+            self.test_y = torch.tensor(self.test_y.values, dtype=torch.long).squeeze()
         
         # Create optimizer
         optimizer = self._create_optimizer(optimizer_type, lr, weight_decay, momentum, nesterov)
-        criterion = nn.BCELoss()
-
         # DataLoaders
         train_dataset = torch.utils.data.TensorDataset(self.train_x, self.train_y)
         train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
@@ -505,8 +517,15 @@ class Dismir:
                 optimizer.step()
                 
                 epoch_loss += loss.item() * X_batch.size(0)
-                preds = (outputs.detach() >= 0.5).float()
-                correct += (preds == y_batch).sum().item()
+                # Different prediction logic based on num_labels
+                if self.num_labels == 1:
+                    # Binary classification: threshold at 0.5
+                    preds = (outputs.detach() >= 0.5).float().squeeze()
+                    correct += (preds == y_batch.squeeze()).sum().item()
+                else:
+                    # Multi-class classification: use argmax
+                    preds = outputs.detach().argmax(dim=1)
+                    correct += (preds == y_batch).sum().item()
                 total += y_batch.size(0)
             
             train_loss = epoch_loss / len(train_loader.dataset)
@@ -524,8 +543,14 @@ class Dismir:
                     
                     val_loss += v_loss.item() * X_val.size(0)
                     
-                    val_preds = (val_outputs >= 0.5).float()
-                    val_correct += (val_preds == y_val).sum().item()
+                    if self.num_labels == 1:
+                    # Binary classification: threshold at 0.5
+                        val_preds = (val_outputs >= 0.5).float().squeeze()
+                        val_correct += (val_preds == y_val.squeeze()).sum().item()
+                    else:
+                    # Multi-class classification: use argmax
+                        val_preds = val_outputs.argmax(dim=1)
+                        val_correct += (val_preds == y_val).sum().item()
                     val_total += y_val.size(0)
             
             val_loss /= len(valid_loader.dataset)
