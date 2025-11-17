@@ -26,13 +26,14 @@ from transformers import (
 
 from collections import OrderedDict
 import itertools
-from methyldl.modelling.evaluation import compute_metrics,preprocess_logits_for_metrics,preprocess_logits_for_prediction
+from methyldl.modelling.evaluation import compute_metrics, preprocess_logits_for_prediction
 
 from torch.utils.data import Dataset
 import numpy as np
 from copy import deepcopy
 import multiprocessing as mp
 from functools import partial
+import pickle
 
 
 default_methylbert_config = OrderedDict([
@@ -184,8 +185,9 @@ class MethylBertEmbeddedDMR(BertPreTrainedModel):
         super().__init__(config)
         self.num_labels = config.num_labels
         self.num_dmr_labels = config.num_dmr_labels
-        if config.loss not in ["bce", "focal_bce"]:
-            raise ValueError(f"loss must be bce or focal_bce. {config.loss} is given.")
+        if config.loss not in ["bce", "focal_bce", "ce"]:
+                raise ValueError(f"loss must be bce, focal_bce, or ce. {config.loss} is given.")
+
 
         self.loss = config.loss
         self.classification_loss_fct = self._setup_loss(self.loss)
@@ -196,7 +198,7 @@ class MethylBertEmbeddedDMR(BertPreTrainedModel):
             nn.Dropout(0.05),#config.hidden_dropout_prob),
             nn.ReLU(),
             nn.LayerNorm(seq_len+1, eps=config.layer_norm_eps),
-            nn.Linear(seq_len+1, 2)
+            nn.Linear(seq_len+1, self.num_labels)
         )
 
         self.seq_len = seq_len
@@ -209,11 +211,16 @@ class MethylBertEmbeddedDMR(BertPreTrainedModel):
 
     def _setup_loss(self, loss):
         if loss == "bce":
-            print("Cross entropy loss assigned")
-            return nn.CrossEntropyLoss() # this function requires unnormalised logits
+            print("Binary Cross Entropy loss assigned")
+            return nn.BCEWithLogitsLoss()  # Takes logits, more numerically stable
         elif loss == "focal_bce":
             print("Focal loss assigned")
             return FocalLoss()
+        elif loss == "ce":
+            print("Cross Entropy loss assigned (multi-class)")
+            return nn.CrossEntropyLoss()
+        else:
+            raise ValueError(f"Unknown loss type: {loss}")
     
     def __str__(self):
         str(self.model.__str__())
@@ -258,15 +265,25 @@ class MethylBertEmbeddedDMR(BertPreTrainedModel):
         # shape -> [batch, seq_len, hidden_size+1]
         sequence_output = torch.cat((sequence_output, dmr_embedding.unsqueeze(-1)), dim=-1)
 
+        # TODO: Think about more elegant way to incorporate dmr_embeddings data before classification. 
+
         # Flatten for classifier
         batch_size = sequence_output.size(0)
         flat_seq = sequence_output.view(batch_size, -1)  
-        ctype_logits = self.read_classifier(flat_seq)  # shape [batch, 2]
+        ctype_logits = self.read_classifier(flat_seq)  # shape [batch, n_classes]
 
         loss = None
         if labels is not None:
-            ctype_label_onehot = F.one_hot(labels, num_classes=2).float()
-            loss = self.classification_loss_fct(ctype_logits, ctype_label_onehot)
+            if self.num_labels == 1:
+                # Binary classification with single output (use BCEWithLogitsLoss)
+                loss = self.classification_loss_fct(ctype_logits.squeeze(), labels.float())
+            elif self.num_labels == 2 and self.loss in ["bce", "focal_bce"]:
+                # Binary classification with 2 outputs (convert to one-hot)
+                ctype_label_onehot = F.one_hot(labels, num_classes=2).float()
+                loss = self.classification_loss_fct(ctype_logits, ctype_label_onehot)
+            else:
+                # Multi-class classification (use CrossEntropyLoss)
+                loss = self.classification_loss_fct(ctype_logits, labels)
 
         # In orginal code:
         # ctype_logits = ctype_logits.softmax(dim=1)
@@ -313,7 +330,9 @@ class MethylBert:
         num_labels: int = 2,
         num_dmr_labels:int = 100,
         output_dir:str = "tmp_trainer",
-        batch_size = None
+        batch_size = None,
+        lazy_tokenization=False,  # Enable lazy mode
+        cache_dir="./cache"  # Optional: cache tokenized results
     ):
         """
         :param foundation_model_path: local or HF repo ID for the base BERT config/weights
@@ -330,6 +349,8 @@ class MethylBert:
             raise ValueError("Must provide a custom_config dictionary.")
         self._config = custom_config
         self.output_dir = output_dir
+        self.lazy_tokenization = lazy_tokenization
+        self.cache_dir = cache_dir
 
         # 2) Load the base BERT config
         if os.path.isdir(foundation_model_path):
@@ -341,8 +362,17 @@ class MethylBert:
 
         config.num_labels = num_labels
         config.num_dmr_labels = num_dmr_labels
-        config.loss = self._config["loss"]  # "bce" or "focal_bce"
-        # (optionally store seq_len if your model constructor needs it)
+        # TODO: Consider assigning loss automatically 
+        config.loss = self._config["loss"]  # "bce" or "focal_bce" or "ce"
+            # Validate loss type based on num_labels
+        if num_labels == 1 and config.loss not in ["bce"]:
+            print(f"Warning: num_labels=1 typically uses 'bce' loss, but '{config.loss}' was specified")
+        elif num_labels == 2 and config.loss not in ["bce", "focal_bce", "ce"]:
+            raise ValueError(f"For binary classification (num_labels=2), loss must be 'bce', 'focal_bce', or 'ce'")
+        elif num_labels > 2 and config.loss not in ["ce"]:
+            print(f"Warning: Multi-class classification (num_labels={num_labels}) typically uses 'ce' loss")
+
+
         self.seq_len = seq_len
 
         # 3) Build your custom MethylBertEmbeddedDMR
@@ -466,6 +496,7 @@ class MethylBert:
             compute_metrics=compute_metrics,
             callbacks = callbacks
         )
+
         return trainer
 
     def fine_tune(
@@ -488,12 +519,16 @@ class MethylBert:
         train_dataset = train_dataset or MethylBertFinetuneDataset(
               data_source=os.path.join(data_path, "train.txt"),
               vocab=MethylVocab(k=3),
-              seq_len=self.seq_len
+              seq_len=self.seq_len,
+              lazy_tokenization=self.lazy_tokenization,
+              cache_dir=self.cache_dir
               )
         val_dataset = val_dataset or MethylBertFinetuneDataset(
               data_source=os.path.join(data_path, "valid.txt"),
               vocab=MethylVocab(k=3),
-              seq_len=self.seq_len
+              seq_len=self.seq_len,
+              lazy_tokenization=self.lazy_tokenization,
+              cache_dir=self.cache_dir
               )
         # test_dataset = test_dataset or MethylBertFinetuneDataset(
         #       data_source=os.path.join(data_path, "test.txt"),
@@ -829,89 +864,305 @@ class MethylBertPretrainDataset(MethylBertDataset):
 
         return inputs, labels, masked_indices
 
+# class MethylBertFinetuneDataset(MethylBertDataset):
+#     def __init__(
+#         self,
+#         data_source: Union[str, List[List[Union[str, int]]]],
+#         vocab: MethylVocab,
+#         seq_len: int,
+#         n_cores: int=10,
+#         n_seqs: int=None
+#     ):
+#         """
+#         MethylBERT dataset that can read either from a file path (TSV) or from
+#         a list-of-lists structure (as returned by generate_example_data).
+
+#         data_source : Union[str, List[List[Union[str, int]]]]
+#             - If str, it's assumed to be a file path (TSV).
+#             - If list, it's assumed to be the in-memory data (first row is header).
+#         vocab : MethylVocab
+#             MethylVocab object to convert DNA and methylation pattern sequences
+#         seq_len : int
+#             Length for the processed sequences
+#         n_cores : int
+#             Number of cores for multiprocessing
+#         n_seqs : int
+#             Number of sequences to subset the input (default: None, do not make a subset)
+#         """
+#         self.vocab = vocab
+#         self.seq_len = seq_len
+
+#         # If data_source is a path, reads from file. Otherwise, assumes it's already a list of rows.
+#         if isinstance(data_source, str):
+#             # File path case
+#             self.f_path = data_source
+#             with open(data_source, "r") as f_input:
+#                 lines = f_input.read().splitlines()
+#         else:
+#             # List of lists case; ensure "dmr_label" is present
+#             self.f_path = None  # Not relevant here, but one can store or ignore
+#             header = data_source[0]
+#             print(header)
+#             if "dmr_label" not in header:
+#                 header.append("dmr_label")
+#                 for row in data_source[1:]:
+#                     row.append(0)  # default label = 0 if not present
+            
+#             if "dmr_ctype" not in header:
+#                 header.append("dmr_ctype")
+#                 for row in data_source[1:]:
+#                     row.append(1)  # default label = 1 if not present
+
+#             # Convert each row into a tab-delimited string
+#             lines = ["\t".join(map(str, row)) for row in data_source]
+
+#         # First line is header, subsequent lines are data
+#         headers = lines[0].split("\t")
+#         raw_seqs = lines[1:]
+
+#         if n_seqs is not None:
+#             raw_seqs = raw_seqs[:n_seqs]
+
+#         print("Total number of sequences : ", len(raw_seqs))
+
+#         # Tokenize all lines (parallel)
+#         with mp.Pool(n_cores) as pool:
+#             self.lines = pool.map(
+#                 partial(
+#                     _line2tokens_finetune,
+#                     tokenizer=self.vocab,
+#                     max_len=self.seq_len,
+#                     headers=headers
+#                 ),
+#                 raw_seqs
+#             )
+
+#         del raw_seqs
+#         gc.collect()
+
+#         # For classification or downstream tasks
+#         self.set_dmr_labels = set([l["dmr_label"] for l in self.lines])
+#         self.ctype_label_count = self._get_cls_num()
+#         print("# of reads in each label: ", self.ctype_label_count)
+
+#     def _get_cls_num(self):
+#         """Example method for counting class label distribution."""
+#         ctype_labels = [l["ctype_label"] for l in self.lines]
+#         labels = list(set(ctype_labels))
+#         label_count = np.zeros(len(labels), dtype=int)
+#         for i, lval in enumerate(labels):
+#             label_count[i] = ctype_labels.count(lval)
+#         return label_count
+
+#     def num_dmrs(self):
+#         """Number of possible DMR classes."""
+#         return max(len(self.set_dmr_labels), max(self.set_dmr_labels) + 1)
+
+#     def subset_data(self, n_seq):
+#         """Optional method to truncate the dataset to n_seq rows."""
+#         self.lines = self.lines[:n_seq]
+
+#     def __getitem__(self, index):
+#         """Return tokenized item, including special tokens."""
+#         item = deepcopy(self.lines[index])
+#         dna_seq = torch.squeeze(torch.tensor(np.array(item["dna_seq"], dtype=np.int32)))
+#         methyl_seq = torch.squeeze(torch.tensor(np.array(item["methyl_seq"], dtype=np.int8)))
+
+#         # Special tokens (SOS, EOS)
+#         end_idx = torch.where(dna_seq != self.vocab.pad_index)[0].tolist()[-1] + 1  # end of the read
+#         if end_idx < dna_seq.shape[0]:
+#             dna_seq[end_idx] = self.vocab.eos_index
+#             methyl_seq[end_idx] = 2
+#         else:
+#             dna_seq[-1] = self.vocab.eos_index
+#             methyl_seq[-1] = 2
+
+#         dna_seq = torch.cat((torch.tensor([self.vocab.sos_index]), dna_seq))
+#         methyl_seq = torch.cat((torch.tensor([2]), methyl_seq))
+
+#         # Return in model's expected format
+#         return {
+#             "input_ids": dna_seq,           # Model expects input_ids
+#             "token_type_ids": methyl_seq,   # Model expects token_type_ids
+#             "labels": item["ctype_label"],  # Model expects labels
+#             "dmr_ids": item["dmr_label"]    # Model expects dmr_ids
+#         }
+
 class MethylBertFinetuneDataset(MethylBertDataset):
     def __init__(
         self,
         data_source: Union[str, List[List[Union[str, int]]]],
         vocab: MethylVocab,
         seq_len: int,
-        n_cores: int=10,
-        n_seqs: int=None
+        n_cores: int = 10,
+        n_seqs: int = None,
+        lazy_tokenization: bool = False,
+        cache_dir: Optional[str] = None,
+        use_mmap: bool = False
     ):
         """
-        MethylBERT dataset that can read either from a file path (TSV) or from
-        a list-of-lists structure (as returned by generate_example_data).
+        MethylBERT dataset with multiple optimization strategies for large datasets.
 
+        Parameters:
+        -----------
         data_source : Union[str, List[List[Union[str, int]]]]
-            - If str, it's assumed to be a file path (TSV).
-            - If list, it's assumed to be the in-memory data (first row is header).
+            File path (TSV) or in-memory data (list of lists)
         vocab : MethylVocab
-            MethylVocab object to convert DNA and methylation pattern sequences
+            Vocabulary for tokenization
         seq_len : int
-            Length for the processed sequences
+            Maximum sequence length
         n_cores : int
-            Number of cores for multiprocessing
-        n_seqs : int
-            Number of sequences to subset the input (default: None, do not make a subset)
+            Number of cores for parallel processing (only used if not lazy)
+        n_seqs : int, optional
+            Limit number of sequences to load
+        lazy_tokenization : bool
+            If True, tokenize on-the-fly in __getitem__ (saves memory)
+        cache_dir : str, optional
+            Directory to cache tokenized results to disk
+        use_mmap : bool
+            If True and cache_dir provided, use memory-mapped arrays for caching
         """
         self.vocab = vocab
         self.seq_len = seq_len
-
-        # If data_source is a path, reads from file. Otherwise, assumes it's already a list of rows.
+        self.lazy_tokenization = lazy_tokenization
+        self.cache_dir = cache_dir
+        self.use_mmap = use_mmap
+        
+        # Create cache directory if needed
+        if self.cache_dir:
+            os.makedirs(self.cache_dir, exist_ok=True)
+            self.cache_file = os.path.join(self.cache_dir, "tokenized_cache.pkl")
+            self._cache = {}
+        
+        # Load raw data
         if isinstance(data_source, str):
-            # File path case
             self.f_path = data_source
             with open(data_source, "r") as f_input:
                 lines = f_input.read().splitlines()
         else:
-            # List of lists case; ensure "dmr_label" is present
-            self.f_path = None  # Not relevant here, but one can store or ignore
+            self.f_path = None
             header = data_source[0]
-            print(header)
             if "dmr_label" not in header:
                 header.append("dmr_label")
                 for row in data_source[1:]:
-                    row.append(0)  # default label = 0 if not present
-            
+                    row.append(0)
             if "dmr_ctype" not in header:
                 header.append("dmr_ctype")
                 for row in data_source[1:]:
-                    row.append(1)  # default label = 1 if not present
-
-            # Convert each row into a tab-delimited string
+                    row.append(1)
             lines = ["\t".join(map(str, row)) for row in data_source]
 
-        # First line is header, subsequent lines are data
-        headers = lines[0].split("\t")
+        # Parse header and raw sequences
+        self.headers = lines[0].split("\t")
         raw_seqs = lines[1:]
-
+        
         if n_seqs is not None:
             raw_seqs = raw_seqs[:n_seqs]
+        
+        print(f"Total number of sequences: {len(raw_seqs)}")
+        
+        if lazy_tokenization:
+            # LAZY MODE: Store raw strings only
+            print("Using lazy tokenization (on-the-fly processing)")
+            self.raw_lines = raw_seqs
+            self.lines = None  # Not tokenized yet
+            
+            # Load cache if exists
+            if self.cache_dir and os.path.exists(self.cache_file):
+                print(f"Loading cache from {self.cache_file}")
+                with open(self.cache_file, 'rb') as f:
+                    self._cache = pickle.load(f)
+                print(f"Loaded {len(self._cache)} cached items")
+        else:
+            # EAGER MODE: Tokenize everything upfront
+            print("Using eager tokenization (pre-processing all data)")
+            self.raw_lines = None
+            
+            # Check if cached version exists
+            if self.cache_dir and os.path.exists(self.cache_file):
+                print(f"Loading pre-tokenized data from {self.cache_file}")
+                with open(self.cache_file, 'rb') as f:
+                    self.lines = pickle.load(f)
+            else:
+                # Tokenize all data
+                if len(raw_seqs) < 1000:
+                    # Small dataset: process sequentially
+                    self.lines = [
+                        _line2tokens_finetune(
+                            line, 
+                            tokenizer=self.vocab, 
+                            max_len=self.seq_len, 
+                            headers=self.headers
+                        ) for line in raw_seqs
+                    ]
+                else:
+                    # Large dataset: parallel processing
+                    with mp.Pool(n_cores) as pool:
+                        self.lines = pool.map(
+                            partial(
+                                _line2tokens_finetune,
+                                tokenizer=self.vocab,
+                                max_len=self.seq_len,
+                                headers=self.headers
+                            ),
+                            raw_seqs
+                        )
+                
+                # Save to cache
+                if self.cache_dir:
+                    print(f"Saving tokenized data to {self.cache_file}")
+                    with open(self.cache_file, 'wb') as f:
+                        pickle.dump(self.lines, f)
+            
+            del raw_seqs
+            gc.collect()
+        
+        # Compute statistics
+        if not lazy_tokenization:
+            self.set_dmr_labels = set([l["dmr_label"] for l in self.lines])
+            self.ctype_label_count = self._get_cls_num()
+            print("# of reads in each label:", self.ctype_label_count)
+        else:
+            self.set_dmr_labels = None
+            self.ctype_label_count = None
 
-        print("Total number of sequences : ", len(raw_seqs))
+    def _tokenize_single_line(self, index):
+        """
+        Tokenize a single line (used in lazy mode).
+        Implements caching to avoid re-tokenizing the same item.
+        """
+        # Check cache first
+        if self.cache_dir and index in self._cache:
+            return self._cache[index]
+        
+        # Tokenize
+        line = self.raw_lines[index]
+        tokenized = _line2tokens_finetune(
+            line,
+            tokenizer=self.vocab,
+            max_len=self.seq_len,
+            headers=self.headers
+        )
+        
+        # Store in cache
+        if self.cache_dir:
+            self._cache[index] = tokenized
+            
+            # Periodically save cache to disk (every 1000 items)
+            if len(self._cache) % 1000 == 0:
+                with open(self.cache_file, 'wb') as f:
+                    pickle.dump(self._cache, f)
+        
+        return tokenized
 
-        # Tokenize all lines (parallel)
-        with mp.Pool(n_cores) as pool:
-            self.lines = pool.map(
-                partial(
-                    _line2tokens_finetune,
-                    tokenizer=self.vocab,
-                    max_len=self.seq_len,
-                    headers=headers
-                ),
-                raw_seqs
-            )
-
-        del raw_seqs
-        gc.collect()
-
-        # For classification or downstream tasks
-        self.set_dmr_labels = set([l["dmr_label"] for l in self.lines])
-        self.ctype_label_count = self._get_cls_num()
-        print("# of reads in each label: ", self.ctype_label_count)
+    def __len__(self):
+        if self.lazy_tokenization:
+            return len(self.raw_lines)
+        else:
+            return len(self.lines)
 
     def _get_cls_num(self):
-        """Example method for counting class label distribution."""
+        """Count class label distribution."""
         ctype_labels = [l["ctype_label"] for l in self.lines]
         labels = list(set(ctype_labels))
         label_count = np.zeros(len(labels), dtype=int)
@@ -921,20 +1172,47 @@ class MethylBertFinetuneDataset(MethylBertDataset):
 
     def num_dmrs(self):
         """Number of possible DMR classes."""
+        if self.lazy_tokenization:
+            # Compute on-demand if needed
+            if self.set_dmr_labels is None:
+                dmr_labels = set()
+                for i in range(len(self)):
+                    item = self._tokenize_single_line(i)
+                    dmr_labels.add(item["dmr_label"])
+                self.set_dmr_labels = dmr_labels
         return max(len(self.set_dmr_labels), max(self.set_dmr_labels) + 1)
 
     def subset_data(self, n_seq):
-        """Optional method to truncate the dataset to n_seq rows."""
-        self.lines = self.lines[:n_seq]
+        """Truncate dataset to n_seq samples."""
+        if self.lazy_tokenization:
+            self.raw_lines = self.raw_lines[:n_seq]
+        else:
+            self.lines = self.lines[:n_seq]
+
+    def save_cache(self):
+        """Manually save cache to disk (useful in lazy mode)."""
+        if self.cache_dir and self._cache:
+            print(f"Saving cache with {len(self._cache)} items to {self.cache_file}")
+            with open(self.cache_file, 'wb') as f:
+                pickle.dump(self._cache, f)
 
     def __getitem__(self, index):
-        """Return tokenized item, including special tokens."""
-        item = deepcopy(self.lines[index])
+        """Return tokenized item with special tokens."""
+        # Get tokenized item
+        if self.lazy_tokenization:
+            item = self._tokenize_single_line(index)
+        else:
+            item = self.lines[index]
+        
+        # Deep copy to avoid modifying cached data
+        item = deepcopy(item)
+        
+        # Convert to tensors
         dna_seq = torch.squeeze(torch.tensor(np.array(item["dna_seq"], dtype=np.int32)))
         methyl_seq = torch.squeeze(torch.tensor(np.array(item["methyl_seq"], dtype=np.int8)))
 
-        # Special tokens (SOS, EOS)
-        end_idx = torch.where(dna_seq != self.vocab.pad_index)[0].tolist()[-1] + 1  # end of the read
+        # Add special tokens (SOS, EOS)
+        end_idx = torch.where(dna_seq != self.vocab.pad_index)[0].tolist()[-1] + 1
         if end_idx < dna_seq.shape[0]:
             dna_seq[end_idx] = self.vocab.eos_index
             methyl_seq[end_idx] = 2
@@ -945,10 +1223,14 @@ class MethylBertFinetuneDataset(MethylBertDataset):
         dna_seq = torch.cat((torch.tensor([self.vocab.sos_index]), dna_seq))
         methyl_seq = torch.cat((torch.tensor([2]), methyl_seq))
 
-        # Return in model's expected format
         return {
-            "input_ids": dna_seq,           # Model expects input_ids
-            "token_type_ids": methyl_seq,   # Model expects token_type_ids
-            "labels": item["ctype_label"],  # Model expects labels
-            "dmr_ids": item["dmr_label"]    # Model expects dmr_ids
+            "input_ids": dna_seq,
+            "token_type_ids": methyl_seq,
+            "labels": item["ctype_label"],
+            "dmr_ids": item["dmr_label"]
         }
+
+    def __del__(self):
+        """Save cache when object is destroyed."""
+        if hasattr(self, 'cache_dir') and self.cache_dir and hasattr(self, '_cache'):
+            self.save_cache()
