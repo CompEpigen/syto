@@ -20,7 +20,7 @@ import torch
 import transformers
 from torch.utils.data import Dataset
 
-from methyldl.modelling.evaluation import preprocess_logits_for_metrics, compute_metrics,preprocess_logits_for_prediction,keep_logits_only
+from methyldl.modelling.evaluation import compute_metrics,preprocess_logits_for_prediction,keep_logits_only
 from methyldl.modelling.utils import calculate_batch_size
 from methyldl.data.dataset import *
 from safetensors.torch import load_file
@@ -381,7 +381,8 @@ class EpigenDnabert2():
                   use_cpg_methylation=True, 
                   use_m6a_methylation=False,
                   trust_remote_code=True,
-                  use_triton=True):
+                  use_triton=True,
+                  training_args=None):
         
         assert len(foundation_model_huggingface), "Must specify foundation model path hosted on Hugging Face"
 
@@ -456,8 +457,10 @@ class EpigenDnabert2():
             skip_memory_metrics=True,
             auto_find_batch_size=False,
             )
-
-        self.training_args = default_training_args
+        if training_args == None:
+            self.training_args = default_training_args
+        else:
+            self.training_args = training_args
         self.max_sequence_length = max_sequence_length
         self.model_max_length = model_max_length
         self.tokenizer = transformers.AutoTokenizer.from_pretrained(
@@ -490,7 +493,7 @@ class EpigenDnabert2():
                                 callbacks = callbacks,
                                 optimizers = optimizers,
                                 tokenizer=self.tokenizer,
-                                preprocess_logits_for_metrics=preprocess_logits_for_metrics,
+                                preprocess_logits_for_metrics=preprocess_logits_for_prediction,
                                 compute_metrics=compute_metrics)
         elif self.num_labels>2:
             return transformers.Trainer(model=self.model,
@@ -511,7 +514,8 @@ class EpigenDnabert2():
                     gradient_checkpointing=False,
                     skip_memory_metrics=True,
                     auto_find_batch_size=False,
-                    per_device_eval_batch_size = batch_size
+                    per_device_eval_batch_size = batch_size,
+                    output_dir=self.training_args.output_dir
                     )
         else:
             # TODO Must be a better way
@@ -532,7 +536,8 @@ class EpigenDnabert2():
                         gradient_checkpointing=False,
                         skip_memory_metrics=True,
                         auto_find_batch_size=False,
-                        per_device_eval_batch_size = 64*3
+                        per_device_eval_batch_size = 64*3,
+                        output_dir=self.training_args.output_dir
                         )
             elif self.max_sequence_length <= 3000:
                 training_args = TrainingArguments(
@@ -541,7 +546,8 @@ class EpigenDnabert2():
                         gradient_checkpointing=False,
                         skip_memory_metrics=True,
                         auto_find_batch_size=False,
-                        per_device_eval_batch_size = 64
+                        per_device_eval_batch_size = 64,
+                        output_dir=self.training_args.output_dir
                         )
             else:
                 training_args = TrainingArguments(
@@ -549,7 +555,8 @@ class EpigenDnabert2():
                         save_strategy = "no",
                         gradient_checkpointing=False,
                         skip_memory_metrics=True,
-                        auto_find_batch_size=True
+                        auto_find_batch_size=True,
+                        output_dir=self.training_args.output_dir
                         )
         if self.num_labels==2:
             prediction_trainer = transformers.Trainer(
@@ -558,7 +565,7 @@ class EpigenDnabert2():
                 data_collator=self.data_collator,
                 tokenizer=self.tokenizer,
                 preprocess_logits_for_metrics=preprocess_logits_for_prediction,
-                compute_metrics=None  # Also remove compute_metrics to avoid issues
+                compute_metrics=None
             )
 
         
