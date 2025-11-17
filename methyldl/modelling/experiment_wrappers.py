@@ -117,9 +117,20 @@ class AbstractMLFlowExperiment:
         self.max_sequence_length = max_sequence_length
         self.splits = splits
         
-        # Set up MLflow
+        # Set up MLflow tracking URI
+        # Priority: 1) explicit parameter, 2) environment variable, 3) default
         if tracking_uri:
             mlflow.set_tracking_uri(tracking_uri)
+        elif os.getenv('MLFLOW_TRACKING_URI'):
+            # Use environment variable if set (important for containerized tests)
+            tracking_uri_env = os.getenv('MLFLOW_TRACKING_URI')
+            mlflow.set_tracking_uri(tracking_uri_env)
+            print(f"Using MLFLOW_TRACKING_URI from environment: {tracking_uri_env}")
+        # else: MLflow will use default (./mlruns)
+        
+        # Log current tracking URI for debugging
+        current_uri = mlflow.get_tracking_uri()
+        print(f"MLflow tracking URI: {current_uri}")
         
         if experiment_name is None:
             raise ValueError("Experiment name must be provided to initialize experiment")
@@ -166,59 +177,134 @@ class AbstractMLFlowExperiment:
             print(f"Error calculating stats for {data_path}: {e}")
             return {}
     
-    def _calculate_metrics(self, y_true, y_pred_proba, y_pred_binary, best_treshold=0.5):
-        """Calculate comprehensive metrics, handling NaN values."""
+    def _calculate_metrics(self, y_true, y_pred_proba, y_pred_binary=None, best_threshold=0.5, num_classes=2):
+        """
+        Calculate comprehensive metrics, handling both binary and multi-class classification.
+        
+        Args:
+            y_true: True labels
+            y_pred_proba: Predicted probabilities (1D for binary, 2D for multi-class)
+            y_pred_binary: Predicted class labels (optional, will be computed if None)
+            best_threshold: Threshold for binary classification
+            num_classes: Number of classes (2 for binary, >2 for multi-class)
+        """
         try:
             # Convert to numpy arrays if not already
             y_true = np.array(y_true)
             y_pred_proba = np.array(y_pred_proba)
-            y_pred_binary = np.array(y_pred_binary)
+            
+            # Handle multi-class vs binary
+            if num_classes > 2 or (y_pred_proba.ndim == 2 and y_pred_proba.shape[1] > 1):
+                # Multi-class classification
+                is_multiclass = True
+                
+                # If predictions are logits, apply softmax
+                if y_pred_proba.max() > 1.0 or y_pred_proba.min() < 0.0:
+                    from scipy.special import softmax
+                    y_pred_proba = softmax(y_pred_proba, axis=1)
+                
+                # Get predicted classes
+                if y_pred_binary is None:
+                    y_pred_binary = np.argmax(y_pred_proba, axis=1)
+                else:
+                    y_pred_binary = np.array(y_pred_binary)
+                
+                # For ROC AUC, we'll use the probability of each class
+                y_pred_proba_for_auc = y_pred_proba
+            else:
+                # Binary classification
+                is_multiclass = False
+                
+                # Ensure 1D for binary
+                if y_pred_proba.ndim > 1:
+                    y_pred_proba = y_pred_proba.squeeze()
+                
+                if y_pred_binary is None:
+                    y_pred_binary = (y_pred_proba >= best_threshold).astype(int)
+                else:
+                    y_pred_binary = np.array(y_pred_binary)
+                
+                y_pred_proba_for_auc = y_pred_proba
             
             # Track NaN statistics
             nan_mask_true = np.isnan(y_true)
-            nan_mask_proba = np.isnan(y_pred_proba)
             nan_mask_binary = np.isnan(y_pred_binary)
+            
+            if is_multiclass:
+                nan_mask_proba = np.any(np.isnan(y_pred_proba), axis=1)
+            else:
+                nan_mask_proba = np.isnan(y_pred_proba)
+            
             nan_mask_any = nan_mask_true | nan_mask_proba | nan_mask_binary
             
             num_total = len(y_true)
-            num_nans_true = np.sum(nan_mask_true)
             num_nans_proba = np.sum(nan_mask_proba)
-            num_nans_binary = np.sum(nan_mask_binary)
             num_nans_any = np.sum(nan_mask_any)
             
-            # Filter out NaN values for metric calculation
+            # Filter out NaN values
             valid_mask = ~nan_mask_any
             y_true_clean = y_true[valid_mask]
-            y_pred_proba_clean = y_pred_proba[valid_mask]
             y_pred_binary_clean = y_pred_binary[valid_mask]
             
-            # Initialize metrics with NaN tracking
+            if is_multiclass:
+                y_pred_proba_clean = y_pred_proba_for_auc[valid_mask]
+            else:
+                y_pred_proba_clean = y_pred_proba_for_auc[valid_mask]
+            
+            # Initialize metrics
             metrics = {
                 'num_total_samples': int(num_total),
                 'num_nans_predictions_proba': int(num_nans_proba),
                 'nan_percentage': float(num_nans_proba / num_total * 100) if num_total > 0 else 0.0,
-                'threshold': float(best_treshold)
+                'num_classes': num_classes,
+                'is_multiclass': is_multiclass
             }
             
-            # Only calculate metrics if we have valid samples
+            if not is_multiclass:
+                metrics['threshold'] = float(best_threshold)
+            
+            # Calculate metrics if we have valid samples
             if len(y_true_clean) > 0:
+                # Common metrics for both binary and multi-class
                 metrics.update({
                     'accuracy': float(accuracy_score(y_true_clean, y_pred_binary_clean)),
-                    'precision': float(precision_score(y_true_clean, y_pred_binary_clean, zero_division=0)),
-                    'recall': float(recall_score(y_true_clean, y_pred_binary_clean, zero_division=0)),
-                    'f1_score': float(f1_score(y_true_clean, y_pred_binary_clean, zero_division=0)),
+                    'precision': float(precision_score(y_true_clean, y_pred_binary_clean, 
+                                                    average='weighted' if is_multiclass else 'binary', 
+                                                    zero_division=0)),
+                    'recall': float(recall_score(y_true_clean, y_pred_binary_clean,
+                                                average='weighted' if is_multiclass else 'binary',
+                                                zero_division=0)),
+                    'f1_score': float(f1_score(y_true_clean, y_pred_binary_clean,
+                                            average='weighted' if is_multiclass else 'binary',
+                                            zero_division=0)),
                     'mcc': float(matthews_corrcoef(y_true_clean, y_pred_binary_clean))
                 })
                 
-                # ROC AUC requires at least 2 classes and no NaN in probabilities
+                # ROC AUC calculation
                 if len(np.unique(y_true_clean)) > 1:
-                    metrics['roc_auc'] = float(roc_auc_score(y_true_clean, y_pred_proba_clean))
+                    if is_multiclass:
+                        # Multi-class ROC AUC (one-vs-rest)
+                        try:
+                            metrics['roc_auc'] = float(roc_auc_score(
+                                y_true_clean, 
+                                y_pred_proba_clean,
+                                multi_class='ovr',
+                                average='weighted'
+                            ))
+                        except ValueError as e:
+                            print(f"Warning: Could not calculate ROC AUC for multi-class: {e}")
+                            metrics['roc_auc'] = 0.0
+                    else:
+                        # Binary ROC AUC
+                        metrics['roc_auc'] = float(roc_auc_score(y_true_clean, y_pred_proba_clean))
                 else:
                     metrics['roc_auc'] = 0.0
-                    
-                # Confusion matrix
+                
+                # Confusion matrix metrics
                 cm = confusion_matrix(y_true_clean, y_pred_binary_clean)
-                if cm.shape == (2, 2):
+                
+                if not is_multiclass and cm.shape == (2, 2):
+                    # Binary classification specific metrics
                     tn, fp, fn, tp = cm.ravel()
                     metrics.update({
                         'true_negatives': int(tn),
@@ -229,65 +315,159 @@ class AbstractMLFlowExperiment:
                         'sensitivity': float(tp / (tp + fn)) if (tp + fn) > 0 else 0.0
                     })
                 else:
-                    # Handle edge case where only one class is present
-                    metrics.update({
-                        'true_negatives': 0,
-                        'false_positives': 0,
-                        'false_negatives': 0,
-                        'true_positives': 0,
-                        'specificity': 0.0,
-                        'sensitivity': 0.0
-                    })
+                    # Multi-class: store full confusion matrix and per-class metrics
+                    metrics['confusion_matrix'] = cm.tolist()
+                    
+                    # Calculate per-class precision, recall, f1
+                    per_class_precision = precision_score(y_true_clean, y_pred_binary_clean, 
+                                                        average=None, zero_division=0)
+                    per_class_recall = recall_score(y_true_clean, y_pred_binary_clean,
+                                                average=None, zero_division=0)
+                    per_class_f1 = f1_score(y_true_clean, y_pred_binary_clean,
+                                        average=None, zero_division=0)
+                    
+                    for i in range(len(per_class_precision)):
+                        metrics[f'precision_class_{i}'] = float(per_class_precision[i])
+                        metrics[f'recall_class_{i}'] = float(per_class_recall[i])
+                        metrics[f'f1_class_{i}'] = float(per_class_f1[i])
             else:
-                # No valid samples - set all metrics to 0 or NaN
-                print(f"Warning: No valid samples found after removing NaNs. Total samples: {num_total}, NaN samples: {num_nans_any}")
+                # No valid samples
+                print(f"Warning: No valid samples found after removing NaNs")
                 metrics.update({
                     'accuracy': 0.0,
                     'precision': 0.0,
                     'recall': 0.0,
                     'f1_score': 0.0,
                     'roc_auc': 0.0,
-                    'mcc': 0.0,
-                    'true_negatives': 0,
-                    'false_positives': 0,
-                    'false_negatives': 0,
-                    'true_positives': 0,
-                    'specificity': 0.0,
-                    'sensitivity': 0.0
+                    'mcc': 0.0
                 })
             
-            # Add warning if significant NaN percentage
             if metrics['nan_percentage'] > 5.0:
                 print(f"Warning: {metrics['nan_percentage']:.2f}% of samples contain NaN values")
-                
+            
             return metrics
             
         except Exception as e:
             print(f"Error calculating metrics: {e}")
-            # Return partial metrics with error information
+            import traceback
+            traceback.print_exc()
             return {
                 'error': str(e),
-                'num_total_samples': len(y_true) if 'y_true' in locals() else 0,
-                'num_nans_total': int(np.sum(np.isnan(y_true))) if 'y_true' in locals() else 0
+                'num_total_samples': len(y_true) if 'y_true' in locals() else 0
             }
     
-    def _aggregate_predictions(self, data_chunked, predictions):
-        data_chunked["predictions_proba"] = predictions
-        data_chunked["predictions_weighted"] = data_chunked["predictions_proba"] * data_chunked["num_cpgs"]
-        data_chunked_agg = data_chunked.groupby("read_name").agg(
-                    predictions_weighted=pd.NamedAgg(column="predictions_weighted", aggfunc="sum"),
-                    num_cpgs=pd.NamedAgg(column="num_cpgs", aggfunc="sum"),
-                    label=pd.NamedAgg(column="label", aggfunc="min"),
-                    )
-        data_chunked_agg["predictions_weighted"] = data_chunked_agg["predictions_weighted"]/data_chunked_agg["num_cpgs"]
-        # Setting best threshold to 0.5 instead of tunning for the best opeating point is a more realistic strategy 
-        # fpr, tpr, thresholds = roc_curve(data_chunked_agg["label"], data_chunked_agg["predictions_weighted"])
-        # best_treshold = thresholds[np.argmax(tpr-fpr)]
-        best_treshold = 0.5
-        data_chunked_agg["predictions"] = data_chunked_agg["predictions_weighted"]>best_treshold
-        data_chunked_agg = data_chunked_agg.loc[data_chunked_agg["num_cpgs"]>0,]
-        labels, predictions_binary, predictions = data_chunked_agg["label"], data_chunked_agg["predictions"], data_chunked_agg["predictions_weighted"]
-        return data_chunked, labels, predictions_binary, predictions,best_treshold
+    # def _aggregate_predictions(self, data_chunked, predictions):
+    #     data_chunked["predictions_proba"] = predictions
+    #     data_chunked["predictions_weighted"] = data_chunked["predictions_proba"] * data_chunked["num_cpgs"]
+    #     data_chunked_agg = data_chunked.groupby("read_name").agg(
+    #                 predictions_weighted=pd.NamedAgg(column="predictions_weighted", aggfunc="sum"),
+    #                 num_cpgs=pd.NamedAgg(column="num_cpgs", aggfunc="sum"),
+    #                 label=pd.NamedAgg(column="label", aggfunc="min"),
+    #                 )
+    #     data_chunked_agg["predictions_weighted"] = data_chunked_agg["predictions_weighted"]/data_chunked_agg["num_cpgs"]
+    #     # Setting best threshold to 0.5 instead of tunning for the best opeating point is a more realistic strategy 
+    #     # fpr, tpr, thresholds = roc_curve(data_chunked_agg["label"], data_chunked_agg["predictions_weighted"])
+    #     # best_treshold = thresholds[np.argmax(tpr-fpr)]
+    #     best_treshold = 0.5
+    #     data_chunked_agg["predictions"] = data_chunked_agg["predictions_weighted"]>best_treshold
+    #     data_chunked_agg = data_chunked_agg.loc[data_chunked_agg["num_cpgs"]>0,]
+    #     labels, predictions_binary, predictions = data_chunked_agg["label"], data_chunked_agg["predictions"], data_chunked_agg["predictions_weighted"]
+    #     return data_chunked, labels, predictions_binary, predictions,best_treshold
+
+    def _aggregate_predictions(self, data_chunked, predictions, num_classes=2):
+        """
+        Aggregate chunk-level predictions to read-level predictions.
+        
+        Args:
+            data_chunked: DataFrame with chunked data
+            predictions: Predictions array (1D for binary, 2D for multi-class)
+            num_classes: Number of classes
+        """
+        predictions = np.array(predictions)
+        
+        # Determine if multi-class
+        if num_classes > 2 or (predictions.ndim == 2 and predictions.shape[1] > 1):
+            is_multiclass = True
+            
+            # Apply softmax if needed
+            if predictions.max() > 1.0 or predictions.min() < 0.0:
+                from scipy.special import softmax
+                predictions = softmax(predictions, axis=1)
+            
+            # Store per-class probabilities
+            for class_idx in range(predictions.shape[1]):
+                data_chunked[f"predictions_proba_class_{class_idx}"] = predictions[:, class_idx]
+                data_chunked[f"predictions_weighted_class_{class_idx}"] = (
+                    predictions[:, class_idx] * data_chunked["num_cpgs"]
+                )
+        else:
+            is_multiclass = False
+            # Binary classification
+            if predictions.ndim > 1:
+                predictions = predictions.squeeze()
+            
+            data_chunked["predictions_proba"] = predictions
+            data_chunked["predictions_weighted"] = predictions * data_chunked["num_cpgs"]
+        
+        # Aggregate by read_name
+        if is_multiclass:
+            # Build aggregation dict for multi-class
+            agg_dict = {
+                'num_cpgs': pd.NamedAgg(column="num_cpgs", aggfunc="sum"),
+                'label': pd.NamedAgg(column="label", aggfunc="min")
+            }
+            
+            for class_idx in range(predictions.shape[1]):
+                agg_dict[f'predictions_weighted_class_{class_idx}'] = pd.NamedAgg(
+                    column=f"predictions_weighted_class_{class_idx}", 
+                    aggfunc="sum"
+                )
+            
+            data_chunked_agg = data_chunked.groupby("read_name").agg(**agg_dict)
+            
+            # Calculate weighted average probabilities
+            weighted_probs = []
+            for class_idx in range(predictions.shape[1]):
+                weighted_probs.append(
+                    data_chunked_agg[f'predictions_weighted_class_{class_idx}'] / 
+                    data_chunked_agg['num_cpgs']
+                )
+            
+            # Stack to create [n_samples, n_classes] array
+            predictions_proba = np.column_stack(weighted_probs)
+            
+            # Get predicted class
+            predictions_binary = np.argmax(predictions_proba, axis=1)
+            
+            # Store in dataframe
+            data_chunked_agg["predictions"] = predictions_binary
+            for class_idx in range(predictions.shape[1]):
+                data_chunked_agg[f"predictions_proba_class_{class_idx}"] = predictions_proba[:, class_idx]
+            
+            best_threshold = None  # Not applicable for multi-class
+        else:
+            # Binary classification
+            data_chunked_agg = data_chunked.groupby("read_name").agg(
+                predictions_weighted=pd.NamedAgg(column="predictions_weighted", aggfunc="sum"),
+                num_cpgs=pd.NamedAgg(column="num_cpgs", aggfunc="sum"),
+                label=pd.NamedAgg(column="label", aggfunc="min"),
+            )
+            
+            predictions_proba = (
+                data_chunked_agg["predictions_weighted"] / data_chunked_agg["num_cpgs"]
+            )
+            
+            best_threshold = 0.5
+            predictions_binary = (predictions_proba > best_threshold).astype(int)
+            data_chunked_agg["predictions"] = predictions_binary
+        
+        # Filter out reads with no CpGs
+        data_chunked_agg = data_chunked_agg.loc[data_chunked_agg["num_cpgs"] > 0]
+        
+        labels = data_chunked_agg["label"].values
+        predictions_binary = data_chunked_agg["predictions"].values if not is_multiclass else predictions_binary
+        
+        return data_chunked, labels, predictions_binary, predictions_proba, best_threshold
 
     def _make_predictions_and_calculate_metrics(self):
         raise NotImplementedError()
@@ -384,32 +564,55 @@ class DismirMLflowExperiment(AbstractMLFlowExperiment):
             path = self.data_dirs[dataset_name] / f'{split_name}.parquet'
             if split_name not in ["train", "valid","test"]: 
                 df = pd.read_parquet(str(path).replace("_cpg_counts_selected", ""))    
-                data_chunked = split_long_reads(df,max_sequence_length)
-                dna, methylation, labels = data_chunked["input_ids"],data_chunked["methylation_ids"], data_chunked["label"]
+                data_chunked = split_long_reads(df, max_sequence_length)
+                dna, methylation, labels = data_chunked["input_ids"], data_chunked["methylation_ids"], data_chunked["label"]
             else:
                 df = pd.read_parquet(path)   
                 dna, methylation, labels = df["input_ids"], df["methylation_ids"], df["label"]
             
             predictions, predictions_binary = model.predict(dna, methylation_sequences=methylation)
-            if split_name not in ["train", "valid", "test"]:      
-                data_chunked, labels, predictions_binary, predictions,best_treshold = self._aggregate_predictions(df, predictions)
+            
+            # Determine number of classes
+            num_classes = model.num_labels if hasattr(model, 'num_labels') else 2
+            
+            if split_name not in ["train", "valid", "test"]:
+                data_chunked, labels, predictions_binary, predictions, best_threshold = self._aggregate_predictions(
+                    data_chunked, predictions, num_classes=num_classes
+                )
             else:
-                best_treshold = 0.5
+                best_threshold = 0.5 if num_classes == 2 else None
 
             # Calculate metrics
-            metrics = self._calculate_metrics(labels, predictions, predictions_binary,best_treshold)
+            metrics = self._calculate_metrics(
+                labels, predictions, predictions_binary, 
+                best_threshold=best_threshold if best_threshold else 0.5,
+                num_classes=num_classes
+            )
             
             # Create predictions dataframe
-            predictions_df = pd.DataFrame({
-                'true_label': labels,
-                'predicted_probability': predictions,
-                'predicted_label': predictions_binary
-            })
+            if num_classes > 2:
+                pred_dict = {
+                    'true_label': labels,
+                    'predicted_label': predictions_binary
+                }
+                # Add per-class probabilities
+                if predictions.ndim == 2:
+                    for i in range(predictions.shape[1]):
+                        pred_dict[f'predicted_probability_class_{i}'] = predictions[:, i]
+                predictions_df = pd.DataFrame(pred_dict)
+            else:
+                predictions_df = pd.DataFrame({
+                    'true_label': labels,
+                    'predicted_probability': predictions if predictions.ndim == 1 else predictions.squeeze(),
+                    'predicted_label': predictions_binary
+                })
             
             return metrics, predictions_df
             
         except Exception as e:
             print(f"Error making predictions for {split_name}: {e}")
+            import traceback
+            traceback.print_exc()
             return {}, pd.DataFrame()
     
     def train_dataset(self, 
@@ -420,7 +623,8 @@ class DismirMLflowExperiment(AbstractMLFlowExperiment):
                         optimizer_type="SGD",
                         lr=0.01,
                         momentum=0.9,
-                        weight_decay=1e-6):
+                        weight_decay=1e-6,
+                        output_dir=None):
         """
         Train a dismir model for a specific dataset and log everything to MLflow.
         
@@ -474,7 +678,11 @@ class DismirMLflowExperiment(AbstractMLFlowExperiment):
                         mlflow.log_metric(f"data_{split}_{key}", value)
                 
                 # Create temporary directory for model weights
-                temp_dir = f"./temp_weights_{dataset_name}"
+                if output_dir is None:
+                    temp_dir = f"./temp_weights_{dataset_name}"
+                else:
+                    temp_dir = output_dir
+                
                 os.makedirs(temp_dir, exist_ok=True)
                 
                 # Initialize and train model
@@ -717,7 +925,7 @@ class EpigenBERT2MLflowExperiment(TransformersMLFLowExperiment):
             torch.cuda.empty_cache()
         
         return np.array(all_predictions), np.array(all_labels), all_max_sequence_lengths
-    
+
     def _make_predictions_and_calculate_metrics(self, checkpoint_path, split_name, dataset_name):
         """Make predictions and calculate metrics for a given split."""
         try:
@@ -735,24 +943,50 @@ class EpigenBERT2MLflowExperiment(TransformersMLFLowExperiment):
                 data_df, checkpoint_path, split_name
             )
             
-            # Convert probabilities to binary predictions
-            predictions_binary = (predictions > 0.5).astype(int)
+            # Determine number of classes from predictions shape
+            if predictions.ndim == 2 and predictions.shape[1] > 1:
+                num_classes = predictions.shape[1]
+                # Apply softmax if needed
+                if predictions.max() > 1.0 or predictions.min() < 0.0:
+                    from scipy.special import softmax
+                    predictions = softmax(predictions, axis=1)
+                predictions_binary = np.argmax(predictions, axis=1)
+            else:
+                num_classes = 2
+                if predictions.ndim > 1:
+                    predictions = predictions.squeeze()
+                predictions_binary = (predictions > 0.5).astype(int)
             
             # Calculate metrics
-            metrics = self._calculate_metrics(labels, predictions, predictions_binary)
+            metrics = self._calculate_metrics(
+                labels, predictions, predictions_binary,
+                num_classes=num_classes
+            )
             
             # Create predictions dataframe
-            predictions_df = pd.DataFrame({
-                'true_label': labels,
-                'predicted_probability': predictions,
-                'predicted_label': predictions_binary,
-                'max_sequence_length_used': seq_lengths
-            })
+            if num_classes > 2:
+                pred_dict = {
+                    'true_label': labels,
+                    'predicted_label': predictions_binary,
+                    'max_sequence_length_used': seq_lengths
+                }
+                for i in range(predictions.shape[1]):
+                    pred_dict[f'predicted_probability_class_{i}'] = predictions[:, i]
+                predictions_df = pd.DataFrame(pred_dict)
+            else:
+                predictions_df = pd.DataFrame({
+                    'true_label': labels,
+                    'predicted_probability': predictions,
+                    'predicted_label': predictions_binary,
+                    'max_sequence_length_used': seq_lengths
+                })
             
             return metrics, predictions_df
             
         except Exception as e:
             print(f"Error making predictions for {split_name}: {e}")
+            import traceback
+            traceback.print_exc()
             return {}, pd.DataFrame()
         
     def train_dataset(self, 
@@ -770,7 +1004,8 @@ class EpigenBERT2MLflowExperiment(TransformersMLFLowExperiment):
                         logging_steps=100,
                         eval_loss_threshold=0.6,
                         check_at_step=500,
-                        max_retries=3):
+                        max_retries=3,
+                        output_dir=None):
         """
         Train a model for a specific chromosome and log everything to MLflow.
         
@@ -802,7 +1037,8 @@ class EpigenBERT2MLflowExperiment(TransformersMLFLowExperiment):
             mlflow.log_param("use_m6a_methylation", self.use_m6a_methylation)
             mlflow.log_param("foundation_model", self.foundation_model_huggingface)
             # Log parameters based on training_args or individual parameters
-            output_dir =  os.path.abspath(f"output/epigenbert2_{dataset_name}")
+            if output_dir is None:
+                output_dir =  os.path.abspath(f"output/epigenbert2_{dataset_name}")
             if training_args is not None:
                 training_args.output_dir = output_dir
                 mlflow.log_param("num_train_epochs", training_args.num_train_epochs)
@@ -1143,52 +1379,89 @@ class MethylBertMLflowExperiment(TransformersMLFLowExperiment):
             return data_list, data_filtered
         return data_list
     
-    def _make_predictions_and_calculate_metrics(self, model, split_name, dataset_name,train_dataset, valid_dataset,dmrs):
+    def _make_predictions_and_calculate_metrics(self, model, split_name, dataset_name, train_dataset, valid_dataset, dmrs):
         """Make predictions and calculate metrics for a given split."""
         try:
-            1+1
-        finally:
             path = self.data_dirs[dataset_name] / f'{split_name}.parquet'
             if split_name not in ["train", "valid"]: 
                 df = pd.read_parquet(str(path).replace("_cpg_counts_selected", ""))
-                df = df.loc[df["input_ids"].apply(len)>0] # Preventing zero length sequences --> TODO: fix in the source!!!  
-                split_data_list, df = self._prepare_methylbert_list(self.data_dirs[dataset_name], split_name, dmrs, split_to_chunks=True)
+                df = df.loc[df["input_ids"].apply(len) > 0]
+                split_data_list, df = self._prepare_methylbert_list(
+                    self.data_dirs[dataset_name], split_name, dmrs, split_to_chunks=True
+                )
                 vocab = MethylVocab(k=3)
                 split_dataset = MethylBertFinetuneDataset(
                     data_source=split_data_list,
                     vocab=vocab,
                     seq_len=self.max_sequence_length
                 )
-            elif split_name=="train":
+            elif split_name == "train":
                 split_dataset = train_dataset
-            elif split_name=="valid":
+            elif split_name == "valid":
                 split_dataset = valid_dataset
                 
-            result = model.predict(split_dataset,batch_size=200)
+            result = model.predict(split_dataset, batch_size=200)
             predictions = result.predictions if hasattr(result, 'predictions') else result[0]
             labels = result.label_ids if hasattr(result, 'label_ids') else result[1]
 
-            if split_name not in ["train", "valid", "test"]:      
-                df, labels, predictions_binary, predictions,best_treshold = self._aggregate_predictions(df, predictions)
+            # Determine number of classes
+            num_classes = model.model.num_labels if hasattr(model.model, 'num_labels') else 2
+            
+            # Handle predictions based on number of classes
+            if num_classes > 2:
+                # Multi-class: predictions are logits [batch, num_classes]
+                from scipy.special import softmax
+                if predictions.max() > 1.0 or predictions.min() < 0.0:
+                    predictions = softmax(predictions, axis=1)
+                
+                if split_name not in ["train", "valid", "test"]:
+                    df, labels, predictions_binary, predictions, best_threshold = self._aggregate_predictions(
+                        df, predictions, num_classes=num_classes
+                    )
+                else:
+                    predictions_binary = np.argmax(predictions, axis=1)
+                    best_threshold = None
             else:
-                best_treshold = 0.5
+                # Binary classification
+                if predictions.ndim > 1:
+                    predictions = predictions.squeeze()
+                
+                if split_name not in ["train", "valid", "test"]:
+                    df, labels, predictions_binary, predictions, best_threshold = self._aggregate_predictions(
+                        df, predictions, num_classes=num_classes
+                    )
+                else:
+                    best_threshold = 0.5
+                    predictions_binary = predictions > best_threshold
 
-            # # Calculate metrics
-            predictions_binary = predictions > best_treshold
-            metrics = self._calculate_metrics(labels, predictions, predictions_binary,best_treshold)
+            # Calculate metrics
+            metrics = self._calculate_metrics(
+                labels, predictions, predictions_binary,
+                best_threshold=best_threshold if best_threshold else 0.5,
+                num_classes=num_classes
+            )
             
             # Create predictions dataframe
-            predictions_df = pd.DataFrame({
-                'true_label': labels,
-                'predicted_probability': predictions,
-                'predicted_label': predictions_binary
-            })
+            if num_classes > 2:
+                pred_dict = {'true_label': labels, 'predicted_label': predictions_binary}
+                if predictions.ndim == 2:
+                    for i in range(predictions.shape[1]):
+                        pred_dict[f'predicted_probability_class_{i}'] = predictions[:, i]
+                predictions_df = pd.DataFrame(pred_dict)
+            else:
+                predictions_df = pd.DataFrame({
+                    'true_label': labels,
+                    'predicted_probability': predictions,
+                    'predicted_label': predictions_binary
+                })
             
             return metrics, predictions_df
             
-        # except Exception as e:
-        #     print(f"Error making predictions for {split_name}: {e}")
-        #     return {}, pd.DataFrame()
+        except Exception as e:
+            print(f"Error making predictions for {split_name}: {e}")
+            import traceback
+            traceback.print_exc()
+            return {}, pd.DataFrame()
     
     def train_dataset(self, 
                         dataset_name,
@@ -1201,7 +1474,8 @@ class MethylBertMLflowExperiment(TransformersMLFLowExperiment):
                         eval_freq=20,
                         training_args=None,
                         early_stopping_patience=10,
-                        early_stopping_threshold=0.001):
+                        early_stopping_threshold=0.001,
+                        output_dir=None):
         """
         Train a model for a specific chromosome and log everything to MLflow.
         
@@ -1291,7 +1565,8 @@ class MethylBertMLflowExperiment(TransformersMLFLowExperiment):
                 )
                 
                 # Create output directory
-                output_dir = f"./output/methylbert_{dataset_name}"
+                if output_dir is None:
+                    output_dir = f"./output/methylbert_{dataset_name}"
                 os.makedirs(output_dir, exist_ok=True)
                 
                 # Set up model config
