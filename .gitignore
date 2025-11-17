@@ -182,6 +182,7 @@ cython_debug/
 /Tutorials/temp
 /Tutorials/methylBertLoyferWithReject
 /Tutorials/loyfer_atlas_crazy_split
+/test_container_tmp
 
 # Singularity/Docker artifacts
 *.sif
