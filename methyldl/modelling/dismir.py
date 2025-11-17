@@ -396,7 +396,55 @@ class Dismir:
                 train_dir, verbose, epochs, batch_size, patience,
                 optimizer_type, lr, weight_decay, momentum, nesterov
             )
+        
+    def evaluate(self, split='test', variable_length=False):
+        """
+        Evaluate on the test or validation split with support for both modes.
+        """
+        if variable_length:
+            return self._evaluate_variable_length(split)
+        else:
+            return self._evaluate_fixed_length(split)
     
+    def _evaluate_fixed_length(self, split):
+        """Original fixed-length evaluation."""
+        if split == 'test':
+            X_data, y_data = self.test_x, self.test_y
+        else:
+            X_data, y_data = self.valid_x, self.valid_y
+        
+        dataset = torch.utils.data.TensorDataset(X_data, y_data)
+        loader = DataLoader(dataset, batch_size=32, shuffle=False)
+        
+        self.model.eval()
+        total_loss = 0.0
+        correct = 0
+        total = 0
+        with torch.no_grad():
+            for X_batch, y_batch in loader:
+                X_batch = X_batch.to(self.device)
+                y_batch = y_batch.to(self.device)
+                outputs = self.model(X_batch)
+                
+                loss = self.criterion(outputs, y_batch)
+                total_loss += loss.item() * X_batch.size(0)
+                
+                # Different prediction logic based on num_labels
+                if self.num_labels == 1:
+                    # Binary classification: threshold at 0.5
+                    preds = (outputs >= 0.5).float().squeeze()
+                    correct += (preds == y_batch.squeeze()).sum().item()
+                else:
+                    # Multi-class classification: use argmax
+                    preds = outputs.argmax(dim=1)
+                    correct += (preds == y_batch).sum().item()
+                total += y_batch.size(0)
+        
+        avg_loss = total_loss / len(loader.dataset)
+        accuracy = correct / total
+        return avg_loss, accuracy
+
+
     def _train_fixed_length(self, train_dir, verbose, epochs, batch_size, patience,
                            optimizer_type, lr, weight_decay, momentum, nesterov):
         """
