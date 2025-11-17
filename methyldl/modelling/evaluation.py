@@ -31,40 +31,6 @@ def calculate_metric_with_sklearn(predictions: np.ndarray, labels: np.ndarray):
         ),
     }
 
-# from: https://discuss.huggingface.co/t/cuda-out-of-memory-when-using-trainer-with-compute-metrics/2941/13
-# def preprocess_logits_for_metrics(logits:Union[torch.Tensor, Tuple[torch.Tensor, Any]], _):
-#     if isinstance(logits, tuple):  # Unpack logits if it's a tuple
-#         logits = logits[0]
-
-#     if logits.ndim == 3:
-#         # Reshape logits to 2D if needed
-#         logits = logits.reshape(-1, logits.shape[-1])
-#     return torch.argmax(logits, dim=-1)
-
-# def preprocess_logits_for_prediction(logits:Union[torch.Tensor, Tuple[torch.Tensor]], _):
-#     if isinstance(logits, tuple):  # Unpack logits if it's a tuple
-#         logits = logits[0]
-#     if logits.ndim == 3:
-#         # Reshape logits to 2D if needed
-#         logits = logits.reshape(-1, logits.shape[-1])
-#     return torch.sigmoid(logits)[:,1]
-
-def preprocess_logits_for_metrics(logits: Union[torch.Tensor, Tuple[torch.Tensor, Any]], _):
-    """
-    Preprocess logits for computing metrics.
-    Returns predicted class indices for both binary and multi-class.
-    """
-    if isinstance(logits, tuple):  # Unpack logits if it's a tuple
-        logits = logits[0]
-    
-    if logits.ndim == 3:
-        # Reshape logits to 2D if needed
-        logits = logits.reshape(-1, logits.shape[-1])
-    
-    # argmax works for both binary (2 classes) and multi-class (>2 classes)
-    return torch.argmax(logits, dim=-1)
-
-
 def preprocess_logits_for_prediction(logits: Union[torch.Tensor, Tuple[torch.Tensor]], _):
     """
     Preprocess logits for predictions.
@@ -112,7 +78,6 @@ Compute metrics used for huggingface trainer.
 def compute_metrics(eval_pred):
     logits, labels = eval_pred
     num_classes = logits.shape[-1]
-    
     if num_classes == 1:
         # Binary with single output
         predictions = predictions>0.5
@@ -122,4 +87,5 @@ def compute_metrics(eval_pred):
     else:
         # Multi-class
         predictions = np.argmax(logits, axis=-1)
+
     return calculate_metric_with_sklearn(predictions, labels)
