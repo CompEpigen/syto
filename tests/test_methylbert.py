@@ -321,15 +321,16 @@ class TestMethylBert(unittest.TestCase):
         self.seq_len = 150
         self.config = default_methylbert_config.copy()
     
-    def _create_model(self, num_labels=2, num_dmr_labels=10, load_weights=False):
+    def _create_model(self, num_labels=2, num_dmr_labels=10, load_weights=False, custom_config = None):
         """Helper to create a MethylBert model."""
         return MethylBert(
             foundation_model_path=self.foundation_model,
             seq_len=self.seq_len,
-            custom_config=self.config,
+            custom_config=self.config if custom_config is None else custom_config,
             load_weights=load_weights,
             num_labels=num_labels,
-            num_dmr_labels=num_dmr_labels
+            num_dmr_labels=num_dmr_labels,
+            output_dir = "test_container_tmp/tmp_trainer"
         )
     
     def test_model_initialization_without_weights(self):
@@ -359,7 +360,8 @@ class TestMethylBert(unittest.TestCase):
             custom_config=custom_config,
             load_weights=False,
             num_labels=2,
-            num_dmr_labels=10
+            num_dmr_labels=10,
+            output_dir = "test_container_tmp/tmp_trainer"
         )
         
         self.assertEqual(model.training_args.learning_rate, 0.001)
@@ -370,18 +372,24 @@ class TestMethylBert(unittest.TestCase):
     ])
     def test_model_predict(self, name, num_labels, num_dmr_labels):
         """Test model prediction with different configurations."""
+        custom_config = self.config
+        if num_labels > 2:
+            custom_config["loss"] = "ce"
+        else:
+            custom_config["loss"] = "bce"
         model = self._create_model(
             num_labels=num_labels,
             num_dmr_labels=num_dmr_labels,
-            load_weights=False
+            load_weights=False,
+            custom_config = custom_config
         )
         
         # Create dummy dataset
         vocab = MethylVocab(k=3)
         data = [
             ["dna_seq", "methyl_seq", "ctype", "dmr_ctype", "dmr_label"],
-            ["AAA TTT CCC GGG", "0120", "type1", "type1", "0"],
-            ["GGG CCC AAA TTT", "1201", "type1", "type2", "1"]
+            ["AAA TTT CCC GGG", "0120", 0, 0, 1],
+            ["GGG CCC AAA TTT", "1201", 1, 1, 2]
         ]
         
         dataset = MethylBertFinetuneDataset(
@@ -437,7 +445,8 @@ class TestMethylBertFineTune(unittest.TestCase):
             custom_config=self.config,
             load_weights=False,
             num_labels=2,
-            num_dmr_labels=10
+            num_dmr_labels=10,
+            output_dir = "test_container_tmp/tmp_trainer"
         )
         
         train_dataset = self._create_test_dataset(10)
@@ -476,7 +485,8 @@ class TestMethylBertFineTune(unittest.TestCase):
             custom_config=self.config,
             load_weights=False,
             num_labels=2,
-            num_dmr_labels=10
+            num_dmr_labels=10,
+            output_dir = "test_container_tmp/tmp_trainer"
         )
         
         from methyldl.data.dataset import generate_example_data_for_methylbert
