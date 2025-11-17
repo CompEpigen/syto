@@ -150,10 +150,10 @@ class TestDismirPredict(DismirTestBase):
             [methylation_sequence],
             batch_size=1
         )
-        
+        print(probs)
         self.assertEqual(len(probs), 1)
         self.assertEqual(len(labels), 1)
-        self.assertTrue(0 <= probs[0] <= 1)
+        self.assertTrue(all((0<=probs[0]) & (probs[0]<=1)))
     
     def test_predict_with_parallel_scan_disabled(self):
         """Test prediction with parallel_scan disabled (for minigru)."""
@@ -233,7 +233,8 @@ class TestDismirTraining(DismirTestBase):
             train_data_path=self.train_path,
             test_data_path=self.test_path,
             valid_data_path=self.valid_path,
-            device=torch.device('cuda')
+            device=torch.device('cuda'),
+            num_labels=2
         )
         
         # Train with variable length
@@ -355,33 +356,52 @@ class TestDismirEvaluation(DismirTestBase):
     def setUp(self):
         super().setUp()
         # Initialize model
-        self.model = Dismir(
+    
+    
+    @parameterized.expand([
+        ('test', False,1),
+        ('valid', False,1),
+        ('test', True,1),
+        ('valid', True,1),
+        ('test', False,3),
+        ('valid', False,3),
+        ('test', True,3),
+        ('valid', True,3),
+    ])
+    def test_evaluate_different_splits_and_modes(self, split, variable_length, num_labels):
+        """Test evaluation on different data splits and modes."""
+        model = Dismir(
             max_sequence_length=self.max_sequence_length,
             train_data_path=self.train_path,
             test_data_path=self.test_path,
             valid_data_path=self.valid_path,
-            device=torch.device('cuda'))
-    
-    
-    @parameterized.expand([
-        ('test', False),
-        ('valid', False),
-        ('test', True),
-        ('valid', True),
-    ])
-    def test_evaluate_different_splits_and_modes(self, split, variable_length):
-        """Test evaluation on different data splits and modes."""
+            device=torch.device('cuda'),
+            num_labels=num_labels)
+
         if not variable_length:
-            # TODO - bad pattern to transform to tensors here, probably better be handled in the code itself
-            self.model.test_x, self.model.test_y = self.model.load_and_transform_input(self.test_path)
-            self.model.test_x = torch.tensor(self.model.test_x, dtype=torch.float32)
-            self.model.test_y = torch.tensor(self.model.test_y.values, dtype=torch.float32).view(-1, 1)
+            # Load and transform test data
+            model.test_x, model.test_y = model.load_and_transform_input(self.test_path)
+            model.test_x = torch.tensor(model.test_x, dtype=torch.float32)
+            
+            # Handle labels based on num_labels
+            if num_labels == 1:
+                # Binary: float32, shape [batch_size, 1]
+                model.test_y = torch.tensor(model.test_y.values, dtype=torch.float32).view(-1, 1)
+            else:
+                # Multi-class: long, shape [batch_size]
+                model.test_y = torch.tensor(model.test_y.values, dtype=torch.long).squeeze()
+            
+            # Load and transform validation data
+            model.valid_x, model.valid_y = model.load_and_transform_input(self.valid_path)
+            model.valid_x = torch.tensor(model.valid_x, dtype=torch.float32)
+            
+            if num_labels == 1:
+                model.valid_y = torch.tensor(model.valid_y.values, dtype=torch.float32).view(-1, 1)
+            else:
+                model.valid_y = torch.tensor(model.valid_y.values, dtype=torch.long).squeeze()
 
-            self.model.valid_x, self.model.valid_y = self.model.load_and_transform_input(self.valid_path)
-            self.model.valid_x = torch.tensor(self.model.valid_x, dtype=torch.float32)
-            self.model.valid_y = torch.tensor(self.model.valid_y.values, dtype=torch.float32).view(-1, 1)
 
-        loss, accuracy = self.model.evaluate(split=split, variable_length=variable_length)
+        loss, accuracy = model.evaluate(split=split, variable_length=variable_length)
         
         # Check that metrics are valid
         self.assertIsInstance(loss, float)
@@ -659,14 +679,14 @@ class TestDISMIRNetArchitecture(unittest.TestCase):
     """Test the DISMIRNet neural network architecture."""
     
     @parameterized.expand([
-        (128, "lstm"),
-        (256, "lstm"),
-        (128, "minigru"),
-        (512, "minigru"),
+        (128, "lstm",1),
+        (256, "lstm",3),
+        (128, "minigru",1),
+        (512, "minigru",3),
     ])
-    def test_network_forward_pass(self, max_seq_length, flavor):
+    def test_network_forward_pass(self, max_seq_length, flavor, num_labels):
         """Test forward pass through the network."""
-        model = DISMIRNet(max_seq_length, flavor)
+        model = DISMIRNet(max_seq_length, flavor, num_labels=num_labels)
         model.eval()
         
         # Create random input
@@ -678,7 +698,7 @@ class TestDISMIRNetArchitecture(unittest.TestCase):
             output = model(input_tensor)
         
         # Check output shape and values
-        self.assertEqual(output.shape, (batch_size, 1))
+        self.assertEqual(output.shape, (batch_size, num_labels))
         self.assertTrue(torch.all((output >= 0) & (output <= 1)))
 
 class TestModelStatePersistence(unittest.TestCase):

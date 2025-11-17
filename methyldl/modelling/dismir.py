@@ -112,8 +112,7 @@ class DISMIRNet(nn.Module):
         x = self.fc2(x)       # (batch, 300)
         x = self.relu(x)
         x = self.fc3(x)       # (batch, num_labels)
-        if self.num_labels>1:
-            x = self.sigmoid(x)
+        x = self.sigmoid(x)
         return x
 
 class VariableLengthDataset(Dataset):
@@ -288,6 +287,10 @@ class Dismir:
     def __init__(self, max_sequence_length, train_data_path, test_data_path, valid_data_path, device=None, flavour="lstm", num_labels=2):
         self.max_sequence_length = max_sequence_length
         self.num_labels = num_labels
+        if num_labels==1:
+            self.criterion = nn.BCELoss()
+        else:
+            self.criterion = nn.CrossEntropyLoss()
         
         # Use CUDA if available
         if device is None:
@@ -404,27 +407,28 @@ class Dismir:
         
         # Load data
         self.train_x, self.train_y = self.load_and_transform_input(self.train_data_path)
+        print("... Train is ready")
         self.valid_x, self.valid_y = self.load_and_transform_input(self.valid_data_path)
-        self.test_x, self.test_y = self.load_and_transform_input(self.test_data_path)
+        print("... Valid is ready")
+        # self.test_x, self.test_y = self.load_and_transform_input(self.test_data_path)
+        # print("... Test is ready")
         
         # Convert to torch.Tensor
         self.train_x = torch.tensor(self.train_x, dtype=torch.float32)
         self.valid_x = torch.tensor(self.valid_x, dtype=torch.float32)
-        self.test_x = torch.tensor(self.test_x, dtype=torch.float32)
+        # self.test_x = torch.tensor(self.test_x, dtype=torch.float32)
 
         # Handle labels differently based on num_labels
         if self.num_labels == 1:
             # Binary classification with BCELoss - keep as (batch_size, 1)
-            criterion = nn.BCELoss()
             self.train_y = torch.tensor(self.train_y.values, dtype=torch.float32).view(-1, 1)
             self.valid_y = torch.tensor(self.valid_y.values, dtype=torch.float32).view(-1, 1)
-            self.test_y = torch.tensor(self.test_y.values, dtype=torch.float32).view(-1, 1)
+            # self.test_y = torch.tensor(self.test_y.values, dtype=torch.float32).view(-1, 1)
         else:
             # Multi-class classification with CrossEntropyLoss - squeeze to (batch_size,)
-            criterion = nn.CrossEntropyLoss()
             self.train_y = torch.tensor(self.train_y.values, dtype=torch.long).squeeze()
             self.valid_y = torch.tensor(self.valid_y.values, dtype=torch.long).squeeze()
-            self.test_y = torch.tensor(self.test_y.values, dtype=torch.long).squeeze()
+            # self.test_y = torch.tensor(self.test_y.values, dtype=torch.long).squeeze()
         
         # Create optimizer
         optimizer = self._create_optimizer(optimizer_type, lr, weight_decay, momentum, nesterov)
@@ -435,7 +439,7 @@ class Dismir:
         valid_dataset = torch.utils.data.TensorDataset(self.valid_x, self.valid_y)
         valid_loader = DataLoader(valid_dataset, batch_size=batch_size, shuffle=False)
         
-        return self._training_loop(train_loader, valid_loader, optimizer, criterion,
+        return self._training_loop(train_loader, valid_loader, optimizer, self.criterion,
                                  epochs, patience, verbose, train_dir, "fixed")
     
     def _train_variable_length(self, train_dir, verbose, epochs, batch_size, patience,
@@ -468,9 +472,8 @@ class Dismir:
         
         # Create optimizer
         optimizer = self._create_optimizer(optimizer_type, lr, weight_decay, momentum, nesterov)
-        criterion = nn.BCELoss(reduction='none')  # Use 'none' to get per-sample losses
         
-        return self._training_loop_variable_length(train_loader, valid_loader, optimizer, criterion,
+        return self._training_loop_variable_length(train_loader, valid_loader, optimizer, self.criterion,
                                                  epochs, patience, verbose, train_dir)
     
     def _create_optimizer(self, optimizer_type, lr, weight_decay, momentum, nesterov):
@@ -584,7 +587,7 @@ class Dismir:
                 break
     
     def _training_loop_variable_length(self, train_loader, valid_loader, optimizer, criterion,
-                                     epochs, patience, verbose, train_dir):
+                                 epochs, patience, verbose, train_dir):
         """Training loop for variable-length sequences with weighted chunk averaging."""
         best_val_loss = float('inf')
         patience_counter = 0
@@ -602,13 +605,18 @@ class Dismir:
                 all_chunks, all_weights, all_labels, chunk_to_read_mapping = batch_data
                 all_chunks = all_chunks.to(self.device)
                 all_weights = all_weights.to(self.device)
-                all_labels = all_labels.to(self.device)
                 chunk_to_read_mapping = chunk_to_read_mapping.to(self.device)
+                
+                # Convert labels to appropriate dtype based on num_labels
+                if self.num_labels == 1:
+                    all_labels = all_labels.to(self.device).float()
+                else:
+                    all_labels = all_labels.to(self.device).long()
                 
                 optimizer.zero_grad()
                 
                 # Forward pass on all chunks
-                chunk_outputs = self.model(all_chunks).squeeze(-1)  # Shape: [num_chunks]
+                chunk_outputs = self.model(all_chunks)  # Shape: [num_chunks, num_labels] or [num_chunks, 1]
                 
                 # Calculate weighted loss for each read
                 batch_size = len(all_labels)
@@ -618,21 +626,41 @@ class Dismir:
                 for read_idx in range(batch_size):
                     # Find chunks belonging to this read
                     read_mask = (chunk_to_read_mapping == read_idx)
-                    read_chunk_outputs = chunk_outputs[read_mask]
-                    read_chunk_weights = all_weights[read_mask]
-                    
-                    # Calculate individual chunk losses
+                    read_chunk_outputs = chunk_outputs[read_mask]  # [num_read_chunks, num_labels]
+                    read_chunk_weights = all_weights[read_mask]     # [num_read_chunks]
                     read_label = all_labels[read_idx]
-                    chunk_labels = read_label.expand_as(read_chunk_outputs)
-                    chunk_losses = criterion(read_chunk_outputs, chunk_labels)
                     
-                    # Weighted average loss for this read
-                    weighted_loss = torch.sum(chunk_losses * read_chunk_weights)
-                    read_losses.append(weighted_loss)
-                    
-                    # Weighted average prediction for this read
-                    weighted_pred = torch.sum(read_chunk_outputs * read_chunk_weights)
-                    read_preds.append(weighted_pred)
+                    if self.num_labels == 1:
+                        # Binary classification
+                        read_chunk_outputs_1d = read_chunk_outputs.squeeze(-1)  # [num_read_chunks]
+                        chunk_labels = read_label.expand_as(read_chunk_outputs_1d)
+                        chunk_losses = criterion(read_chunk_outputs_1d, chunk_labels)
+                        
+                        # Weighted average loss and prediction
+                        weighted_loss = torch.sum(chunk_losses * read_chunk_weights)
+                        weighted_pred = torch.sum(read_chunk_outputs_1d * read_chunk_weights)
+                        read_losses.append(weighted_loss)
+                        read_preds.append(weighted_pred)
+                    else:
+                        # Multi-class classification
+                        # For CrossEntropyLoss, we need to compute loss per chunk then average
+                        chunk_labels = read_label.expand(read_chunk_outputs.size(0))  # [num_read_chunks]
+                        
+                        # Compute loss for each chunk
+                        chunk_losses = torch.stack([
+                            criterion(read_chunk_outputs[i:i+1], chunk_labels[i:i+1])
+                            for i in range(len(chunk_labels))
+                        ])
+                        
+                        # Weighted average loss
+                        weighted_loss = torch.sum(chunk_losses * read_chunk_weights)
+                        read_losses.append(weighted_loss)
+                        
+                        # Weighted average prediction (average the logits, then argmax)
+                        # Expand weights to [num_read_chunks, 1] for broadcasting
+                        weights_expanded = read_chunk_weights.unsqueeze(-1)  # [num_read_chunks, 1]
+                        weighted_logits = torch.sum(read_chunk_outputs * weights_expanded, dim=0)  # [num_labels]
+                        read_preds.append(weighted_logits.argmax())
                 
                 # Total loss is average across reads in batch
                 total_loss = torch.stack(read_losses).mean()
@@ -640,9 +668,14 @@ class Dismir:
                 optimizer.step()
                 
                 # Calculate accuracy
-                read_preds = torch.stack(read_preds)
-                binary_preds = (read_preds >= 0.5).float()
-                correct += (binary_preds == all_labels).sum().item()
+                if self.num_labels == 1:
+                    read_preds = torch.stack(read_preds)
+                    binary_preds = (read_preds >= 0.5).float()
+                    correct += (binary_preds == all_labels).sum().item()
+                else:
+                    read_preds = torch.stack(read_preds)
+                    correct += (read_preds == all_labels).sum().item()
+                
                 total += batch_size
                 epoch_loss += total_loss.item() * batch_size
             
@@ -653,7 +686,7 @@ class Dismir:
             val_loss, val_acc = self._validate_variable_length(valid_loader, criterion)
             epoch_time = time.time() - session_start_time
             self.history.append({
-                'session': len([h for h in self.history if h.get('epoch') == 1]) + 1,  # Optional session id
+                'session': len([h for h in self.history if h.get('epoch') == 1]) + 1,
                 'epoch': epoch,
                 'train_loss': train_loss,
                 'train_acc': train_acc,
@@ -663,8 +696,8 @@ class Dismir:
             })            
             if verbose > 0:
                 print(f"Epoch [{epoch}/{epochs}] "
-                      f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.4f} | "
-                      f"Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.4f}")
+                    f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.4f} | "
+                    f"Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.4f}")
             
             # Early stopping
             if val_loss < best_val_loss:
@@ -691,11 +724,16 @@ class Dismir:
                 all_chunks, all_weights, all_labels, chunk_to_read_mapping = batch_data
                 all_chunks = all_chunks.to(self.device)
                 all_weights = all_weights.to(self.device)
-                all_labels = all_labels.to(self.device)
                 chunk_to_read_mapping = chunk_to_read_mapping.to(self.device)
                 
+                # Convert labels to appropriate dtype based on num_labels
+                if self.num_labels == 1:
+                    all_labels = all_labels.to(self.device).float()
+                else:
+                    all_labels = all_labels.to(self.device).long()
+                
                 # Forward pass
-                chunk_outputs = self.model(all_chunks).squeeze(-1)
+                chunk_outputs = self.model(all_chunks)
                 
                 # Calculate weighted loss and predictions for each read
                 batch_size = len(all_labels)
@@ -706,71 +744,51 @@ class Dismir:
                     read_mask = (chunk_to_read_mapping == read_idx)
                     read_chunk_outputs = chunk_outputs[read_mask]
                     read_chunk_weights = all_weights[read_mask]
-                    
-                    # Weighted loss
                     read_label = all_labels[read_idx]
-                    chunk_labels = read_label.expand_as(read_chunk_outputs)
-                    chunk_losses = criterion(read_chunk_outputs, chunk_labels)
-                    weighted_loss = torch.sum(chunk_losses * read_chunk_weights)
-                    read_losses.append(weighted_loss)
                     
-                    # Weighted prediction
-                    weighted_pred = torch.sum(read_chunk_outputs * read_chunk_weights)
-                    read_preds.append(weighted_pred)
+                    if self.num_labels == 1:
+                        # Binary classification
+                        read_chunk_outputs_1d = read_chunk_outputs.squeeze(-1)
+                        chunk_labels = read_label.expand_as(read_chunk_outputs_1d)
+                        chunk_losses = criterion(read_chunk_outputs_1d, chunk_labels)
+                        
+                        weighted_loss = torch.sum(chunk_losses * read_chunk_weights)
+                        weighted_pred = torch.sum(read_chunk_outputs_1d * read_chunk_weights)
+                        read_losses.append(weighted_loss)
+                        read_preds.append(weighted_pred)
+                    else:
+                        # Multi-class classification
+                        chunk_labels = read_label.expand(read_chunk_outputs.size(0))
+                        
+                        chunk_losses = torch.stack([
+                            criterion(read_chunk_outputs[i:i+1], chunk_labels[i:i+1])
+                            for i in range(len(chunk_labels))
+                        ])
+                        
+                        weighted_loss = torch.sum(chunk_losses * read_chunk_weights)
+                        read_losses.append(weighted_loss)
+                        
+                        weights_expanded = read_chunk_weights.unsqueeze(-1)
+                        weighted_logits = torch.sum(read_chunk_outputs * weights_expanded, dim=0)
+                        read_preds.append(weighted_logits.argmax())
                 
                 # Accumulate validation metrics
                 total_loss = torch.stack(read_losses).mean()
                 val_loss += total_loss.item() * batch_size
                 
-                read_preds = torch.stack(read_preds)
-                binary_preds = (read_preds >= 0.5).float()
-                val_correct += (binary_preds == all_labels).sum().item()
+                if self.num_labels == 1:
+                    read_preds = torch.stack(read_preds)
+                    binary_preds = (read_preds >= 0.5).float()
+                    val_correct += (binary_preds == all_labels).sum().item()
+                else:
+                    read_preds = torch.stack(read_preds)
+                    val_correct += (read_preds == all_labels).sum().item()
+                
                 val_total += batch_size
         
         val_loss /= len(valid_loader.dataset)
         val_acc = val_correct / val_total
         return val_loss, val_acc
-
-    def evaluate(self, split='test', variable_length=False):
-        """
-        Evaluate on the test or validation split with support for both modes.
-        """
-        if variable_length:
-            return self._evaluate_variable_length(split)
-        else:
-            return self._evaluate_fixed_length(split)
-    
-    def _evaluate_fixed_length(self, split):
-        """Original fixed-length evaluation."""
-        criterion = nn.BCELoss()
-        if split == 'test':
-            X_data, y_data = self.test_x, self.test_y
-        else:
-            X_data, y_data = self.valid_x, self.valid_y
-        
-        dataset = torch.utils.data.TensorDataset(X_data, y_data)
-        loader = DataLoader(dataset, batch_size=32, shuffle=False)
-        
-        self.model.eval()
-        total_loss = 0.0
-        correct = 0
-        total = 0
-        with torch.no_grad():
-            for X_batch, y_batch in loader:
-                X_batch = X_batch.to(self.device)
-                y_batch = y_batch.to(self.device)
-                outputs = self.model(X_batch)
-                
-                loss = criterion(outputs, y_batch)
-                total_loss += loss.item() * X_batch.size(0)
-                
-                preds = (outputs >= 0.5).float()
-                correct += (preds == y_batch).sum().item()
-                total += y_batch.size(0)
-        
-        avg_loss = total_loss / len(loader.dataset)
-        accuracy = correct / total
-        return avg_loss, accuracy
     
     def _evaluate_variable_length(self, split):
         """Variable-length evaluation."""
@@ -783,9 +801,8 @@ class Dismir:
         max_chunks_per_batch = 32  # Conservative default for evaluation
         batch_sampler = ChunkAwareBatchSampler(dataset, max_chunks_per_batch, shuffle=False)
         loader = DataLoader(dataset, batch_sampler=batch_sampler, collate_fn=variable_length_collate_fn)
-        criterion = nn.BCELoss(reduction='none')
         
-        return self._validate_variable_length(loader, criterion)
+        return self._validate_variable_length(loader, self.criterion)
     
     def predict(self, dna_sequences, methylation_sequences, batch_size=128, threshold=0.5,parallel_scan=True):
         """
