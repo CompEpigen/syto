@@ -14,11 +14,37 @@ class TestEpigenDnabert2Predict(unittest.TestCase):
         self.default_use_m6a_methylation = True
     
     def create_model(self, num_labels):
+        default_training_args =  TrainingArguments(
+            run_name = "dnabert2_default",
+            gradient_accumulation_steps = 1,
+            learning_rate = 3e-5,
+            fp16 = True,
+            save_steps = 10,
+            output_dir ="test_container_tmp/dnabert2_default",
+            eval_strategy = "steps",
+            eval_steps = 10, 
+            warmup_steps = 100, 
+            logging_steps = 100, 
+            num_train_epochs = 250, 
+            overwrite_output_dir = True, 
+            log_level = "info",
+            find_unused_parameters = False,
+            batch_eval_metrics = False,
+            eval_and_save_results = True,
+            remove_unused_columns=False,
+            eval_accumulation_steps = 8,
+            torch_empty_cache_steps = 10,
+            prediction_loss_only=False,
+            gradient_checkpointing=False,
+            skip_memory_metrics=True,
+            auto_find_batch_size=True,
+            )
         return EpigenDnabert2(
             foundation_model_huggingface=self.default_model_path,
             max_sequence_length=self.default_max_sequence_length,
             use_m6a_methylation=self.default_use_m6a_methylation,
-            num_labels=num_labels
+            num_labels=num_labels,
+            training_args=default_training_args
         )
     
     def create_synthetic_data(self, sequence_length, num_samples, include_cpg, include_m6a, include_labels):
