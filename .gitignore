@@ -180,6 +180,8 @@ cython_debug/
 /EDA/tmp_trainer
 /Tutorials/dismir
 /Tutorials/temp
+/Tutorials/methylBertLoyferWithReject
+/Tutorials/loyfer_atlas_crazy_split
 
 # Singularity/Docker artifacts
 *.sif

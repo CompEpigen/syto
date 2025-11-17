@@ -27,7 +27,8 @@ gputil = "^1.4.0"
 ipykernel = "^6.29.5"
 coverage = "^7.10.7"
 parameterized = "^0.9.0"
-coverage-badge = "^1.1.2"
+genbadge ="^1.1.0"
+defusedxml ="^0.7.0"
 
 [[tool.poetry.source]]
 name = "torch128"
