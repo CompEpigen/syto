@@ -296,7 +296,7 @@ class MethylBertEmbeddedDMR(BertPreTrainedModel):
             
         elif classifier_implementation == "dmr_attention_based":
             print("Using attention-based classifier with DMR context")
-            self.classifier = DMRAttentionClassifier(config, seq_len)
+            self.classifier = DMRAttentionClassifier(config)
             # These won't be used in attention mode but set to None for clarity
             self.read_classifier = None
             self.dmr_encoder = None
