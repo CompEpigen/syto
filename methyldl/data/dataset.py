@@ -23,7 +23,8 @@ class SupervisedDataset(Dataset):
                  kmer: int = -1,
                  first_n_samples: int = None,
                  data_interface:str = "csv",
-                 lazy_tokenization = False):
+                 lazy_tokenization = False,
+                 include_dmr_ids = False):
         """
         Args:
             data_path_or_list (str or list): Path to the CSV file or a structured list.
@@ -37,6 +38,7 @@ class SupervisedDataset(Dataset):
         self.cpg_methylation = None
         self.m6a_methylation = None
         self.lazy_tokenization = lazy_tokenization
+        self.include_dmr_ids = include_dmr_ids
 
         # Determine input type
         if data_interface == "csv":
@@ -89,6 +91,8 @@ class SupervisedDataset(Dataset):
                 data = pd.read_csv(data_path_or_list+".csv")
 
             dna, methylation, labels = data["input_ids"],data["methylation_ids"], data["label"]
+            if self.include_dmr_ids:
+                self.dmr_ids = data["dmr_label"]
             self.labels = labels.to_list()
             self.cpg_methylation = methylation.to_list()
             texts = dna.to_list()
@@ -138,7 +142,7 @@ class SupervisedDataset(Dataset):
     def __getitem__(self, i) -> Dict[str, torch.Tensor]:
         if self.lazy_tokenization:
             encoded = self.tokenizer(
-            self.texts[i],
+            text = self.texts[i],
             return_tensors="pt",
             max_length=self.tokenizer.model_max_length,
             truncation=True,
@@ -162,7 +166,8 @@ class SupervisedDataset(Dataset):
                 item["m6a_methylation"] = self.m6a_methylation[i]
         if self.labels is not None:
             item["labels"] = torch.tensor(self.labels[i])
-
+        if self.include_dmr_ids:
+            item["dmr_labels"] = torch.tensor(self.dmr_ids[i])
         return item
 
 
@@ -192,6 +197,8 @@ class DataCollatorForSupervisedDataset:
             )
         if "labels" in batch:
             batch["labels"] = torch.tensor(batch["labels"], dtype=torch.long)
+        if "dmr_labels" in batch:
+            batch["dmr_labels"]  = torch.tensor(batch["dmr_labels"], dtype=torch.long)
 
         return batch
 

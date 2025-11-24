@@ -25,6 +25,8 @@ from methyldl.modelling.utils import calculate_batch_size
 from methyldl.data.dataset import *
 from safetensors.torch import load_file
 from transformers.models.bert.configuration_bert import BertConfig
+from methyldl.modelling.common import DMRAttentionClassifier
+
 
 class BertEmbeddings(nn.Module):
     """Construct the embeddings for words, ignoring position.
@@ -68,7 +70,7 @@ class BertEmbeddings(nn.Module):
         cpg_methylation: Optional[torch.LongTensor] = None,
         m6a_methylation: Optional[torch.LongTensor] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
-        past_key_values_length: int = 0,
+        past_key_values_length: int = 0
     ) -> torch.Tensor:
         if (input_ids is not None) == (inputs_embeds is not None):
             raise ValueError('Must specify either input_ids or inputs_embeds!')
@@ -235,7 +237,7 @@ class BertForSequenceClassification(BertPreTrainedModel):
     e.g., GLUE tasks.
     """
 
-    def __init__(self, prertained_model, num_labels=None):
+    def __init__(self, prertained_model, num_labels=None, num_dmr_labels=None):
         super().__init__(prertained_model.config)
         # Overwritting num_labels if those were provided during constructio since the foundational model features classifier with 2 labels
         # Sometimes, one need to overwrite it before fine-tunning for multi-label learning
@@ -249,7 +251,11 @@ class BertForSequenceClassification(BertPreTrainedModel):
 
         self.bert = BertModel(prertained_model.bert) # Reconstructing original model 
         self.dropout = prertained_model.dropout
-        self.classifier = prertained_model.classifier
+        self.num_dmr_labels = num_dmr_labels
+        if num_dmr_labels is None:
+            self.classifier = prertained_model.classifier
+        else:
+            self.classifier = DMRAttentionClassifier(prertained_model.config)
 
         # Initialize weights and apply final processing
         self.post_init() 
@@ -269,6 +275,7 @@ class BertForSequenceClassification(BertPreTrainedModel):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
+        dmr_ids: Optional[torch.Tensor] =None  # DMR labels
     ) -> Union[Tuple[torch.Tensor], SequenceClassifierOutput]:
         # labels (`torch.LongTensor` of shape `(batch_size,)`, *optional*):
         # Labels for computing the sequence classification/regression loss.
@@ -296,7 +303,12 @@ class BertForSequenceClassification(BertPreTrainedModel):
         pooled_output = outputs[1]
 
         pooled_output = self.dropout(pooled_output)
-        logits = self.classifier(pooled_output)
+        if self.num_dmr_labels is None:
+            logits = self.classifier(pooled_output)
+        else:
+            logits,_ = self.classifier(
+                pooled_output, dmr_ids, attention_mask
+            )
 
         loss = None
         if labels is not None:
@@ -382,15 +394,16 @@ class EpigenDnabert2():
                   use_m6a_methylation=False,
                   trust_remote_code=True,
                   use_triton=True,
-                  training_args=None):
+                  training_args=None,
+                  num_dmr_labels=None):
         
         assert len(foundation_model_huggingface), "Must specify foundation model path hosted on Hugging Face"
-
+        self.num_dmr_labels = num_dmr_labels
 
         # Helper method to initialize and customize the model
         def initialize_model_with_custom_embeddings(base_model, use_cpg, use_m6a, num_labels=None):
             base_model.bert.embeddings = BertEmbeddings(base_model.bert, use_cpg, use_m6a)
-            return BertForSequenceClassification(base_model, num_labels=num_labels)
+            return BertForSequenceClassification(base_model, num_labels=num_labels,num_dmr_labels=num_dmr_labels)
         
         config = BertForSequenceClassification.config_class.from_pretrained(foundation_model_huggingface)
         config = BertConfig(**config.to_dict(),use_triton=use_triton)
