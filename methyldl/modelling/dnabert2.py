@@ -255,8 +255,9 @@ class BertForSequenceClassification(BertPreTrainedModel):
         if num_dmr_labels is None:
             self.classifier = prertained_model.classifier
         else:
-            self.classifier = DMRAttentionClassifier(prertained_model.config)
-
+            self.config.num_dmr_labels=num_dmr_labels
+            self.config.num_labels=num_labels
+            self.classifier = DMRAttentionClassifier(self.config)
         # Initialize weights and apply final processing
         self.post_init() 
 
@@ -300,14 +301,15 @@ class BertForSequenceClassification(BertPreTrainedModel):
             return_dict=return_dict,
         )
 
-        pooled_output = outputs[1]
-
-        pooled_output = self.dropout(pooled_output)
         if self.num_dmr_labels is None:
+            pooled_output = outputs[1]
+            pooled_output = self.dropout(pooled_output)
             logits = self.classifier(pooled_output)
         else:
+            sequence_output = outputs[0]
+            sequence_output = self.dropout(sequence_output)
             logits,_ = self.classifier(
-                pooled_output, dmr_ids, attention_mask
+                sequence_output, dmr_ids, attention_mask
             )
 
         loss = None
@@ -383,6 +385,13 @@ class TrainingArguments(transformers.TrainingArguments):
     skip_memory_metrics: bool = field(default=True)
     auto_find_batch_size: bool = field(default=False)
 
+def initialize_model_with_custom_embeddings(base_model, use_cpg, use_m6a, num_labels=None,num_dmr_labels=None):
+    base_model.bert.embeddings = BertEmbeddings(base_model.bert, use_cpg, use_m6a)
+    model = BertForSequenceClassification(base_model, num_labels=num_labels,num_dmr_labels=num_dmr_labels)
+    if num_dmr_labels is None:
+        model.classifier = nn.Linear(768,out_features=num_labels,bias=True)
+    return model
+
 class EpigenDnabert2():
     def __init__(self, 
                   foundation_model_huggingface:str = "zhihan1996/DNABERT-2-117M", 
@@ -400,11 +409,6 @@ class EpigenDnabert2():
         assert len(foundation_model_huggingface), "Must specify foundation model path hosted on Hugging Face"
         self.num_dmr_labels = num_dmr_labels
 
-        # Helper method to initialize and customize the model
-        def initialize_model_with_custom_embeddings(base_model, use_cpg, use_m6a, num_labels=None):
-            base_model.bert.embeddings = BertEmbeddings(base_model.bert, use_cpg, use_m6a)
-            return BertForSequenceClassification(base_model, num_labels=num_labels,num_dmr_labels=num_dmr_labels)
-        
         config = BertForSequenceClassification.config_class.from_pretrained(foundation_model_huggingface)
         config = BertConfig(**config.to_dict(),use_triton=use_triton)
         # Does not load weights just yet, because if we have a checkpoint, the weights will be retrived from it 
@@ -415,8 +419,8 @@ class EpigenDnabert2():
                 config = config,
                 local_files_only=True,  
                 cache_dir=None)  
-        model = initialize_model_with_custom_embeddings(base_model, use_cpg_methylation, use_m6a_methylation,num_labels=num_labels)
-        model.classifier = nn.Linear(768,out_features=num_labels,bias=True)
+        model = initialize_model_with_custom_embeddings(base_model, use_cpg_methylation, use_m6a_methylation,num_labels=num_labels,num_dmr_labels=num_dmr_labels)
+
         self.num_labels=num_labels
         model.num_labels = num_labels
         if fine_tuned_model_path is not None:
@@ -434,8 +438,7 @@ class EpigenDnabert2():
                 foundation_model_huggingface,
                 trust_remote_code=trust_remote_code,
                 config = config)
-            model = initialize_model_with_custom_embeddings(base_model, use_cpg_methylation, use_m6a_methylation,num_labels=num_labels)
-            model.classifier = nn.Linear(768,out_features=num_labels,bias=True)
+            model = initialize_model_with_custom_embeddings(base_model, use_cpg_methylation, use_m6a_methylation,num_labels=num_labels,num_dmr_labels=num_dmr_labels)
         self.model = model
         self.num_labels = num_labels
         self.config = config
