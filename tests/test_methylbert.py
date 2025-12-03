@@ -151,8 +151,8 @@ class TestMethylBertFinetuneDataset(unittest.TestCase):
         # Create example data
         data = [
             ["dna_seq", "methyl_seq", "ctype", "dmr_ctype", "dmr_label"],
-            ["AAA TTT CCC", "012", "type1", "type1", "0"],
-            ["GGG AAA TTT", "120", "type1", "type2", "1"]
+            ["AAA TTT CCC", "012", "0", "0", "0"],
+            ["GGG AAA TTT", "120", "1", "0", "1"]
         ]
         
         dataset = MethylBertFinetuneDataset(
@@ -168,7 +168,7 @@ class TestMethylBertFinetuneDataset(unittest.TestCase):
         """Test retrieving items from dataset."""
         data = [
             ["dna_seq", "methyl_seq", "ctype", "dmr_ctype", "dmr_label"],
-            ["AAA TTT CCC", "012", "type1", "type1", "0"]
+            ["AAA TTT CCC", "012", "0", "1", "0"]
         ]
         
         dataset = MethylBertFinetuneDataset(
@@ -196,7 +196,7 @@ class TestMethylBertFinetuneDataset(unittest.TestCase):
         """Test that dataset adds default dmr_label if missing."""
         data = [
             ["dna_seq", "methyl_seq", "ctype", "dmr_ctype"],
-            ["AAA TTT", "01", "type1", "type1"]
+            ["AAA TTT", "01", "0", "1"]
         ]
         
         dataset = MethylBertFinetuneDataset(
@@ -214,7 +214,7 @@ class TestMethylBertFinetuneDataset(unittest.TestCase):
         """Test that SOS and EOS tokens are added."""
         data = [
             ["dna_seq", "methyl_seq", "ctype", "dmr_ctype", "dmr_label"],
-            ["AAA TTT", "01", "type1", "type1", "0"]
+            ["AAA TTT", "01", "1", "0", "0"]
         ]
         
         dataset = MethylBertFinetuneDataset(
@@ -236,9 +236,9 @@ class TestMethylBertFinetuneDataset(unittest.TestCase):
         """Test num_dmrs method."""
         data = [
             ["dna_seq", "methyl_seq", "ctype", "dmr_ctype", "dmr_label"],
-            ["AAA", "0", "type1", "type1", "0"],
-            ["TTT", "1", "type1", "type2", "1"],
-            ["CCC", "2", "type2", "type2", "2"]
+            ["AAA", "0", "1", "1", "0"],
+            ["TTT", "1", "2", "1", "1"],
+            ["CCC", "2", "2", "1", "2"]
         ]
         
         dataset = MethylBertFinetuneDataset(
