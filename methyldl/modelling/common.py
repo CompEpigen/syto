@@ -1,5 +1,7 @@
 import torch
 import torch.nn as nn
+from typing import Dict
+import torch.nn.functional as F
 
 class DMRAttentionClassifier(nn.Module):
     """
@@ -8,6 +10,7 @@ class DMRAttentionClassifier(nn.Module):
     """
     def __init__(self, config):
         super().__init__()
+
         self.hidden_size = config.hidden_size
         self.num_labels = config.num_labels
         self.num_dmr_labels = config.num_dmr_labels
@@ -15,7 +18,7 @@ class DMRAttentionClassifier(nn.Module):
         # DMR embedding layer
         self.dmr_embedding = nn.Embedding(
             num_embeddings=self.num_dmr_labels, 
-            embedding_dim=config.hidden_size
+            embedding_dim=self.hidden_size
         )
         
         # Single-head attention components
@@ -75,7 +78,7 @@ class DMRAttentionClassifier(nn.Module):
         if attention_mask is not None:
             # Expand mask for attention computation
             extended_mask = attention_mask.unsqueeze(1).expand(-1, seq_len, -1)  # [batch_size, seq_len, seq_len]
-            attention_scores = attention_scores.masked_fill(extended_mask == 0, -1e9)
+            attention_scores = attention_scores.masked_fill(extended_mask == 0, -1e+4)
         
         # Compute attention weights
         attention_weights = F.softmax(attention_scores, dim=-1)  # [batch_size, seq_len, seq_len]
