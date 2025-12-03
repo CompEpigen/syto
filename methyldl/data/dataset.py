@@ -167,7 +167,7 @@ class SupervisedDataset(Dataset):
         if self.labels is not None:
             item["labels"] = torch.tensor(self.labels[i])
         if self.include_dmr_ids:
-            item["dmr_labels"] = torch.tensor(self.dmr_ids[i])
+            item["dmr_ids"] = torch.tensor(self.dmr_ids[i])
         return item
 
 
@@ -197,8 +197,8 @@ class DataCollatorForSupervisedDataset:
             )
         if "labels" in batch:
             batch["labels"] = torch.tensor(batch["labels"], dtype=torch.long)
-        if "dmr_labels" in batch:
-            batch["dmr_labels"]  = torch.tensor(batch["dmr_labels"], dtype=torch.long)
+        if "dmr_ids" in batch:
+            batch["dmr_ids"]  = torch.tensor(batch["dmr_ids"], dtype=torch.long)
 
         return batch
 
