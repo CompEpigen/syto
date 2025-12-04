@@ -317,7 +317,7 @@ class TestMethylBert(unittest.TestCase):
     
     def setUp(self):
         """Set up test fixtures."""
-        self.foundation_model = "hanyangii/methylbert_hg19_2l"
+        self.foundation_model = "foundationalModels/methylbert_hg19_12l"
         self.seq_len = 150
         self.config = default_methylbert_config.copy()
     
@@ -330,7 +330,7 @@ class TestMethylBert(unittest.TestCase):
             load_weights=load_weights,
             num_labels=num_labels,
             num_dmr_labels=num_dmr_labels,
-            output_dir = "test_container_tmp/tmp_trainer"
+            output_dir = "../test_container_tmp/tmp_trainer"
         )
     
     def test_model_initialization_without_weights(self):
@@ -361,7 +361,7 @@ class TestMethylBert(unittest.TestCase):
             load_weights=False,
             num_labels=2,
             num_dmr_labels=10,
-            output_dir = "test_container_tmp/tmp_trainer"
+            output_dir = "../test_container_tmp/tmp_trainer"
         )
         
         self.assertEqual(model.training_args.learning_rate, 0.001)
@@ -412,7 +412,7 @@ class TestMethylBertFineTune(unittest.TestCase):
     
     def setUp(self):
         """Set up test fixtures."""
-        self.foundation_model = "hanyangii/methylbert_hg19_2l"
+        self.foundation_model = "foundationalModels/methylbert_hg19_12l"
         self.seq_len = 150
         self.config = default_methylbert_config.copy()
         self.vocab = MethylVocab(k=3)
@@ -446,7 +446,7 @@ class TestMethylBertFineTune(unittest.TestCase):
             load_weights=False,
             num_labels=2,
             num_dmr_labels=10,
-            output_dir = "test_container_tmp/tmp_trainer"
+            output_dir = "../test_container_tmp/tmp_trainer"
         )
         
         train_dataset = self._create_test_dataset(10)
@@ -486,7 +486,7 @@ class TestMethylBertFineTune(unittest.TestCase):
             load_weights=False,
             num_labels=2,
             num_dmr_labels=10,
-            output_dir = "test_container_tmp/tmp_trainer"
+            output_dir = "../test_container_tmp/tmp_trainer"
         )
         
         from methyldl.data.dataset import generate_example_data_for_methylbert
