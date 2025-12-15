@@ -20,7 +20,7 @@ class TestEpigenDnabert2Predict(unittest.TestCase):
             learning_rate = 3e-5,
             fp16 = True,
             save_steps = 10,
-            output_dir ="test_container_tmp/dnabert2_default",
+            output_dir ="../test_container_tmp/dnabert2_default",
             eval_strategy = "steps",
             eval_steps = 10, 
             warmup_steps = 100, 

@@ -738,7 +738,7 @@ class DismirMLflowExperiment(AbstractMLFlowExperiment):
                 )
                 
                 # Save predictions as artifacts
-                predictions_dir = f"predictions_{dataset_name}"
+                predictions_dir = os.path.join(output_dir, f"predictions_{dataset_name}")
                 os.makedirs(predictions_dir, exist_ok=True)
                 
                 for split, pred_df in all_predictions.items():
@@ -767,7 +767,7 @@ class DismirMLflowExperiment(AbstractMLFlowExperiment):
                 }
                 
                 # Save results as JSON artifact
-                results_file = f"results_{dataset_name}.json"
+                results_file = os.path.join(output_dir, f"results_{dataset_name}.json")
                 with open(results_file, 'w') as f:
                     json.dump(results, f, indent=2, default=str)
                 mlflow.log_artifact(results_file, "results")
@@ -1236,7 +1236,7 @@ class EpigenBERT2MLflowExperiment(TransformersMLFLowExperiment):
                     mlflow.log_metric(f"{split}_{metric_name}", metric_value)
             
             # Save predictions as artifacts
-            predictions_dir = f"predictions_{dataset_name}"
+            predictions_dir = os.path.join(output_dir, f"predictions_{dataset_name}")
             os.makedirs(predictions_dir, exist_ok=True)
             
             for split, pred_df in all_predictions.items():
@@ -1267,7 +1267,7 @@ class EpigenBERT2MLflowExperiment(TransformersMLFLowExperiment):
             }
             
             # Save results as JSON artifact
-            results_file = f"results_{dataset_name}.json"
+            results_file = os.path.join(output_dir, f"results_{dataset_name}.json")
             with open(results_file, 'w') as f:
                 json.dump(results, f, indent=2, default=str)
             mlflow.log_artifact(results_file, "results")
@@ -1690,7 +1690,7 @@ class MethylBertMLflowExperiment(TransformersMLFLowExperiment):
                         mlflow.log_metric(f"{split}_{metric_name}", metric_value)
                 
                 # Save predictions as artifacts
-                predictions_dir = f"predictions_{dataset_name}"
+                predictions_dir = os.path.join(output_dir, f"predictions_{dataset_name}")
                 os.makedirs(predictions_dir, exist_ok=True)
                 
                 for split, pred_df in all_predictions.items():
@@ -1721,7 +1721,7 @@ class MethylBertMLflowExperiment(TransformersMLFLowExperiment):
                 }
                 
                 # Save results as JSON artifact
-                results_file = f"results_{dataset_name}.json"
+                results_file = os.path.join(output_dir, f"results_{dataset_name}.json")
                 with open(results_file, 'w') as f:
                     json.dump(results, f, indent=2, default=str)
                 mlflow.log_artifact(results_file, "results")

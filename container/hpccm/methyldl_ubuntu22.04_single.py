@@ -49,6 +49,9 @@ Stage0 += shell(commands=[
 # Create workspace directory
 Stage0 += shell(commands=['mkdir -p /workspace/methyldl'])
 
+# Create test_container_tmp directory
+Stage0 += shell(commands=['mkdir -p /workspace/methyldl/test_container_tmp'])
+
 # Copy package files (dependency files first for better caching)
 Stage0 += copy(src='./pyproject.toml', dest='/workspace/methyldl/pyproject.toml')
 Stage0 += copy(src='./poetry.lock', dest='/workspace/methyldl/poetry.lock')

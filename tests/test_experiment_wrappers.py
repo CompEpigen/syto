@@ -487,7 +487,7 @@ class TestDismirMLFlowExperiment(ExperimentTestBase):
         
         # Run training
         results = experiment.train_dataset('sample_dataset_1', epochs=2, batch_size=32,
-                                           output_dir="test_container_tmp/dismir_output")
+                                           output_dir="../test_container_tmp/dismir_output")
         
         # Verify results
         self.assertIn('dataset', results)
@@ -532,7 +532,7 @@ class TestEpigenBERT2MLflowExperiment(ExperimentTestBase):
             per_device_eval_batch_size=4, 
             eval_loss_threshold=0.7,
             check_at_step=10,  # Lower step count for testing
-            output_dir="test_container_tmp/dnabert2_output"
+            output_dir="../test_container_tmp/dnabert2_output"
         )
         
         # Verify results structure
@@ -572,7 +572,7 @@ class TestMethylBertMlFlowExperiment(ExperimentTestBase):
             'sample_dataset_1',
             epochs=1,  # Minimal epochs
             batch_size=4,
-            output_dir="test_container_tmp/methylbert_output"
+            output_dir="../test_container_tmp/methylbert_output"
         )
         
         # Verify results
