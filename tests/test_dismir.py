@@ -182,10 +182,18 @@ class TestDismirPredict(DismirTestBase):
         """Test prediction with custom classification threshold."""
         dna_sequences = ['ATCG' * 20] * 5
         methylation_sequences = ['0101' * 20] * 5
-        
+        model = Dismir(
+            max_sequence_length=128,
+            train_data_path=self.train_path,
+            test_data_path=self.test_path,
+            valid_data_path=self.valid_path,
+            flavour="lstm",
+            num_labels=1,
+            device=torch.device('cpu')
+        )
         # Test with different thresholds
         for threshold in [0.3, 0.5, 0.7]:
-            probs, labels = self.model.predict(
+            probs, labels = model.predict(
                 dna_sequences,
                 methylation_sequences,
                 threshold=threshold
