@@ -3,12 +3,14 @@
 # test_container.sh - Test MethylDL container image
 #
 # Usage:
-#   ./test_container.sh <recipe_name> [options]
+#   ./test_container.sh <image_path> [options]
 #
 # Examples:
-#   ./test_container.sh methyldl_ubuntu22_single
-#   ./test_container.sh methyldl_rockylinux9_multi --verbose
-#   ./test_container.sh methyldl_ubuntu22_single --quick
+#   ./test_container.sh ./images/methyldl_ubuntu22_single.sif
+#   ./test_container.sh /absolute/path/to/container.sif --verbose
+#   ./test_container.sh container.sif --quick --bind /data:/mnt/data
+#   ./test_container.sh container.sif --bind $VSC_DATA --bind $VSC_SCRATCH
+#   ./test_container.sh container.sif --bind $VSC_SCRATCH --mlflow-test-storage $VSC_SCRATCH/mlflow_tmp
 #
 
 set -e  # Exit on error
@@ -24,11 +26,6 @@ NC='\033[0m' # No Color
 
 # Script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONTAINER_DIR="$(dirname "$SCRIPT_DIR")"
-PROJECT_ROOT="$(dirname "$CONTAINER_DIR")"
-
-# Default directories
-IMAGE_DIR="${CONTAINER_DIR}/images"
 
 # Test options
 QUICK_TEST=false
@@ -38,6 +35,12 @@ TEST_POETRY=true
 TEST_IMPORTS=true
 TEST_DISK=true
 TEST_COVERAGE=true
+
+# Bind mount options
+BIND_MOUNTS=()
+
+# MLflow configuration
+MLFLOW_TEST_STORAGE=""
 
 # Function to print colored output
 print_info() {
@@ -67,32 +70,52 @@ print_error() {
 # Function to print usage
 usage() {
     cat << EOF
-Usage: $0 <recipe_name> [options]
+Usage: $0 <image_path> [options]
 
 Test MethylDL container image functionality.
 
 Arguments:
-  recipe_name       Name of the recipe/image (without .sif extension)
-                    Examples: methyldl_ubuntu22_single, methyldl_rockylinux9_multi
+  image_path        Path to container image (.sif file)
+                    Can be relative or absolute path
+                    Examples: ./container.sif, /path/to/container.sif
 
 Options:
-  --quick           Run quick tests only (skip imports and disk tests)
-  --no-gpu          Skip GPU tests
-  --no-poetry       Skip Poetry tests
-  --no-imports      Skip package import tests
-  --no-coverage     Skip package coverage tests
-  --verbose         Show verbose output
-  -h, --help        Show this help message
+  --bind PATH[:DEST]    Bind mount a directory into the container
+                        Can be specified multiple times
+                        Examples: --bind /data, --bind /data:/mnt/data
+                        Common HPC usage: --bind \$VSC_DATA --bind \$VSC_SCRATCH
+  --mlflow-test-storage PATH
+                        Set MLflow storage path for test artifacts and runs
+                        Sets MLFLOW_TRACKING_URI=file://PATH for local file-based tracking
+                        Path should be accessible (use --bind if needed)
+                        MLflow will create subdirectories for experiments and artifacts
+                        Example: --mlflow-test-storage \$VSC_SCRATCH/mlflow_tmp
+  --quick               Run quick tests only (skip imports and disk tests)
+  --no-gpu              Skip GPU tests
+  --no-poetry           Skip Poetry tests
+  --no-imports          Skip package import tests
+  --no-coverage         Skip package coverage tests
+  --verbose             Show verbose output
+  -h, --help            Show this help message
 
 Examples:
-  # Full test suite
-  $0 methyldl_ubuntu22_single
+  # Full test suite with local image
+  $0 ./images/methyldl_ubuntu22_single.sif
 
-  # Quick test
-  $0 methyldl_ubuntu22_single --quick
+  # Quick test with absolute path
+  $0 /path/to/container.sif --quick
 
-  # Test without GPU checks
-  $0 methyldl_ubuntu22_single --no-gpu
+  # Test without GPU checks, with bind mount
+  $0 container.sif --no-gpu --bind /scratch/data
+
+  # HPC usage with environment variables
+  $0 ./container.sif --bind \$VSC_DATA --bind \$VSC_SCRATCH
+
+  # HPC with MLflow storage on scratch
+  $0 ./container.sif --bind \$VSC_SCRATCH --mlflow-test-storage \$VSC_SCRATCH/mlflow_tmp
+
+  # Multiple bind mounts with custom destinations
+  $0 container.sif --bind /data:/mnt/data --bind /scratch:/mnt/scratch
 
 Test Categories:
   1. Image inspection (labels, metadata)
@@ -102,6 +125,7 @@ Test Categories:
   5. Package imports (PyTorch, Transformers, etc.)
   6. File system structure
   7. Application entry point
+  8. Package unit tests (if --no-coverage not set)
 
 EOF
     exit 0
@@ -109,46 +133,58 @@ EOF
 
 # Parse arguments
 if [ $# -eq 0 ]; then
-    print_error "No recipe name provided"
+    print_error "No image path provided"
     usage
 fi
 
-RECIPE_NAME="$1"
+IMAGE_PATH="$1"
 shift
 
-# ==========================================
-# Overlay setup
-# ==========================================
-OVERLAY_DIR="${SCRIPT_DIR}/temp_test_dir"
-KEEP_OVERLAY=false
-
-# Parse additional argument
+# Parse additional arguments
 while [ $# -gt 0 ]; do
     case "$1" in
-        --keep-overlay)
-            KEEP_OVERLAY=true
+        --bind)
+            if [ $# -lt 2 ]; then
+                print_error "--bind requires an argument"
+                usage
+            fi
+            BIND_MOUNTS+=("$2")
+            shift 2
             ;;
-        # (keep other options as-is)
+        --mlflow-test-storage)
+            if [ $# -lt 2 ]; then
+                print_error "--mlflow-test-storage requires an argument"
+                usage
+            fi
+            MLFLOW_TEST_STORAGE="$2"
+            shift 2
+            ;;
         --quick)
             QUICK_TEST=true
             TEST_IMPORTS=false
             TEST_DISK=false
+            shift
             ;;
         --no-gpu)
             TEST_GPU=false
+            shift
             ;;
         --no-poetry)
             TEST_POETRY=false
+            shift
             ;;
         --no-imports)
             TEST_IMPORTS=false
+            shift
             ;;
         --no-coverage)
             TEST_COVERAGE=false
+            shift
             ;;
         --verbose)
             VERBOSE=true
             set -x
+            shift
             ;;
         -h|--help)
             usage
@@ -158,25 +194,52 @@ while [ $# -gt 0 ]; do
             usage
             ;;
     esac
-    shift
 done
 
 # ==========================================
-# Create temporary overlay directory
+# Resolve image path
 # ==========================================
-print_info "Creating overlay directory: ${OVERLAY_DIR}"
-mkdir -p "$OVERLAY_DIR"
+# Convert to absolute path if relative
+if [[ "$IMAGE_PATH" != /* ]]; then
+    IMAGE_PATH="$(cd "$(dirname "$IMAGE_PATH")" && pwd)/$(basename "$IMAGE_PATH")"
+fi
 
-# Define a cleanup function
-cleanup() {
-    if [ "$KEEP_OVERLAY" = false ]; then
-        print_info "Cleaning up overlay directory: ${OVERLAY_DIR}"
-        rm -rf "$OVERLAY_DIR"
+# Extract image name for display
+IMAGE_NAME="$(basename "$IMAGE_PATH")"
+
+# ==========================================
+# Build bind mount arguments
+# ==========================================
+BIND_ARGS=()
+if [ ${#BIND_MOUNTS[@]} -gt 0 ]; then
+    for bind_path in "${BIND_MOUNTS[@]}"; do
+        BIND_ARGS+=("--bind" "$bind_path")
+    done
+fi
+
+# ==========================================
+# Build MLflow environment variables
+# ==========================================
+MLFLOW_ENV_ARGS=()
+if [ -n "$MLFLOW_TEST_STORAGE" ]; then
+    # Create the directory if it doesn't exist (on host)
+    if [[ "$MLFLOW_TEST_STORAGE" != /* ]]; then
+        # Convert relative to absolute
+        MLFLOW_ABS_PATH="$(cd "$(dirname "$MLFLOW_TEST_STORAGE")" 2>/dev/null && pwd)/$(basename "$MLFLOW_TEST_STORAGE")" || MLFLOW_ABS_PATH="$MLFLOW_TEST_STORAGE"
     else
-        print_warning "Overlay directory kept for debugging: ${OVERLAY_DIR}"
+        MLFLOW_ABS_PATH="$MLFLOW_TEST_STORAGE"
     fi
-}
-trap cleanup EXIT
+    
+    print_info "Setting up MLflow test storage: ${MLFLOW_ABS_PATH}"
+    mkdir -p "$MLFLOW_ABS_PATH" 2>/dev/null || print_warning "Could not create MLflow directory (may already exist or need permissions)"
+    
+    # Set environment variables for MLflow
+    # MLFLOW_TRACKING_URI controls where MLflow client writes data
+    # This is the key variable for file-based tracking without a server
+    MLFLOW_ENV_ARGS+=(
+        "--env" "MLFLOW_TRACKING_URI=file://${MLFLOW_TEST_STORAGE}"
+    )
+fi
 
 # ==========================================
 # Apptainer wrapper functions
@@ -185,35 +248,59 @@ apptainer_exec_wrapper() {
     # Generic wrapper for all Apptainer operations
     local subcmd="$1"
     shift
-    apptainer "$subcmd" --overlay "$OVERLAY_DIR" "$@"
+    
+    # Build command with bind mounts and environment variables if provided
+    local all_args=()
+    
+    # Add bind mounts
+    if [ ${#BIND_ARGS[@]} -gt 0 ]; then
+        all_args+=("${BIND_ARGS[@]}")
+    fi
+    
+    # Add MLflow environment variables
+    if [ ${#MLFLOW_ENV_ARGS[@]} -gt 0 ]; then
+        all_args+=("${MLFLOW_ENV_ARGS[@]}")
+    fi
+    
+    # Execute with all arguments
+    if [ ${#all_args[@]} -gt 0 ]; then
+        apptainer "$subcmd" "${all_args[@]}" "$@"
+    else
+        apptainer "$subcmd" "$@"
+    fi
 }
 
 # Convenience wrappers
 appt_exec()     { apptainer_exec_wrapper exec "$@"; }
 appt_inspect()  { apptainer_exec_wrapper inspect "$@"; }
 appt_runhelp()  { apptainer_exec_wrapper run-help "$@"; }
-
-# Define image path
-IMAGE_FILE="${IMAGE_DIR}/${RECIPE_NAME}.sif"
+appt_run()      { apptainer_exec_wrapper run "$@"; }
 
 # Print test configuration
 print_info "=========================================="
 print_info "MethylDL Container Test Suite"
 print_info "=========================================="
-print_info "Image:      ${RECIPE_NAME}"
-print_info "Path:       ${IMAGE_FILE}"
+print_info "Image:      ${IMAGE_NAME}"
+print_info "Path:       ${IMAGE_PATH}"
 print_info "Quick test: ${QUICK_TEST}"
 print_info "Test GPU:   ${TEST_GPU}"
+if [ ${#BIND_MOUNTS[@]} -gt 0 ]; then
+    print_info "Bind mounts:"
+    for bind in "${BIND_MOUNTS[@]}"; do
+        print_info "  - ${bind}"
+    done
+fi
+if [ -n "$MLFLOW_TEST_STORAGE" ]; then
+    print_info "MLflow storage: ${MLFLOW_TEST_STORAGE}"
+fi
 print_info "=========================================="
 echo ""
 
 # Check if image exists
-if [ ! -f "$IMAGE_FILE" ]; then
-    print_error "Image file not found: ${IMAGE_FILE}"
-    print_info "Available images:"
-    ls -1 "${IMAGE_DIR}"/*.sif 2>/dev/null | xargs -n 1 basename | sed 's/^/  - /' || echo "  (none)"
+if [ ! -f "$IMAGE_PATH" ]; then
+    print_error "Image file not found: ${IMAGE_PATH}"
     print_info ""
-    print_info "Build an image first with: ./build_container.sh ${RECIPE_NAME}"
+    print_info "Please provide a valid path to a .sif container image"
     exit 1
 fi
 
@@ -280,17 +367,17 @@ print_info "=== Test Category 1: Image Inspection ==="
 echo ""
 
 run_test "Inspect image metadata" \
-    "apptainer inspect '$IMAGE_FILE' | head -5" \
+    "apptainer inspect '$IMAGE_PATH' | head -5" \
     "" \
     "true"
 
 run_test "Check image labels" \
-    "apptainer inspect --labels '$IMAGE_FILE'" \
+    "apptainer inspect --labels '$IMAGE_PATH'" \
     "maintainer" \
     "true"
 
 run_test "Image size" \
-    "du -h '$IMAGE_FILE' | cut -f1" \
+    "du -h '$IMAGE_PATH' | cut -f1" \
     "" \
     "true"
 
@@ -302,29 +389,37 @@ print_info "=== Test Category 2: System Verification ==="
 echo ""
 
 run_test "Python version" \
-    "apptainer exec '$IMAGE_FILE' python3 --version" \
+    "appt_exec '$IMAGE_PATH' python3 --version" \
     "Python 3.12" \
     "true"
 
 run_test "Python path" \
-    "apptainer exec '$IMAGE_FILE' which python3" \
+    "appt_exec '$IMAGE_PATH' which python3" \
     "python3" \
     "true"
 
 run_test "Pip version" \
-    "apptainer exec '$IMAGE_FILE' python3 -m pip --version" \
+    "appt_exec '$IMAGE_PATH' python3 -m pip --version" \
     "pip" \
     "true"
 
 run_test "CUDA_HOME" \
-    "apptainer exec '$IMAGE_FILE' bash -c 'echo \$CUDA_HOME'" \
+    "appt_exec '$IMAGE_PATH' bash -c 'echo \$CUDA_HOME'" \
     "/usr/local/cuda" \
     "true"
 
 run_test "Virtual environment in PATH" \
-    "apptainer exec '$IMAGE_FILE' bash -c 'echo \$PATH | grep -o \"/workspace/methyldl/.venv/bin\"'" \
+    "appt_exec '$IMAGE_PATH' bash -c 'echo \$PATH | grep -o \"/workspace/methyldl/.venv/bin\"'" \
     "/workspace/methyldl/.venv/bin" \
     "true"
+
+# Test MLflow configuration if specified
+if [ -n "$MLFLOW_TEST_STORAGE" ]; then
+    run_test "MLflow tracking URI" \
+        "appt_exec '$IMAGE_PATH' bash -c 'echo \$MLFLOW_TRACKING_URI'" \
+        "file://${MLFLOW_TEST_STORAGE}" \
+        "true"
+fi
 
 # ==========================================
 # Test 3: GPU Detection (if available)
@@ -347,7 +442,7 @@ if [ "$TEST_GPU" = true ]; then
             "true"
         
         run_test "GPU access from container" \
-            "apptainer exec --nv '$IMAGE_FILE' nvidia-smi --query-gpu=name --format=csv,noheader" \
+            "appt_exec --nv '$IMAGE_PATH' nvidia-smi --query-gpu=name --format=csv,noheader" \
             "" \
             "true"
     else
@@ -365,27 +460,6 @@ if [ "$TEST_POETRY" = true ]; then
     print_info "=== Test Category 4: Poetry Environment ==="
     echo ""
     echo "Poetry tests are skipped for now until there is a proper way to check poetry installation"
-
-#     run_test "Poetry version" \
-#         "apptainer exec '$IMAGE_FILE' /root/.local/bin/poetry --version" \
-#         "Poetry" \
-#         "true"
-    
-#     run_test "Virtual environment path" \
-#         "apptainer exec '$IMAGE_FILE' /usr/local/bin/poetry env info --path 2>/dev/null || echo '/workspace/methyldl/.venv'" \
-#         "/workspace/methyldl/.venv" \
-#         "true"
-    
-#     run_test "Poetry virtualenvs.in-project config" \
-#         "apptainer exec '$IMAGE_FILE' /usr/local/bin/poetry config --list | grep virtualenvs.in-project" \
-#         "true" \
-#         "true"
-    
-#     run_test "Installed packages count" \
-#         "apptainer exec '$IMAGE_FILE' /usr/local/bin/poetry show 2>/dev/null | wc -l" \
-#         "" \
-#         "true"
-# 
 fi
 
 # ==========================================
@@ -397,34 +471,34 @@ if [ "$TEST_IMPORTS" = true ]; then
     echo ""
     
     run_test "PyTorch version" \
-        "apptainer exec '$IMAGE_FILE' python3 -c 'import torch; print(torch.__version__)'" \
+        "appt_exec '$IMAGE_PATH' python3 -c 'import torch; print(torch.__version__)'" \
         "" \
         "true"
     
     run_test "Transformers version" \
-        "apptainer exec '$IMAGE_FILE' python3 -c 'import transformers; print(transformers.__version__)'" \
+        "appt_exec '$IMAGE_PATH' python3 -c 'import transformers; print(transformers.__version__)'" \
         "" \
         "true"
     
     run_test "NumPy version" \
-        "apptainer exec '$IMAGE_FILE' python3 -c 'import numpy; print(numpy.__version__)'" \
+        "appt_exec '$IMAGE_PATH' python3 -c 'import numpy; print(numpy.__version__)'" \
         "" \
         "true"
     
     if [ "$TEST_GPU" = true ] && command -v nvidia-smi &> /dev/null; then
         run_test "PyTorch CUDA availability" \
-            "apptainer exec --nv '$IMAGE_FILE' python3 -c 'import torch; print(\"CUDA available:\", torch.cuda.is_available())'" \
+            "appt_exec --nv '$IMAGE_PATH' python3 -c 'import torch; print(\"CUDA available:\", torch.cuda.is_available())'" \
             "CUDA available: True" \
             "true"
         
         run_test "PyTorch GPU count" \
-            "apptainer exec --nv '$IMAGE_FILE' python3 -c 'import torch; print(torch.cuda.device_count(), \"GPU(s) detected\")'" \
+            "appt_exec --nv '$IMAGE_PATH' python3 -c 'import torch; print(torch.cuda.device_count(), \"GPU(s) detected\")'" \
             "" \
             "true"
     fi
     
     run_test "MethylDL package" \
-        "apptainer exec '$IMAGE_FILE' python3 -c 'import methyldl; print(\"MethylDL imported successfully\")'" \
+        "appt_exec '$IMAGE_PATH' python3 -c 'import methyldl; print(\"MethylDL imported successfully\")'" \
         "MethylDL imported successfully" \
         "true"
 fi
@@ -438,39 +512,76 @@ if [ "$TEST_DISK" = true ]; then
     echo ""
     
     run_test "Workspace directory exists" \
-        "apptainer exec '$IMAGE_FILE' test -d /workspace/methyldl && echo 'OK'" \
+        "appt_exec '$IMAGE_PATH' test -d /workspace/methyldl && echo 'OK'" \
         "OK" \
         "false"
     
     run_test "Virtual environment exists" \
-        "apptainer exec '$IMAGE_FILE' test -d /workspace/methyldl/.venv && echo 'OK'" \
+        "appt_exec '$IMAGE_PATH' test -d /workspace/methyldl/.venv && echo 'OK'" \
         "OK" \
         "false"
     
     run_test "Cache directory exists" \
-        "apptainer exec '$IMAGE_FILE' test -d /workspace/cache && echo 'OK'" \
+        "appt_exec '$IMAGE_PATH' test -d /workspace/cache && echo 'OK'" \
         "OK" \
         "false"
     
     run_test "Data directory exists" \
-        "apptainer exec '$IMAGE_FILE' test -d /workspace/data && echo 'OK'" \
+        "appt_exec '$IMAGE_PATH' test -d /workspace/data && echo 'OK'" \
         "OK" \
         "false"
     
     run_test "Outputs directory exists" \
-        "apptainer exec '$IMAGE_FILE' test -d /workspace/outputs && echo 'OK'" \
+        "appt_exec '$IMAGE_PATH' test -d /workspace/outputs && echo 'OK'" \
         "OK" \
         "false"
     
     run_test "App directory exists" \
-        "apptainer exec '$IMAGE_FILE' test -d /workspace/methyldl/App && echo 'OK'" \
+        "appt_exec '$IMAGE_PATH' test -d /workspace/methyldl/App && echo 'OK'" \
         "OK" \
         "false"
     
     run_test "main.py exists" \
-        "apptainer exec '$IMAGE_FILE' test -f /workspace/methyldl/App/main.py && echo 'OK'" \
+        "appt_exec '$IMAGE_PATH' test -f /workspace/methyldl/App/main.py && echo 'OK'" \
         "OK" \
         "false"
+    
+    # Test bind mounts if any were specified
+    if [ ${#BIND_MOUNTS[@]} -gt 0 ]; then
+        echo ""
+        print_info "Testing bind mounts:"
+        for bind in "${BIND_MOUNTS[@]}"; do
+            # Extract source path (before colon, or entire string if no colon)
+            source_path="${bind%%:*}"
+            # Extract destination path (after colon, or same as source if no colon)
+            if [[ "$bind" == *":"* ]]; then
+                dest_path="${bind#*:}"
+            else
+                dest_path="$source_path"
+            fi
+            
+            run_test "Bind mount accessible: ${dest_path}" \
+                "appt_exec '$IMAGE_PATH' test -d '$dest_path' && echo 'OK'" \
+                "OK" \
+                "false"
+        done
+    fi
+    
+    # Test MLflow storage accessibility
+    if [ -n "$MLFLOW_TEST_STORAGE" ]; then
+        echo ""
+        print_info "Testing MLflow storage:"
+        
+        run_test "MLflow storage directory accessible" \
+            "appt_exec '$IMAGE_PATH' test -d '$MLFLOW_TEST_STORAGE' && echo 'OK'" \
+            "OK" \
+            "false"
+        
+        run_test "MLflow storage writable" \
+            "appt_exec '$IMAGE_PATH' bash -c 'touch \"$MLFLOW_TEST_STORAGE/.test_write\" && rm \"$MLFLOW_TEST_STORAGE/.test_write\" && echo \"OK\"'" \
+            "OK" \
+            "false"
+    fi
 fi
 
 # ==========================================
@@ -481,12 +592,12 @@ print_info "=== Test Category 7: Application Entry Point ==="
 echo ""
 
 run_test "Runscript help available" \
-    "apptainer run-help '$IMAGE_FILE' | head -3" \
+    "apptainer run-help '$IMAGE_PATH' | head -3" \
     "" \
     "true"
 
 run_test "Container executable" \
-    "apptainer exec '$IMAGE_FILE' test -x /workspace/methyldl/App/main.py && echo 'main.py is accessible' || echo 'main.py exists'" \
+    "appt_exec '$IMAGE_PATH' test -x /workspace/methyldl/App/main.py && echo 'main.py is accessible' || echo 'main.py exists'" \
     "" \
     "true"
 
@@ -502,10 +613,11 @@ if [ "$TEST_COVERAGE" = true ]; then
     print_test "Running MethylDL unit tests (this may take ~80 seconds)..."
     
     # Run both coverage run AND coverage report in the same exec
-    # unit_test_output=$(apptainer exec --writable-tmpfs --nv "$IMAGE_FILE" bash -c 'coverage run && coverage report --skip-empty' 2>&1)
-    unit_test_output=$(appt_exec --nv "$IMAGE_FILE" bash -c 'cd /workspace/methyldl && coverage run && coverage report --skip-empty' 2>&1)
+    
+    unit_test_output=$(appt_exec --nv "$IMAGE_PATH" bash -c 'cd /workspace/methyldl && coverage run  && coverage report --skip-empty' 2>&1)
     unit_test_exit=$?
     
+
     if [ $unit_test_exit -eq 0 ]; then
         # Extract summary line from pytest output
         summary=$(echo "$unit_test_output" | grep "Ran .* tests in")
@@ -561,9 +673,22 @@ if [ $TESTS_FAILED -eq 0 ]; then
     print_success "All tests passed! ✓"
     print_info ""
     print_info "Container is ready to use:"
-    print_info "  Run:   apptainer run --nv ${IMAGE_FILE}"
-    print_info "  Shell: apptainer shell --nv ${IMAGE_FILE}"
-    print_info "  Help:  apptainer run-help ${IMAGE_FILE}"
+    print_info "  Run:   apptainer run --nv ${IMAGE_PATH}"
+    print_info "  Shell: apptainer shell --nv ${IMAGE_PATH}"
+    print_info "  Help:  apptainer run-help ${IMAGE_PATH}"
+    if [ ${#BIND_MOUNTS[@]} -gt 0 ] || [ -n "$MLFLOW_TEST_STORAGE" ]; then
+        print_info ""
+        print_info "With your configuration:"
+        cmd_str="apptainer run --nv"
+        for bind in "${BIND_MOUNTS[@]}"; do
+            cmd_str="${cmd_str} --bind ${bind}"
+        done
+        if [ -n "$MLFLOW_TEST_STORAGE" ]; then
+            cmd_str="${cmd_str} --env MLFLOW_TRACKING_URI=file://${MLFLOW_TEST_STORAGE}"
+        fi
+        cmd_str="${cmd_str} ${IMAGE_PATH}"
+        print_info "  ${cmd_str}"
+    fi
     echo ""
     exit 0
 else
@@ -571,12 +696,13 @@ else
     print_info ""
     print_info "The container may still be functional for some use cases."
     print_info "Review the failed tests above and check:"
-    print_info "  1. Recipe configuration"
+    print_info "  1. Container image integrity"
     print_info "  2. Build logs"
     print_info "  3. Package dependencies"
+    print_info "  4. Bind mount paths (if using --bind)"
     print_info ""
     print_info "Rerun with --verbose for more details:"
-    print_info "  $0 ${RECIPE_NAME} --verbose"
+    print_info "  $0 ${IMAGE_PATH} --verbose"
     echo ""
     exit 1
 fi
