@@ -487,7 +487,7 @@ class EpigenDnabert2():
             trust_remote_code=trust_remote_code,
         )
         self.data_collator = DataCollatorForSupervisedDataset(tokenizer=self.tokenizer)
-        self.trainer = self._init_trainer() # default trainer to use for predictions 
+        self.trainer = None
     
     def __str__(self):
         str(self.model.__str__())
