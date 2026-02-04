@@ -184,6 +184,8 @@ cython_debug/
 /Tutorials/loyfer_atlas_crazy_split
 /Tutorials/DNABERT2_*
 /test_container_tmp
+/EDA/*.pkl
+/EDA/*.pt
 
 # Singularity/Docker artifacts
 *.sif
