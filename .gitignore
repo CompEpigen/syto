@@ -180,3 +180,29 @@ cython_debug/
 /EDA/tmp_trainer
 /Tutorials/dismir
 /Tutorials/temp
+/Tutorials/methylBertLoyferWithReject*
+/Tutorials/loyfer_atlas_crazy_split
+/Tutorials/DNABERT2_*
+/test_container_tmp
+/EDA/*.pkl
+/EDA/*.pt
+
+# Singularity/Docker artifacts
+*.sif
+*.simg
+*.def
+container/definitions/*.def
+
+# Keep directory structure
+!container/definitions/.gitkeep
+!container/images/.gitkeep
+
+# Cache directories
+cache/
+outputs/
+data/
+
+# HPC logs
+*.out
+*.err
+slurm-*.out

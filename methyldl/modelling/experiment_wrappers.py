@@ -12,23 +12,24 @@ from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_sc
 import warnings
 warnings.filterwarnings('ignore')
 from methyldl.modelling.dismir import Dismir
-from transformers import TrainingArguments, EarlyStoppingCallback
-from transformers import TrainerCallback, TrainerControl, TrainerState
+from transformers import EarlyStoppingCallback
 from tqdm import tqdm
 import gc
-from methyldl.modelling.dnabert2 import EpigenDnabert2 
+from methyldl.modelling.dnabert2 import EpigenDnabert2, TrainingArguments
 from methyldl.data.dataset import SupervisedDataset 
 from typing import List, Dict
 from methyldl.data.genome import generate_kmer_str_with_overlap
 from methyldl.modelling.methylbert import MethylVocab,MethylBertFinetuneDataset
-from methyldl.modelling.methylbert import MethylBert,default_methylbert_config
+from methyldl.modelling.methylbert import MethylBert
 import random
 import time
+from methyldl.data.utils import split_long_reads
+from transformers import TrainerCallback, TrainerControl, TrainerState
 
 
 class RestartOnPoorPerformanceCallback(TrainerCallback):
     """
-    Simpler version: Only checks performance once at a specific step.
+    Only checks performance once at a specific step.
     If performance is poor, triggers restart. Otherwise, never checks again.
     """
     
@@ -89,166 +90,10 @@ class RestartOnPoorPerformanceCallback(TrainerCallback):
         self.should_restart = False
         self.has_checked = False
 
-# class RestartOnPoorPerformanceCallback(TrainerCallback):
-#     """
-#     A callback that monitors eval loss and triggers training restart if performance
-#     is poor after a specified number of logging steps.
-#     """
-    
-#     def __init__(self, 
-#                  eval_loss_threshold: float,
-#                  check_after_n_steps: int,
-#                  max_retries: int = 3,
-#                  patience_before_restart: int = 2):
-#         """
-#         Args:
-#             eval_loss_threshold: Maximum acceptable eval loss after check_after_n_steps
-#             check_after_n_steps: Number of logging steps after which to check performance
-#             max_retries: Maximum number of training restarts allowed
-#             patience_before_restart: Number of consecutive checks before restart
-#         """
-#         self.eval_loss_threshold = eval_loss_threshold
-#         self.check_after_n_steps = check_after_n_steps
-#         self.max_retries = max_retries
-#         self.patience_before_restart = patience_before_restart
-        
-#         # Internal state
-#         self.retry_count = 0
-#         self.poor_performance_count = 0
-#         self.last_check_step = 0
-#         self.should_restart = False
-#         self.eval_losses = []
-        
-#     def on_log(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
-#         """Check eval loss after specified number of logging steps."""
-        
-#         # Only proceed if we have eval loss in the current log
-#         if state.log_history and 'eval_loss' in state.log_history[-1]:
-#             current_step = state.global_step
-#             eval_loss = state.log_history[-1]['eval_loss']
-#             self.eval_losses.append(eval_loss)
-            
-#             # Check if we've reached the check point
-#             if current_step >= self.check_after_n_steps and current_step > self.last_check_step:
-#                 self.last_check_step = current_step
-                
-#                 # Check if eval loss is above threshold
-#                 if eval_loss > self.eval_loss_threshold:
-#                     self.poor_performance_count += 1
-#                     print(f"Poor performance detected: eval_loss={eval_loss:.4f} > threshold={self.eval_loss_threshold:.4f}")
-#                     print(f"Poor performance count: {self.poor_performance_count}/{self.patience_before_restart}")
-                    
-#                     # Check if we should restart
-#                     if self.poor_performance_count >= self.patience_before_restart:
-#                         if self.retry_count < self.max_retries:
-#                             self.should_restart = True
-#                             control.should_training_stop = True
-#                             print(f"Triggering restart (attempt {self.retry_count + 1}/{self.max_retries})")
-#                         else:
-#                             print(f"Max retries ({self.max_retries}) reached. Continuing with current training.")
-#                 else:
-#                     # Reset poor performance count if we're doing well
-#                     self.poor_performance_count = 0
-#                     #print(f"Performance OK: eval_loss={eval_loss:.4f} <= threshold={self.eval_loss_threshold:.4f}")
-        
-#         return control
-    
-#     def reset_for_retry(self):
-#         """Reset internal state for a new training attempt."""
-#         self.retry_count += 1
-#         self.poor_performance_count = 0
-#         self.last_check_step = 0
-#         self.should_restart = False
-#         self.eval_losses = []
-
-def split_long_reads(df: pd.DataFrame, max_read_length: int) -> pd.DataFrame:
+class AbstractMLFlowExperiment:
     """
-    Split DNA reads longer than max_read_length into smaller chunks.
-    
-    Parameters:
-    -----------
-    df : pd.DataFrame
-        DataFrame containing DNA read data
-    max_read_length : int
-        Maximum allowed read length for splitting
-    
-    Returns:
-    --------
-    pd.DataFrame
-        Transformed dataset with split reads and calculated CpG counts
-    """
-    
-    def count_cpgs(methylation_string: str) -> int:
-        """Count CpG sites (represented by '1' or '2' in methylation_ids)
-        0 - unmethylated C, 1 - methylated C, 2 - methylation status unknown"""
-        return max(sum(1 for char in methylation_string if char in ['0', '1']),1) # Setting to at least one so reads without CpGs can also take part 
-    
-    def split_single_read(row: pd.Series) -> List[Dict]:
-        """Split a single read into chunks if it exceeds max_read_length"""
-        # Extract relevant fields directly from the pandas Series
-        read_name = row['read_name']
-        input_ids = row['input_ids']
-        methylation_ids = row['methylation_ids']
-        chromosome = row['chromosome']
-        original_file = row['original_file']
-        label = row['label']
-        if "dmr_id" in row.keys():
-            dmr_id = row["dmr_id"]
-        else:
-            dmr_id = 0
-        # Get the actual sequence length
-        sequence_length = len(input_ids)
-        
-        # If the read is within the max length, return as is
-        if sequence_length <= max_read_length:
-            return [{
-                'read_name': read_name,
-                'input_ids': input_ids,
-                'methylation_ids': methylation_ids,
-                'chromosome': chromosome,
-                'original_file': original_file,
-                'label': label,
-                'num_cpgs': count_cpgs(methylation_ids),
-                'dmr_id':dmr_id
-            }]
-        
-        # Split the read into chunks
-        chunks = []
-        for i in range(0, sequence_length, max_read_length):
-            end_idx = min(i + max_read_length, sequence_length)
-            
-            # Extract the chunk
-            chunk_input_ids = input_ids[i:end_idx]
-            chunk_methylation_ids = methylation_ids[i:end_idx]
-            
-            chunks.append({
-                'read_name': read_name,
-                'input_ids': chunk_input_ids,
-                'methylation_ids': chunk_methylation_ids,
-                'chromosome': chromosome,
-                'original_file': original_file,
-                'label': label,
-                'num_cpgs': count_cpgs(chunk_methylation_ids),
-                'dmr_id':dmr_id
-            })
-        
-        return chunks
-    
-    # Process all rows
-    all_chunks = []
-    for _, row in df.iterrows():
-        chunks = split_single_read(row)
-        all_chunks.extend(chunks)
-    
-    # Convert to DataFrame
-    result_df = pd.DataFrame(all_chunks)
-    
-    return result_df
-
-class DismirMLflowExperiment:
-    """
-    MLflow wrapper for training Dismir models across multiple chromosomes.
-    Handles experiment tracking, metrics logging, and artifact storage.
+    Parent class for conducting MLFlow experiment with several common methods and 
+    specific methods not implemented for the children classes to implement
     """
     
     def __init__(self, 
@@ -256,7 +101,6 @@ class DismirMLflowExperiment:
                  experiment_name=None,
                  tracking_uri=None,
                  max_sequence_length=1000,
-                 model_flavor="minigru",
                  splits = ["train", "valid", "test", "rest"]
                  ):
         """
@@ -267,30 +111,40 @@ class DismirMLflowExperiment:
             experiment_name (str): Name for the MLflow experiment
             tracking_uri (str): MLflow tracking URI (optional)
             max_sequence_length (int): Maximum sequence length for the model
-            model_flavor (str): Model flavor ("minigru" or "lstm")
+            model_flavor (str): Model flavor ("minigru" or "lstm" in case of Dismir)
         """
         self.data_path = Path(data_path)
         self.max_sequence_length = max_sequence_length
-        self.model_flavor = model_flavor
         self.splits = splits
         
-        # Set up MLflow
+        # Set up MLflow tracking URI
+        # Priority: 1) explicit parameter, 2) environment variable, 3) default
         if tracking_uri:
             mlflow.set_tracking_uri(tracking_uri)
+        elif os.getenv('MLFLOW_TRACKING_URI'):
+            # Use environment variable if set (important for containerized tests)
+            tracking_uri_env = os.getenv('MLFLOW_TRACKING_URI')
+            mlflow.set_tracking_uri(tracking_uri_env)
+            print(f"Using MLFLOW_TRACKING_URI from environment: {tracking_uri_env}")
+        # else: MLflow will use default (./mlruns)
+        
+        # Log current tracking URI for debugging
+        current_uri = mlflow.get_tracking_uri()
+        print(f"MLflow tracking URI: {current_uri}")
         
         if experiment_name is None:
-            experiment_name = f"Dismir_Chromosome_Training_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            raise ValueError("Experiment name must be provided to initialize experiment")
         
         self.experiment_name = experiment_name
         mlflow.set_experiment(experiment_name)
         
         # Find all chromosome directories
-        self.chromosome_dirs = self._find_chromosome_directories()
-        print(f"Found {len(self.chromosome_dirs)} chromosome directories: {list(self.chromosome_dirs.keys())}")
-    
-    def _find_chromosome_directories(self):
+        self.data_dirs = self._find_data_directories()
+        print(f"Found {len(self.data_dirs)} data directories: {list(self.data_dirs.keys())}")
+
+    def _find_data_directories(self):
         """Find all directories containing the required parquet files."""
-        chromosome_dirs = {}
+        data_dirs = {}
         
         if not self.data_path.exists():
             raise ValueError(f"Data path {self.data_path} does not exist")
@@ -298,19 +152,14 @@ class DismirMLflowExperiment:
 
         for item in self.data_path.iterdir():
             if item.is_dir():
-                # if item.name in _chr:
-                # print(item.name)
-                # if item.name not in processed_chr:
-                #     if "cpg_counts_selected" in item.name:
-                    # Check if this directory contains the required files
-                        required_files = [x+".parquet" for x in self.splits]
-                        if all((item / f).exists() for f in required_files):
-                            chromosome_dirs[item.name] = item
+                required_files = [x+".parquet" for x in self.splits]
+                if all((item / f).exists() for f in required_files):
+                    data_dirs[item.name] = item
         
-        if not chromosome_dirs:
+        if not data_dirs:
             raise ValueError(f"No directories with required parquet files found in {self.data_path}")
-        print(chromosome_dirs)
-        return chromosome_dirs
+        print(data_dirs)
+        return data_dirs
     
     def _calculate_data_stats(self, data_path):
         """Calculate statistics for a dataset."""
@@ -328,98 +177,459 @@ class DismirMLflowExperiment:
             print(f"Error calculating stats for {data_path}: {e}")
             return {}
     
-    def _calculate_metrics(self, y_true, y_pred_proba, y_pred_binary,best_treshold):
-        """Calculate comprehensive metrics."""
+    def _calculate_metrics(self, y_true, y_pred_proba, y_pred_binary=None, best_threshold=0.5, num_classes=2):
+        """
+        Calculate comprehensive metrics, handling both binary and multi-class classification.
+        
+        Args:
+            y_true: True labels
+            y_pred_proba: Predicted probabilities (1D for binary, 2D for multi-class)
+            y_pred_binary: Predicted class labels (optional, will be computed if None)
+            best_threshold: Threshold for binary classification
+            num_classes: Number of classes (2 for binary, >2 for multi-class)
+        """
         try:
+            # Convert to numpy arrays if not already
+            y_true = np.array(y_true)
+            y_pred_proba = np.array(y_pred_proba)
             
+            # Handle multi-class vs binary
+            if num_classes > 2 or (y_pred_proba.ndim == 2 and y_pred_proba.shape[1] > 1):
+                # Multi-class classification
+                is_multiclass = True
+                
+                # If predictions are logits, apply softmax
+                if y_pred_proba.max() > 1.0 or y_pred_proba.min() < 0.0:
+                    from scipy.special import softmax
+                    y_pred_proba = softmax(y_pred_proba, axis=1)
+                
+                # Get predicted classes
+                if y_pred_binary is None:
+                    y_pred_binary = np.argmax(y_pred_proba, axis=1)
+                else:
+                    y_pred_binary = np.array(y_pred_binary)
+                
+                # For ROC AUC, we'll use the probability of each class
+                y_pred_proba_for_auc = y_pred_proba
+            else:
+                # Binary classification
+                is_multiclass = False
+                
+                # Ensure 1D for binary
+                if y_pred_proba.ndim > 1:
+                    y_pred_proba = y_pred_proba.squeeze()
+                
+                if y_pred_binary is None:
+                    y_pred_binary = (y_pred_proba >= best_threshold).astype(int)
+                else:
+                    y_pred_binary = np.array(y_pred_binary)
+                
+                y_pred_proba_for_auc = y_pred_proba
+            
+            # Track NaN statistics
+            nan_mask_true = np.isnan(y_true)
+            nan_mask_binary = np.isnan(y_pred_binary)
+            
+            if is_multiclass:
+                nan_mask_proba = np.any(np.isnan(y_pred_proba), axis=1)
+            else:
+                nan_mask_proba = np.isnan(y_pred_proba)
+            
+            nan_mask_any = nan_mask_true | nan_mask_proba | nan_mask_binary
+            
+            num_total = len(y_true)
+            num_nans_proba = np.sum(nan_mask_proba)
+            num_nans_any = np.sum(nan_mask_any)
+            
+            # Filter out NaN values
+            valid_mask = ~nan_mask_any
+            y_true_clean = y_true[valid_mask]
+            y_pred_binary_clean = y_pred_binary[valid_mask]
+            
+            if is_multiclass:
+                y_pred_proba_clean = y_pred_proba_for_auc[valid_mask]
+            else:
+                y_pred_proba_clean = y_pred_proba_for_auc[valid_mask]
+            
+            # Initialize metrics
             metrics = {
-                'accuracy': float(accuracy_score(y_true, y_pred_binary)),
-                'precision': float(precision_score(y_true, y_pred_binary, zero_division=0)),
-                'recall': float(recall_score(y_true, y_pred_binary, zero_division=0)),
-                'f1_score': float(f1_score(y_true, y_pred_binary, zero_division=0)),
-                'roc_auc': float(roc_auc_score(y_true, y_pred_proba)) if len(np.unique(y_true)) > 1 else 0.0,
-                "mcc":float(matthews_corrcoef(y_true,y_pred_binary)),
-                "threshold": best_treshold
+                'num_total_samples': int(num_total),
+                'num_nans_predictions_proba': int(num_nans_proba),
+                'nan_percentage': float(num_nans_proba / num_total * 100) if num_total > 0 else 0.0,
+                'num_classes': num_classes,
+                'is_multiclass': is_multiclass
             }
             
-            # Confusion matrix
-            cm = confusion_matrix(y_true, y_pred_binary)
-            if cm.shape == (2, 2):
-                tn, fp, fn, tp = cm.ravel()
+            if not is_multiclass:
+                metrics['threshold'] = float(best_threshold)
+            
+            # Calculate metrics if we have valid samples
+            if len(y_true_clean) > 0:
+                # Common metrics for both binary and multi-class
                 metrics.update({
-                    'true_negatives': int(tn),
-                    'false_positives': int(fp),
-                    'false_negatives': int(fn),
-                    'true_positives': int(tp),
-                    'specificity': float(tn / (tn + fp)) if (tn + fp) > 0 else 0.0,
-                    'sensitivity': float(tp / (tp + fn)) if (tp + fn) > 0 else 0.0
+                    'accuracy': float(accuracy_score(y_true_clean, y_pred_binary_clean)),
+                    'precision': float(precision_score(y_true_clean, y_pred_binary_clean, 
+                                                    average='weighted' if is_multiclass else 'binary', 
+                                                    zero_division=0)),
+                    'recall': float(recall_score(y_true_clean, y_pred_binary_clean,
+                                                average='weighted' if is_multiclass else 'binary',
+                                                zero_division=0)),
+                    'f1_score': float(f1_score(y_true_clean, y_pred_binary_clean,
+                                            average='weighted' if is_multiclass else 'binary',
+                                            zero_division=0)),
+                    'mcc': float(matthews_corrcoef(y_true_clean, y_pred_binary_clean))
+                })
+                
+                # ROC AUC calculation
+                if len(np.unique(y_true_clean)) > 1:
+                    if is_multiclass:
+                        # Multi-class ROC AUC (one-vs-rest)
+                        try:
+                            metrics['roc_auc'] = float(roc_auc_score(
+                                y_true_clean, 
+                                y_pred_proba_clean,
+                                multi_class='ovr',
+                                average='weighted'
+                            ))
+                        except ValueError as e:
+                            print(f"Warning: Could not calculate ROC AUC for multi-class: {e}")
+                            metrics['roc_auc'] = 0.0
+                    else:
+                        # Binary ROC AUC
+                        metrics['roc_auc'] = float(roc_auc_score(y_true_clean, y_pred_proba_clean))
+                else:
+                    metrics['roc_auc'] = 0.0
+                
+                # Confusion matrix metrics
+                cm = confusion_matrix(y_true_clean, y_pred_binary_clean)
+                
+                if not is_multiclass and cm.shape == (2, 2):
+                    # Binary classification specific metrics
+                    tn, fp, fn, tp = cm.ravel()
+                    metrics.update({
+                        'true_negatives': int(tn),
+                        'false_positives': int(fp),
+                        'false_negatives': int(fn),
+                        'true_positives': int(tp),
+                        'specificity': float(tn / (tn + fp)) if (tn + fp) > 0 else 0.0,
+                        'sensitivity': float(tp / (tp + fn)) if (tp + fn) > 0 else 0.0
+                    })
+                else:
+                    # Multi-class: store full confusion matrix and per-class metrics
+                    metrics['confusion_matrix'] = cm.tolist()
+                    
+                    # Calculate per-class precision, recall, f1
+                    per_class_precision = precision_score(y_true_clean, y_pred_binary_clean, 
+                                                        average=None, zero_division=0)
+                    per_class_recall = recall_score(y_true_clean, y_pred_binary_clean,
+                                                average=None, zero_division=0)
+                    per_class_f1 = f1_score(y_true_clean, y_pred_binary_clean,
+                                        average=None, zero_division=0)
+                    
+                    for i in range(len(per_class_precision)):
+                        metrics[f'precision_class_{i}'] = float(per_class_precision[i])
+                        metrics[f'recall_class_{i}'] = float(per_class_recall[i])
+                        metrics[f'f1_class_{i}'] = float(per_class_f1[i])
+            else:
+                # No valid samples
+                print(f"Warning: No valid samples found after removing NaNs")
+                metrics.update({
+                    'accuracy': 0.0,
+                    'precision': 0.0,
+                    'recall': 0.0,
+                    'f1_score': 0.0,
+                    'roc_auc': 0.0,
+                    'mcc': 0.0
                 })
             
+            if metrics['nan_percentage'] > 5.0:
+                print(f"Warning: {metrics['nan_percentage']:.2f}% of samples contain NaN values")
+            
             return metrics
+            
         except Exception as e:
             print(f"Error calculating metrics: {e}")
-            return {}
+            import traceback
+            traceback.print_exc()
+            return {
+                'error': str(e),
+                'num_total_samples': len(y_true) if 'y_true' in locals() else 0
+            }
     
-    def _make_predictions_and_calculate_metrics(self, model, split_name, chromosome, max_sequence_length):
+    # def _aggregate_predictions(self, data_chunked, predictions):
+    #     data_chunked["predictions_proba"] = predictions
+    #     data_chunked["predictions_weighted"] = data_chunked["predictions_proba"] * data_chunked["num_cpgs"]
+    #     data_chunked_agg = data_chunked.groupby("read_name").agg(
+    #                 predictions_weighted=pd.NamedAgg(column="predictions_weighted", aggfunc="sum"),
+    #                 num_cpgs=pd.NamedAgg(column="num_cpgs", aggfunc="sum"),
+    #                 label=pd.NamedAgg(column="label", aggfunc="min"),
+    #                 )
+    #     data_chunked_agg["predictions_weighted"] = data_chunked_agg["predictions_weighted"]/data_chunked_agg["num_cpgs"]
+    #     # Setting best threshold to 0.5 instead of tunning for the best opeating point is a more realistic strategy 
+    #     # fpr, tpr, thresholds = roc_curve(data_chunked_agg["label"], data_chunked_agg["predictions_weighted"])
+    #     # best_treshold = thresholds[np.argmax(tpr-fpr)]
+    #     best_treshold = 0.5
+    #     data_chunked_agg["predictions"] = data_chunked_agg["predictions_weighted"]>best_treshold
+    #     data_chunked_agg = data_chunked_agg.loc[data_chunked_agg["num_cpgs"]>0,]
+    #     labels, predictions_binary, predictions = data_chunked_agg["label"], data_chunked_agg["predictions"], data_chunked_agg["predictions_weighted"]
+    #     return data_chunked, labels, predictions_binary, predictions,best_treshold
+
+    def _aggregate_predictions(self, data_chunked, predictions, num_classes=2):
+        """
+        Aggregate chunk-level predictions to read-level predictions.
+        
+        Args:
+            data_chunked: DataFrame with chunked data
+            predictions: Predictions array (1D for binary, 2D for multi-class)
+            num_classes: Number of classes
+        """
+        predictions = np.array(predictions)
+        
+        # Determine if multi-class
+        if num_classes > 2 or (predictions.ndim == 2 and predictions.shape[1] > 1):
+            is_multiclass = True
+            
+            # Apply softmax if needed
+            if predictions.max() > 1.0 or predictions.min() < 0.0:
+                from scipy.special import softmax
+                predictions = softmax(predictions, axis=1)
+            
+            # Store per-class probabilities
+            for class_idx in range(predictions.shape[1]):
+                data_chunked[f"predictions_proba_class_{class_idx}"] = predictions[:, class_idx]
+                data_chunked[f"predictions_weighted_class_{class_idx}"] = (
+                    predictions[:, class_idx] * data_chunked["num_cpgs"]
+                )
+        else:
+            is_multiclass = False
+            # Binary classification
+            if predictions.ndim > 1:
+                predictions = predictions.squeeze()
+            
+            data_chunked["predictions_proba"] = predictions
+            data_chunked["predictions_weighted"] = predictions * data_chunked["num_cpgs"]
+        
+        # Aggregate by read_name
+        if is_multiclass:
+            # Build aggregation dict for multi-class
+            agg_dict = {
+                'num_cpgs': pd.NamedAgg(column="num_cpgs", aggfunc="sum"),
+                'label': pd.NamedAgg(column="label", aggfunc="min")
+            }
+            
+            for class_idx in range(predictions.shape[1]):
+                agg_dict[f'predictions_weighted_class_{class_idx}'] = pd.NamedAgg(
+                    column=f"predictions_weighted_class_{class_idx}", 
+                    aggfunc="sum"
+                )
+            
+            data_chunked_agg = data_chunked.groupby("read_name").agg(**agg_dict)
+            
+            # Calculate weighted average probabilities
+            weighted_probs = []
+            for class_idx in range(predictions.shape[1]):
+                weighted_probs.append(
+                    data_chunked_agg[f'predictions_weighted_class_{class_idx}'] / 
+                    data_chunked_agg['num_cpgs']
+                )
+            
+            # Stack to create [n_samples, n_classes] array
+            predictions_proba = np.column_stack(weighted_probs)
+            
+            # Get predicted class
+            predictions_binary = np.argmax(predictions_proba, axis=1)
+            
+            # Store in dataframe
+            data_chunked_agg["predictions"] = predictions_binary
+            for class_idx in range(predictions.shape[1]):
+                data_chunked_agg[f"predictions_proba_class_{class_idx}"] = predictions_proba[:, class_idx]
+            
+            best_threshold = None  # Not applicable for multi-class
+        else:
+            # Binary classification
+            data_chunked_agg = data_chunked.groupby("read_name").agg(
+                predictions_weighted=pd.NamedAgg(column="predictions_weighted", aggfunc="sum"),
+                num_cpgs=pd.NamedAgg(column="num_cpgs", aggfunc="sum"),
+                label=pd.NamedAgg(column="label", aggfunc="min"),
+            )
+            
+            predictions_proba = (
+                data_chunked_agg["predictions_weighted"] / data_chunked_agg["num_cpgs"]
+            )
+            
+            best_threshold = 0.5
+            predictions_binary = (predictions_proba > best_threshold).astype(int)
+            data_chunked_agg["predictions"] = predictions_binary
+        
+        # Filter out reads with no CpGs
+        data_chunked_agg = data_chunked_agg.loc[data_chunked_agg["num_cpgs"] > 0]
+        
+        labels = data_chunked_agg["label"].values
+        predictions_binary = data_chunked_agg["predictions"].values if not is_multiclass else predictions_binary
+        
+        return data_chunked, labels, predictions_binary, predictions_proba, best_threshold
+
+    def _make_predictions_and_calculate_metrics(self):
+        raise NotImplementedError()
+    
+    def train_dataset(self):
+        raise NotImplementedError()
+    
+
+    def run_full_experiment(self, training_args=None, **training_kwargs):
+        """
+        Run the complete experiment across all datasets.
+        
+        Args:
+            training_args (TrainingArguments, optional): Custom training arguments object
+            **training_kwargs: Arguments to pass to train_chromosome method (used if training_args is None)
+        """
+        print(f"Starting full experiment: {self.experiment_name}")
+        print(f"Training {len(self.data_dirs)} dataset folders")
+        print(f"Dataset folders: {list(self.data_dirs.keys())}")
+        
+        all_results = {}
+        failed_datasets = []
+        
+        for dataset_name in self.data_dirs.keys():
+            try:
+                if training_args is not None:
+                    results = self.train_dataset(dataset_name, training_args=training_args, **training_kwargs)
+                else:
+                    results = self.train_dataset(dataset_name, **training_kwargs)
+                all_results[dataset_name] = results
+            except Exception as e:
+                print(f"Failed to train dataset {dataset_name}: {e}")
+                failed_datasets.append(dataset_name)
+                continue
+
+class TransformersMLFLowExperiment(AbstractMLFlowExperiment):
+    def __init__(self, data_path, experiment_name=None, tracking_uri=None, max_sequence_length=1000, splits=["train", "valid", "test", "rest"]):
+        super().__init__(data_path, experiment_name, tracking_uri, max_sequence_length, splits)
+
+    def _get_best_checkpoint(self, trainer, output_dir: str) -> str:
+        """
+        Return the path of the best checkpoint according to eval_loss.
+        Falls back to the latest checkpoint if – for any reason – the best one
+        cannot be located.
+        """
+        # 1️⃣ try to pick it directly from the Trainer state ------------------
+        if trainer is not None and trainer.state.best_model_checkpoint:
+            best_ckpt = trainer.state.best_model_checkpoint
+            if os.path.isdir(best_ckpt):
+                return os.path.join(os.path.abspath(best_ckpt), "model.safetensors")
+
+        # 2️⃣ look inside trainer_state.json ----------------------------------
+        state_file = Path(output_dir) / "trainer_state.json"
+        if state_file.exists():
+            with open(state_file) as f:
+                state = json.load(f)
+            best_ckpt = state.get("best_model_checkpoint")
+            if best_ckpt and os.path.isdir(best_ckpt):
+                return os.path.join(os.path.abspath(best_ckpt), "model.safetensors")
+
+        # 3️⃣ graceful fallback: use the most-recent checkpoint ---------------
+        ckpts = sorted(
+            Path(output_dir).glob("checkpoint-*"),
+            key=lambda p: int(p.name.split("-")[1])
+        )
+        if ckpts:
+            return os.path.join(os.path.abspath(str(ckpts[-1])), "model.safetensors") 
+
+
+class DismirMLflowExperiment(AbstractMLFlowExperiment):
+    """
+    MLflow wrapper for training Dismir models across multiple chromosomes.
+    Handles experiment tracking, metrics logging, and artifact storage.
+    """
+    
+    def __init__(self, 
+                 data_path,
+                 experiment_name=None,
+                 tracking_uri=None,
+                 max_sequence_length=1000,
+                 model_flavor="minigru",
+                 splits = ["train", "valid", "test", "rest"]
+                 ):
+        super().__init__(data_path,
+                       experiment_name,
+                       tracking_uri,
+                       max_sequence_length,
+                       splits)
+        self.model_flavor = model_flavor
+    
+    def _make_predictions_and_calculate_metrics(self, model, split_name, dataset_name, max_sequence_length):
         """Make predictions and calculate metrics for a given split."""
         try:
-            path = self.chromosome_dirs[chromosome] / f'{split_name}.parquet'
+            path = self.data_dirs[dataset_name] / f'{split_name}.parquet'
             if split_name not in ["train", "valid","test"]: 
                 df = pd.read_parquet(str(path).replace("_cpg_counts_selected", ""))    
-                data_chunked = split_long_reads(df,max_sequence_length)
-                dna, methylation, labels = data_chunked["input_ids"],data_chunked["methylation_ids"], data_chunked["label"]
+                data_chunked = split_long_reads(df, max_sequence_length)
+                dna, methylation, labels = data_chunked["input_ids"], data_chunked["methylation_ids"], data_chunked["label"]
             else:
                 df = pd.read_parquet(path)   
                 dna, methylation, labels = df["input_ids"], df["methylation_ids"], df["label"]
             
             predictions, predictions_binary = model.predict(dna, methylation_sequences=methylation)
-            if split_name not in ["train", "valid", "test"]:      
-                data_chunked["predictions_proba"] = predictions
-                data_chunked["predictions_weighted"] = data_chunked["predictions_proba"] * data_chunked["num_cpgs"]
-                data_chunked_agg = data_chunked.groupby("read_name").agg(
-                    predictions_weighted=pd.NamedAgg(column="predictions_weighted", aggfunc="sum"),
-                    num_cpgs=pd.NamedAgg(column="num_cpgs", aggfunc="sum"),
-                    label=pd.NamedAgg(column="label", aggfunc="min"),
-                    )
-                data_chunked_agg["predictions_weighted"] = data_chunked_agg["predictions_weighted"]/data_chunked_agg["num_cpgs"]
-                fpr, tpr, thresholds = roc_curve(data_chunked_agg["label"], data_chunked_agg["predictions_weighted"])
-                best_treshold = thresholds[np.argmax(tpr-fpr)]
-                data_chunked_agg["predictions"] = data_chunked_agg["predictions_weighted"]>best_treshold
-                data_chunked_agg = data_chunked_agg.loc[data_chunked_agg["num_cpgs"]>0,]
-                labels, predictions_binary, predictions = data_chunked_agg["label"], data_chunked_agg["predictions"], data_chunked_agg["predictions_weighted"]
+            
+            # Determine number of classes
+            num_classes = model.num_labels if hasattr(model, 'num_labels') else 2
+            
+            if split_name not in ["train", "valid", "test"]:
+                data_chunked, labels, predictions_binary, predictions, best_threshold = self._aggregate_predictions(
+                    data_chunked, predictions, num_classes=num_classes
+                )
             else:
-                best_treshold = 0.5
+                best_threshold = 0.5 if num_classes == 2 else None
 
             # Calculate metrics
-            metrics = self._calculate_metrics(labels, predictions, predictions_binary,best_treshold)
+            metrics = self._calculate_metrics(
+                labels, predictions, predictions_binary, 
+                best_threshold=best_threshold if best_threshold else 0.5,
+                num_classes=num_classes
+            )
             
             # Create predictions dataframe
-            predictions_df = pd.DataFrame({
-                'true_label': labels,
-                'predicted_probability': predictions,
-                'predicted_label': predictions_binary
-            })
+            if num_classes > 2:
+                pred_dict = {
+                    'true_label': labels,
+                    'predicted_label': predictions_binary
+                }
+                # Add per-class probabilities
+                if predictions.ndim == 2:
+                    for i in range(predictions.shape[1]):
+                        pred_dict[f'predicted_probability_class_{i}'] = predictions[:, i]
+                predictions_df = pd.DataFrame(pred_dict)
+            else:
+                predictions_df = pd.DataFrame({
+                    'true_label': labels,
+                    'predicted_probability': predictions if predictions.ndim == 1 else predictions.squeeze(),
+                    'predicted_label': predictions_binary
+                })
             
             return metrics, predictions_df
             
         except Exception as e:
             print(f"Error making predictions for {split_name}: {e}")
+            import traceback
+            traceback.print_exc()
             return {}, pd.DataFrame()
     
-    def train_chromosome(self, 
-                        chromosome,
+    def train_dataset(self, 
+                        dataset_name,
                         epochs=200,
                         batch_size=128,
                         patience=12,
                         optimizer_type="SGD",
                         lr=0.01,
                         momentum=0.9,
-                        weight_decay=1e-6):
+                        weight_decay=1e-6,
+                        output_dir=None):
         """
-        Train a model for a specific chromosome and log everything to MLflow.
+        Train a dismir model for a specific dataset and log everything to MLflow.
         
         Args:
-            chromosome (str): Chromosome name (directory name)
+            dataset_name (str): Dataset name (directory name)
             epochs (int): Number of training epochs
             batch_size (int): Training batch size
             patience (int): Early stopping patience
@@ -432,12 +642,12 @@ class DismirMLflowExperiment:
             dict: Training results and metrics
         """
         
-        with mlflow.start_run(run_name=f"chromosome_{chromosome}"):
+        with mlflow.start_run(run_name=f"dataset_{dataset_name}"):
             # try:
-                print(f"\n=== Training chromosome {chromosome} ===")
+                print(f"\n=== Training on dataset {dataset_name} ===")
                 
                 # Log parameters
-                mlflow.log_param("chromosome", chromosome)
+                mlflow.log_param("dataset", dataset_name)
                 mlflow.log_param("max_sequence_length", self.max_sequence_length)
                 mlflow.log_param("model_flavor", self.model_flavor)
                 mlflow.log_param("epochs", epochs)
@@ -449,7 +659,7 @@ class DismirMLflowExperiment:
                 mlflow.log_param("weight_decay", weight_decay)
                 
                 # Get file paths
-                chr_dir = self.chromosome_dirs[chromosome]
+                chr_dir = self.data_dirs[dataset_name]
                 file_paths = [
                     str(chr_dir / 'train.parquet'),
                     str(chr_dir / 'test.parquet'), 
@@ -468,18 +678,22 @@ class DismirMLflowExperiment:
                         mlflow.log_metric(f"data_{split}_{key}", value)
                 
                 # Create temporary directory for model weights
-                temp_dir = f"./temp_weights_{chromosome}"
+                if output_dir is None:
+                    temp_dir = f"./temp_weights_{dataset_name}"
+                else:
+                    temp_dir = output_dir
+                
                 os.makedirs(temp_dir, exist_ok=True)
                 
                 # Initialize and train model
-                print(f"Initializing Dismir model for chromosome {chromosome}")
+                print(f"Initializing Dismir model for dataset {dataset_name}")
                 dismir_instance = Dismir(
                     self.max_sequence_length,
                     *file_paths,
                     flavour=self.model_flavor
                 )
                 
-                print(f"Starting training for chromosome {chromosome}")
+                print(f"Starting training for dataset {dataset_name}")
                 dismir_instance.train(
                     epochs=epochs,
                     batch_size=batch_size,
@@ -496,7 +710,7 @@ class DismirMLflowExperiment:
                 best_weights_path = os.path.join(temp_dir, "weight.pt")
                 if os.path.exists(best_weights_path):
                     dismir_instance.model.load_state_dict(torch.load(best_weights_path, map_location=dismir_instance.device))
-                    print(f"Loaded best weights for chromosome {chromosome}")
+                    print(f"Loaded best weights for dataset {dataset_name}")
                 
                 # Calculate metrics and make predictions for each split
                 all_predictions = {}
@@ -505,7 +719,7 @@ class DismirMLflowExperiment:
                 for split in self.splits:
                     print(f"Calculating metrics for {split} split...")
                     metrics, predictions_df = self._make_predictions_and_calculate_metrics(
-                        dismir_instance, split, chromosome, dismir_instance.max_sequence_length
+                        dismir_instance, split, dataset_name, dismir_instance.max_sequence_length
                     )
                     
                     all_metrics[split] = metrics
@@ -516,15 +730,15 @@ class DismirMLflowExperiment:
                         mlflow.log_metric(f"{split}_{metric_name}", metric_value)
                 
                 # Save model
-                print(f"Saving model artifacts for chromosome {chromosome}")
+                print(f"Saving model artifacts for dataset {dataset_name}")
                 mlflow.pytorch.log_model(
                     dismir_instance.model,
-                    f"model_chromosome_{chromosome}",
-                    registered_model_name=f"{self.experiment_name}_chromosome_{chromosome}"
+                    "model",
+                    registered_model_name=f"{self.experiment_name}_dataset_{dataset_name}"
                 )
                 
                 # Save predictions as artifacts
-                predictions_dir = f"predictions_{chromosome}"
+                predictions_dir = os.path.join(output_dir, f"predictions_{dataset_name}")
                 os.makedirs(predictions_dir, exist_ok=True)
                 
                 for split, pred_df in all_predictions.items():
@@ -536,7 +750,7 @@ class DismirMLflowExperiment:
                 
                 # Save comprehensive results
                 results = {
-                    'chromosome': chromosome,
+                    'dataset': dataset_name,
                     'data_stats': data_stats,
                     'metrics': all_metrics,
                     'model_params': {
@@ -553,7 +767,7 @@ class DismirMLflowExperiment:
                 }
                 
                 # Save results as JSON artifact
-                results_file = f"results_{chromosome}.json"
+                results_file = os.path.join(output_dir, f"results_{dataset_name}.json")
                 with open(results_file, 'w') as f:
                     json.dump(results, f, indent=2, default=str)
                 mlflow.log_artifact(results_file, "results")
@@ -567,44 +781,13 @@ class DismirMLflowExperiment:
                 if os.path.exists(results_file):
                     os.remove(results_file)
                 
-                print(f"✓ Completed training for chromosome {chromosome}")
+                print(f"✓ Completed training for dataset {dataset_name}")
                 return results
                 
-            # except Exception as e:
-            #     print(f"✗ Error training chromosome {chromosome}: {e}")
-            #     mlflow.log_param("error", str(e))
-            #     raise e
-    
-    def run_full_experiment(self, **training_kwargs):
-        """
-        Run the complete experiment across all chromosomes.
         
-        Args:
-            **training_kwargs: Arguments to pass to train_chromosome method
-        """
-        print(f"Starting full experiment: {self.experiment_name}")
-        print(f"Training {len(self.chromosome_dirs)} chromosome folders")
-        print(f"Chromosome folders: {list(self.chromosome_dirs.keys())}")
-        
-        all_results = {}
-        failed_chromosomes = []
-        
-        for chromosome in self.chromosome_dirs.keys():
-            # try:
-
-            results = self.train_chromosome(chromosome, **training_kwargs)
-            all_results[chromosome] = results
-            # except Exception as e:
-            #     print(f"Failed to train chromosome {chromosome}: {e}")
-            #     failed_chromosomes.append(chromosome)
-            #     continue
-        
-    
-class EpigenBERT2MLflowExperiment:
+class EpigenBERT2MLflowExperiment(TransformersMLFLowExperiment):
     """
-    MLflow wrapper for training EpigenBERT2 models across multiple chromosomes.
-    Handles experiment tracking, metrics logging, and artifact storage with 
-    progressive sequence length prediction strategy.
+    MLflow wrapper for training EpigenBERT2 models across multiple datasets.
     """
     
     def __init__(self, 
@@ -615,111 +798,27 @@ class EpigenBERT2MLflowExperiment:
                  use_cpg_methylation=True,
                  use_m6a_methylation=False,
                  foundation_model_huggingface="zhihan1996/DNABERT-2-117M",
-                 splits = ['train', 'valid', 'test', 'rest']):
+                 splits = ['train', 'valid', 'test', 'rest'],
+                 use_triton = False):
         """
-        Initialize the MLflow experiment wrapper.
+        Initialize the EpigenBERT2 experiment wrapper.
         
         Args:
-            data_path (str): Path to the main data directory containing chromosome folders
-            experiment_name (str): Name for the MLflow experiment
-            tracking_uri (str): MLflow tracking URI (optional)
-            max_sequence_length (int): Maximum sequence length for the model
             use_cpg_methylation (bool): Whether to use CpG methylation
             use_m6a_methylation (bool): Whether to use m6A methylation
             foundation_model_huggingface (str): Hugging Face model path
         """
-        self.data_path = Path(data_path)
-        self.max_sequence_length = max_sequence_length
+        super().__init__(data_path,
+                       experiment_name,
+                       tracking_uri,
+                       max_sequence_length,
+                       splits)
+        
         self.use_cpg_methylation = use_cpg_methylation
         self.use_m6a_methylation = use_m6a_methylation
         self.foundation_model_huggingface = foundation_model_huggingface
-        self.splits = splits
-        
-        # Set up MLflow
-        if tracking_uri:
-            mlflow.set_tracking_uri(tracking_uri)
-        
-        if experiment_name is None:
-            experiment_name = f"EpigenBERT2_Chromosome_Training_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-        
-        self.experiment_name = experiment_name
-        mlflow.set_experiment(experiment_name)
-        
-        # Find all chromosome directories
-        self.chromosome_dirs = self._find_chromosome_directories()
-        print(f"Found {len(self.chromosome_dirs)} chromosome directories: {list(self.chromosome_dirs.keys())}")
+        self.use_triton = use_triton
     
-    def _find_chromosome_directories(self):
-        """Find all directories containing the required parquet files."""
-        chromosome_dirs = {}
-        
-        if not self.data_path.exists():
-            raise ValueError(f"Data path {self.data_path} does not exist")
-        
-        # processed_chr = [f"chr{x}_cpg_counts_selected" for x in range(1, 23, 1) if not x==19]
-        # processed_chr.extend([f"chr{x}" for x in range(2, 23, 1)])
-        # _chr = [f"chr{x}"for x in [4,18,19,21]]
-        # _chr = [f"chr{x}"for x in [13]]
-        for item in self.data_path.iterdir():
-            if item.is_dir():
-                # if item.name in _chr:
-                #     if "cpg_counts_selected" in item.name:
-                        # Check if this directory contains the required files
-                        required_files = [x+ '.parquet' for x in self.splits]
-                        if all((item / f).exists() for f in required_files):
-                            chromosome_dirs[item.name] = item
-        
-        if not chromosome_dirs:
-            raise ValueError(f"No directories with required parquet files found in {self.data_path}")
-        
-        print(chromosome_dirs)
-        return chromosome_dirs
-    
-    def _calculate_data_stats(self, data_path):
-        """Calculate statistics for a dataset."""
-        try:
-            df = pd.read_parquet(data_path)
-            stats = {
-                'num_samples': len(df),
-                'num_positive': int(df['label'].sum()) if 'label' in df.columns else 0,
-                'num_negative': int(len(df) - df['label'].sum()) if 'label' in df.columns else 0,
-                'positive_ratio': float(df['label'].mean()) if 'label' in df.columns else 0.0,
-                'avg_sequence_length': float(df['input_ids'].str.len().mean()) if 'input_ids' in df.columns else 0.0,
-                'max_sequence_length': int(df['input_ids'].str.len().max()) if 'input_ids' in df.columns else 0
-            }
-            return stats
-        except Exception as e:
-            print(f"Error calculating stats for {data_path}: {e}")
-            return {}
-    
-    def _calculate_metrics(self, y_true, y_pred_proba, y_pred_binary):
-        """Calculate comprehensive metrics."""
-        try:
-            metrics = {
-                'accuracy': float(accuracy_score(y_true, y_pred_binary)),
-                'precision': float(precision_score(y_true, y_pred_binary, zero_division=0)),
-                'recall': float(recall_score(y_true, y_pred_binary, zero_division=0)),
-                'f1_score': float(f1_score(y_true, y_pred_binary, zero_division=0)),
-                'roc_auc': float(roc_auc_score(y_true, y_pred_proba)) if len(np.unique(y_true)) > 1 else 0.0
-            }
-            
-            # Confusion matrix
-            cm = confusion_matrix(y_true, y_pred_binary)
-            if cm.shape == (2, 2):
-                tn, fp, fn, tp = cm.ravel()
-                metrics.update({
-                    'true_negatives': int(tn),
-                    'false_positives': int(fp),
-                    'false_negatives': int(fn),
-                    'true_positives': int(tp),
-                    'specificity': float(tn / (tn + fp)) if (tn + fp) > 0 else 0.0,
-                    'sensitivity': float(tp / (tp + fn)) if (tp + fn) > 0 else 0.0
-                })
-            
-            return metrics
-        except Exception as e:
-            print(f"Error calculating metrics: {e}")
-            return {}
     
     def _progressive_predict(self, data_df, checkpoint_path, split_name):
         """
@@ -747,7 +846,8 @@ class EpigenBERT2MLflowExperiment:
                 max_sequence_length=self.max_sequence_length,
                 use_cpg_methylation=self.use_cpg_methylation,
                 use_m6a_methylation=self.use_m6a_methylation,
-                foundation_model_huggingface=self.foundation_model_huggingface
+                foundation_model_huggingface=self.foundation_model_huggingface,
+                use_triton=self.use_triton
             )
             
             test_dataset = SupervisedDataset(
@@ -756,11 +856,10 @@ class EpigenBERT2MLflowExperiment:
                 kmer=-1,
                 data_interface="pandas"
             )
-            
-            result = epigenbert.predict(test_dataset, batch_size=200)
+            epigenbert.model.eval()
+            result = epigenbert.predict(test_dataset, batch_size=None)
             predictions = result.predictions if hasattr(result, 'predictions') else result[0]
             labels = result.label_ids if hasattr(result, 'label_ids') else result[1]
-            
             # Clean up
             del epigenbert
             gc.collect()
@@ -776,6 +875,7 @@ class EpigenBERT2MLflowExperiment:
         
         # Generate sequence length ranges
         sequence_ranges = list(reversed(range(1000, max_read_length + 1000, 1000)))
+        sequence_ranges = list((range(1000, max_read_length + 1000, 1000)))
         
         for max_seq_len in tqdm(sequence_ranges, desc=f"Processing {split_name}"):
             # Filter data for current sequence length range
@@ -810,10 +910,10 @@ class EpigenBERT2MLflowExperiment:
             )
             
             # Make predictions
-            result = epigenbert.predict(test_dataset, batch_size=200)
+            result = epigenbert.predict(test_dataset, batch_size=None)
             predictions = result.predictions if hasattr(result, 'predictions') else result[0]
             labels = result.label_ids if hasattr(result, 'label_ids') else result[1]
-            
+
             # Store results
             all_predictions.extend(predictions)
             all_labels.extend(labels)
@@ -825,11 +925,11 @@ class EpigenBERT2MLflowExperiment:
             torch.cuda.empty_cache()
         
         return np.array(all_predictions), np.array(all_labels), all_max_sequence_lengths
-    
-    def _make_predictions_and_calculate_metrics(self, checkpoint_path, split_name, chromosome):
+
+    def _make_predictions_and_calculate_metrics(self, checkpoint_path, split_name, dataset_name):
         """Make predictions and calculate metrics for a given split."""
         try:
-            path = self.chromosome_dirs[chromosome] / f'{split_name}.parquet'
+            path = self.data_dirs[dataset_name] / f'{split_name}.parquet'
             if split_name not in ["train","valid"]:
                 path = str(path).replace("_cpg_counts_selected", "")
             data_df = pd.read_parquet(path)
@@ -843,59 +943,54 @@ class EpigenBERT2MLflowExperiment:
                 data_df, checkpoint_path, split_name
             )
             
-            # Convert probabilities to binary predictions
-            predictions_binary = (predictions > 0.5).astype(int)
+            # Determine number of classes from predictions shape
+            if predictions.ndim == 2 and predictions.shape[1] > 1:
+                num_classes = predictions.shape[1]
+                # Apply softmax if needed
+                if predictions.max() > 1.0 or predictions.min() < 0.0:
+                    from scipy.special import softmax
+                    predictions = softmax(predictions, axis=1)
+                predictions_binary = np.argmax(predictions, axis=1)
+            else:
+                num_classes = 2
+                if predictions.ndim > 1:
+                    predictions = predictions.squeeze()
+                predictions_binary = (predictions > 0.5).astype(int)
             
             # Calculate metrics
-            metrics = self._calculate_metrics(labels, predictions, predictions_binary)
+            metrics = self._calculate_metrics(
+                labels, predictions, predictions_binary,
+                num_classes=num_classes
+            )
             
             # Create predictions dataframe
-            predictions_df = pd.DataFrame({
-                'true_label': labels,
-                'predicted_probability': predictions,
-                'predicted_label': predictions_binary,
-                'max_sequence_length_used': seq_lengths
-            })
+            if num_classes > 2:
+                pred_dict = {
+                    'true_label': labels,
+                    'predicted_label': predictions_binary,
+                    'max_sequence_length_used': seq_lengths
+                }
+                for i in range(predictions.shape[1]):
+                    pred_dict[f'predicted_probability_class_{i}'] = predictions[:, i]
+                predictions_df = pd.DataFrame(pred_dict)
+            else:
+                predictions_df = pd.DataFrame({
+                    'true_label': labels,
+                    'predicted_probability': predictions,
+                    'predicted_label': predictions_binary,
+                    'max_sequence_length_used': seq_lengths
+                })
             
             return metrics, predictions_df
             
         except Exception as e:
             print(f"Error making predictions for {split_name}: {e}")
+            import traceback
+            traceback.print_exc()
             return {}, pd.DataFrame()
         
-    def _get_best_checkpoint(self, trainer, output_dir: str) -> str:
-        """
-        Return the path of the best checkpoint according to eval_loss.
-        Falls back to the latest checkpoint if – for any reason – the best one
-        cannot be located.
-        """
-        # 1️⃣ try to pick it directly from the Trainer state ------------------
-        if trainer is not None and trainer.state.best_model_checkpoint:
-            best_ckpt = trainer.state.best_model_checkpoint
-            if os.path.isdir(best_ckpt):
-                return os.path.join(os.path.abspath(best_ckpt), "model.safetensors")
-
-        # 2️⃣ look inside trainer_state.json ----------------------------------
-        state_file = Path(output_dir) / "trainer_state.json"
-        if state_file.exists():
-            with open(state_file) as f:
-                state = json.load(f)
-            best_ckpt = state.get("best_model_checkpoint")
-            if best_ckpt and os.path.isdir(best_ckpt):
-                return os.path.join(os.path.abspath(best_ckpt), "model.safetensors")
-
-        # 3️⃣ graceful fallback: use the most-recent checkpoint ---------------
-        ckpts = sorted(
-            Path(output_dir).glob("checkpoint-*"),
-            key=lambda p: int(p.name.split("-")[1])
-        )
-        if ckpts:
-            return os.path.join(os.path.abspath(str(ckpts[-1])), "model.safetensors")
-
-
-    
-    def train_chromosome(self, 
-                        chromosome,
+    def train_dataset(self, 
+                        dataset_name,
                         training_args=None,
                         num_train_epochs=250,
                         per_device_train_batch_size=50,
@@ -909,12 +1004,13 @@ class EpigenBERT2MLflowExperiment:
                         logging_steps=100,
                         eval_loss_threshold=0.6,
                         check_at_step=500,
-                        max_retries=3):
+                        max_retries=3,
+                        output_dir=None):
         """
         Train a model for a specific chromosome and log everything to MLflow.
         
         Args:
-            chromosome (str): Chromosome name (directory name)
+            dataset_name (str): Dataset name (directory name)
             training_args (TrainingArguments, optional): Custom training arguments object
             num_train_epochs (int): Number of training epochs (used if training_args is None)
             per_device_train_batch_size (int): Training batch size per device
@@ -931,17 +1027,18 @@ class EpigenBERT2MLflowExperiment:
             dict: Training results and metrics
         """
         
-        with mlflow.start_run(run_name=f"chromosome_{chromosome}"):
-            print(f"\n=== Training chromosome {chromosome} ===")
+        with mlflow.start_run(run_name=f"dataset_{dataset_name}"):
+            print(f"\n=== Training dataset {dataset_name} ===")
             
             # Log parameters
-            mlflow.log_param("chromosome", chromosome)
+            mlflow.log_param("dataset", dataset_name)
             mlflow.log_param("max_sequence_length", self.max_sequence_length)
             mlflow.log_param("use_cpg_methylation", self.use_cpg_methylation)  
             mlflow.log_param("use_m6a_methylation", self.use_m6a_methylation)
             mlflow.log_param("foundation_model", self.foundation_model_huggingface)
             # Log parameters based on training_args or individual parameters
-            output_dir =  os.path.abspath(f"output/epigenbert2_{chromosome}")
+            if output_dir is None:
+                output_dir =  os.path.abspath(f"output/epigenbert2_{dataset_name}")
             if training_args is not None:
                 training_args.output_dir = output_dir
                 mlflow.log_param("num_train_epochs", training_args.num_train_epochs)
@@ -978,13 +1075,13 @@ class EpigenBERT2MLflowExperiment:
             mlflow.log_param("early_stopping_patience", early_stopping_patience)
             mlflow.log_param("early_stopping_threshold", early_stopping_threshold)
             
-            # Get chromosome directory
-            chr_dir = self.chromosome_dirs[chromosome]
+            # Get dataset directory
+            data_dir = self.data_dirs[dataset_name]
             
             # Calculate and log data statistics
             data_stats = {}
             for split in self.splits:
-                file_path = chr_dir / f'{split}.parquet'
+                file_path = data_dir / f'{split}.parquet'
                 stats = self._calculate_data_stats(file_path)
                 data_stats[split] = stats
                 
@@ -999,7 +1096,7 @@ class EpigenBERT2MLflowExperiment:
             # Set up training arguments
             if training_args is None:
                 training_args = TrainingArguments(
-                    run_name=f"epigenbert2_{chromosome}",
+                    run_name=f"epigenbert2_{dataset_name}",
                     per_device_train_batch_size=per_device_train_batch_size,
                     per_device_eval_batch_size=per_device_eval_batch_size,
                     gradient_accumulation_steps=1,
@@ -1007,16 +1104,14 @@ class EpigenBERT2MLflowExperiment:
                     fp16=True,
                     save_steps=save_steps,
                     output_dir=output_dir,
-                    evaluation_strategy="steps",
+                    eval_strategy="steps",
                     eval_steps=eval_steps,
                     warmup_steps=warmup_steps,
                     logging_steps=logging_steps,
                     num_train_epochs=num_train_epochs,
                     overwrite_output_dir=True,
                     log_level="info",
-                    find_unused_parameters=False,
                     batch_eval_metrics=False,
-                    eval_and_save_results=True,
                     remove_unused_columns=False,
                     eval_accumulation_steps=8,
                     torch_empty_cache_steps=10,
@@ -1027,7 +1122,7 @@ class EpigenBERT2MLflowExperiment:
                     save_strategy="steps",
                     load_best_model_at_end=True,
                     metric_for_best_model="eval_loss",
-                    greater_is_better=False,
+                    greater_is_better=False
                 )
             else:
                 # Use the provided training_args but ensure some key settings
@@ -1053,12 +1148,12 @@ class EpigenBERT2MLflowExperiment:
             )
 
             # Fine-tune the model
-            print(f"Starting fine-tuning for chromosome {chromosome}")
+            print(f"Starting fine-tuning for dataset {dataset_name}")
             attempt = 0
             while attempt <= max_retries:
-                print(f"\n=== Training attempt {attempt + 1}/{max_retries + 1} for chromosome {chromosome} ===")
+                print(f"\n=== Training attempt {attempt + 1}/{max_retries + 1} for dataset {dataset_name} ===")
                             # Initialize model
-                print(f"Initializing EpigenBERT2 model for chromosome {chromosome}")
+                print(f"Initializing EpigenBERT2 model for dataset {dataset_name}")
                 seed = int(time.time() * 1000) % 2**32
                 # seed = 894526933
                 torch.manual_seed(seed)
@@ -1069,13 +1164,15 @@ class EpigenBERT2MLflowExperiment:
                     use_cpg_methylation=self.use_cpg_methylation,
                     use_m6a_methylation=self.use_m6a_methylation,
                     max_sequence_length=self.max_sequence_length,
-                    foundation_model_huggingface=self.foundation_model_huggingface
+                    foundation_model_huggingface=self.foundation_model_huggingface,
+                    use_triton=self.use_triton
                 )
                 print(f"Weights sum for -2 layer: {np.sum(list(model_instance.model.parameters())[-2].to("cpu").detach().numpy())}")
                 training_args.seed = seed
                 print(f"Seed for training args is {training_args.seed}")
+
                 model_instance.fine_tune(
-                    data_path=str(chr_dir),
+                    data_path=str(data_dir),
                     training_args=training_args,
                     data_interface="pandas",
                     callbacks = [early_stopping_callback,restart_callback]
@@ -1111,8 +1208,8 @@ class EpigenBERT2MLflowExperiment:
             print(f"Using checkpoint: {checkpoint_path}")
             mlflow.log_param("best_checkpoint", checkpoint_path)
                         # Log model artifacts
-            print(f"Logging model artifacts for chromosome {chromosome}")
-            checkpoint_folder_path = str(checkpoint_path).replace("\model.safetensors", "")
+            print(f"Logging model artifacts for dataset {dataset_name}")
+            checkpoint_folder_path = str(checkpoint_path).replace("\model.safetensors", "").replace("/model.safetensors", "")
             if os.path.exists(checkpoint_folder_path):
                 mlflow.log_artifacts(checkpoint_folder_path, f"model")
 
@@ -1120,10 +1217,15 @@ class EpigenBERT2MLflowExperiment:
             all_predictions = {}
             all_metrics = {}
             
+            # Clean up model instance before calculation of metrics
+            del model_instance
+            gc.collect()
+            torch.cuda.empty_cache() 
+
             for split in self.splits:
                 print(f"Calculating metrics for {split} split...")
                 metrics, predictions_df = self._make_predictions_and_calculate_metrics(
-                    checkpoint_path, split, chromosome
+                    checkpoint_path, split, dataset_name
                 )
                 
                 all_metrics[split] = metrics
@@ -1134,7 +1236,7 @@ class EpigenBERT2MLflowExperiment:
                     mlflow.log_metric(f"{split}_{metric_name}", metric_value)
             
             # Save predictions as artifacts
-            predictions_dir = f"predictions_{chromosome}"
+            predictions_dir = os.path.join(output_dir, f"predictions_{dataset_name}")
             os.makedirs(predictions_dir, exist_ok=True)
             
             for split, pred_df in all_predictions.items():
@@ -1146,7 +1248,7 @@ class EpigenBERT2MLflowExperiment:
             
             # Save comprehensive results
             results = {
-                'chromosome': chromosome,
+                'dataset': dataset_name,
                 'data_stats': data_stats,
                 'metrics': all_metrics,
                 'model_params': {
@@ -1165,7 +1267,7 @@ class EpigenBERT2MLflowExperiment:
             }
             
             # Save results as JSON artifact
-            results_file = f"results_{chromosome}.json"
+            results_file = os.path.join(output_dir, f"results_{dataset_name}.json")
             with open(results_file, 'w') as f:
                 json.dump(results, f, indent=2, default=str)
             mlflow.log_artifact(results_file, "results")
@@ -1177,41 +1279,13 @@ class EpigenBERT2MLflowExperiment:
             if os.path.exists(results_file):
                 os.remove(results_file)
             
-            print(f"✓ Completed training for chromosome {chromosome}")
+            print(f"✓ Completed training for dataset {dataset_name}")
             return results
-    
-    def run_full_experiment(self, training_args=None, **training_kwargs):
-        """
-        Run the complete experiment across all chromosomes.
-        
-        Args:
-            training_args (TrainingArguments, optional): Custom training arguments object
-            **training_kwargs: Arguments to pass to train_chromosome method (used if training_args is None)
-        """
-        print(f"Starting full experiment: {self.experiment_name}")
-        print(f"Training {len(self.chromosome_dirs)} chromosome folders")
-        print(f"Chromosome folders: {list(self.chromosome_dirs.keys())}")
-        
-        all_results = {}
-        failed_chromosomes = []
-        
-        for chromosome in self.chromosome_dirs.keys():
-            try:
-                if training_args is not None:
-                    results = self.train_chromosome(chromosome, training_args=training_args, **training_kwargs)
-                else:
-                    results = self.train_chromosome(chromosome, **training_kwargs)
-                all_results[chromosome] = results
-            except Exception as e:
-                print(f"Failed to train chromosome {chromosome}: {e}")
-                failed_chromosomes.append(chromosome)
-                continue
         
     
-class MethylBertMLflowExperiment:
+class MethylBertMLflowExperiment(TransformersMLFLowExperiment):
     """
     MLflow wrapper for training  MethylBert model across multiple chromosomes.
-    Handles experiment tracking, metrics logging, and artifact storage.
     """
     
     def __init__(self, 
@@ -1224,134 +1298,18 @@ class MethylBertMLflowExperiment:
                  ):
         """
         Initialize the MLflow experiment wrapper.
-        
         Args:
-            data_path (str): Path to the main data directory containing chromosome folders
-            experiment_name (str): Name for the MLflow experiment
-            tracking_uri (str): MLflow tracking URI (optional)
-            max_sequence_length (int): Maximum sequence length for the model
-            model_flavor (str): Model flavor ("minigru" or "lstm")
+            foundation_model_huggingface - path to foundational model
         """
-        self.data_path = Path(data_path)
+        super().__init__(data_path,
+                       experiment_name,
+                       tracking_uri,
+                       max_sequence_length,
+                       splits)
+        
         if max_sequence_length > 510: 
             return ValueError("max_sequence_length for MethylBert cannot be bigger than 510 bp")
-        self.max_sequence_length = max_sequence_length
-        self.splits = splits
         self.foundation_model_huggingface = foundation_model_huggingface
-        
-        # Set up MLflow
-        if tracking_uri:
-            mlflow.set_tracking_uri(tracking_uri)
-        
-        if experiment_name is None:
-            experiment_name = f"MethylBert_Chromosome_Training_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-        
-        self.experiment_name = experiment_name
-        mlflow.set_experiment(experiment_name)
-        
-        # Find all chromosome directories
-        self.chromosome_dirs = self._find_chromosome_directories()
-        print(f"Found {len(self.chromosome_dirs)} chromosome directories: {list(self.chromosome_dirs.keys())}")
-    
-    def _get_best_checkpoint(self, trainer, output_dir: str) -> str:
-        """
-        Return the path of the best checkpoint according to eval_loss.
-        Falls back to the latest checkpoint if – for any reason – the best one
-        cannot be located.
-        """
-        # 1️⃣ try to pick it directly from the Trainer state ------------------
-        if trainer is not None and trainer.state.best_model_checkpoint:
-            best_ckpt = trainer.state.best_model_checkpoint
-            if os.path.isdir(best_ckpt):
-                return os.path.join(os.path.abspath(best_ckpt), "model.safetensors")
-
-        # 2️⃣ look inside trainer_state.json ----------------------------------
-        state_file = Path(output_dir) / "trainer_state.json"
-        if state_file.exists():
-            with open(state_file) as f:
-                state = json.load(f)
-            best_ckpt = state.get("best_model_checkpoint")
-            if best_ckpt and os.path.isdir(best_ckpt):
-                return os.path.join(os.path.abspath(best_ckpt), "model.safetensors")
-
-        # 3️⃣ graceful fallback: use the most-recent checkpoint ---------------
-        ckpts = sorted(
-            Path(output_dir).glob("checkpoint-*"),
-            key=lambda p: int(p.name.split("-")[1])
-        )
-        if ckpts:
-            return os.path.join(os.path.abspath(str(ckpts[-1])), "model.safetensors")
-    def _find_chromosome_directories(self):
-        """Find all directories containing the required parquet files."""
-        chromosome_dirs = {}
-        
-        if not self.data_path.exists():
-            raise ValueError(f"Data path {self.data_path} does not exist")
-        
-        # _chr = [f"chr{x}"for x in range(2,10,1)]
-        # _chr.extend([f"chr{x}"for x in range(20,23,1)])
-        # _chr = ["chr7","chr8","chr4"]
-        for item in self.data_path.iterdir():
-            if item.is_dir():
-                # if item.name in _chr:
-                #if item.name not in processed_chr:
-                #     if "cpg_counts_selected" in item.name:
-                    # Check if this directory contains the required files
-                        required_files = [x+".parquet" for x in self.splits]
-                        if all((item / f).exists() for f in required_files):
-                            chromosome_dirs[item.name] = item
-        
-        if not chromosome_dirs:
-            raise ValueError(f"No directories with required parquet files found in {self.data_path}")
-        print(chromosome_dirs)
-        return chromosome_dirs
-    
-    def _calculate_data_stats(self, data_path):
-        """Calculate statistics for a dataset."""
-        try:
-            df = pd.read_parquet(data_path)
-            stats = {
-                'num_samples': len(df),
-                'num_positive': int(df['label'].sum()) if 'label' in df.columns else 0,
-                'num_negative': int(len(df) - df['label'].sum()) if 'label' in df.columns else 0,
-                'positive_ratio': float(df['label'].mean()) if 'label' in df.columns else 0.0,
-                'avg_sequence_length': float(df['input_ids'].str.len().mean()) if 'input_ids' in df.columns else 0.0
-            }
-            return stats
-        except Exception as e:
-            print(f"Error calculating stats for {data_path}: {e}")
-            return {}
-    
-    def _calculate_metrics(self, y_true, y_pred_proba, y_pred_binary,best_treshold):
-        """Calculate comprehensive metrics."""
-        try:
-            
-            metrics = {
-                'accuracy': float(accuracy_score(y_true, y_pred_binary)),
-                'precision': float(precision_score(y_true, y_pred_binary, zero_division=0)),
-                'recall': float(recall_score(y_true, y_pred_binary, zero_division=0)),
-                'f1_score': float(f1_score(y_true, y_pred_binary, zero_division=0)),
-                'roc_auc': float(roc_auc_score(y_true, y_pred_proba)) if len(np.unique(y_true)) > 1 else 0.0,
-                "threshold": best_treshold
-            }
-            
-            # Confusion matrix
-            cm = confusion_matrix(y_true, y_pred_binary)
-            if cm.shape == (2, 2):
-                tn, fp, fn, tp = cm.ravel()
-                metrics.update({
-                    'true_negatives': int(tn),
-                    'false_positives': int(fp),
-                    'false_negatives': int(fn),
-                    'true_positives': int(tp),
-                    'specificity': float(tn / (tn + fp)) if (tn + fp) > 0 else 0.0,
-                    'sensitivity': float(tp / (tp + fn)) if (tp + fn) > 0 else 0.0
-                })
-            
-            return metrics
-        except Exception as e:
-            print(f"Error calculating metrics: {e}")
-            return {}
         
     
     def _prepare_methylbert_list(self, data_path, split, dmrs, split_to_chunks=False):
@@ -1421,68 +1379,92 @@ class MethylBertMLflowExperiment:
             return data_list, data_filtered
         return data_list
     
-    def _make_predictions_and_calculate_metrics(self, model, split_name, chromosome,train_dataset, valid_dataset,dmrs):
+    def _make_predictions_and_calculate_metrics(self, model, split_name, dataset_name, train_dataset, valid_dataset, dmrs):
         """Make predictions and calculate metrics for a given split."""
         try:
-            1+1
-        finally:
-            path = self.chromosome_dirs[chromosome] / f'{split_name}.parquet'
+            path = self.data_dirs[dataset_name] / f'{split_name}.parquet'
             if split_name not in ["train", "valid"]: 
                 df = pd.read_parquet(str(path).replace("_cpg_counts_selected", ""))
-                df = df.loc[df["input_ids"].apply(len)>0] # Preventing zero length sequences --> TODO: fix in the source!!!  
-                #split_data_list, df = self._prepare_methylbert_list(self.chromosome_dirs[chromosome], split_name, dmrs, split_to_chunks=True)
-                split_data_list = self._prepare_methylbert_list(self.chromosome_dirs[chromosome], split_name, dmrs, split_to_chunks=False)
+                df = df.loc[df["input_ids"].apply(len) > 0]
+                split_data_list, df = self._prepare_methylbert_list(
+                    self.data_dirs[dataset_name], split_name, dmrs, split_to_chunks=True
+                )
                 vocab = MethylVocab(k=3)
                 split_dataset = MethylBertFinetuneDataset(
                     data_source=split_data_list,
                     vocab=vocab,
                     seq_len=self.max_sequence_length
                 )
-            elif split_name=="train":
+            elif split_name == "train":
                 split_dataset = train_dataset
-            elif split_name=="valid":
+            elif split_name == "valid":
                 split_dataset = valid_dataset
                 
-            result = model.predict(split_dataset,batch_size=200)
+            result = model.predict(split_dataset, batch_size=200)
             predictions = result.predictions if hasattr(result, 'predictions') else result[0]
             labels = result.label_ids if hasattr(result, 'label_ids') else result[1]
 
-            if split_name not in ["train", "valid", "test"]:      
-                df["predictions_proba"] = predictions
-                df["predictions_weighted"] = df["predictions_proba"] * df["num_cpgs"]
-                data_chunked_agg = df.groupby("read_name").agg(
-                    predictions_weighted=pd.NamedAgg(column="predictions_weighted", aggfunc="sum"),
-                    num_cpgs=pd.NamedAgg(column="num_cpgs", aggfunc="sum"),
-                    label=pd.NamedAgg(column="label", aggfunc="min"),
+            # Determine number of classes
+            num_classes = model.model.num_labels if hasattr(model.model, 'num_labels') else 2
+            
+            # Handle predictions based on number of classes
+            if num_classes > 2:
+                # Multi-class: predictions are logits [batch, num_classes]
+                from scipy.special import softmax
+                if predictions.max() > 1.0 or predictions.min() < 0.0:
+                    predictions = softmax(predictions, axis=1)
+                
+                if split_name not in ["train", "valid", "test"]:
+                    df, labels, predictions_binary, predictions, best_threshold = self._aggregate_predictions(
+                        df, predictions, num_classes=num_classes
                     )
-                data_chunked_agg["predictions_weighted"] = data_chunked_agg["predictions_weighted"]/data_chunked_agg["num_cpgs"]
-                fpr, tpr, thresholds = roc_curve(data_chunked_agg["label"], data_chunked_agg["predictions_weighted"])
-                best_treshold = thresholds[np.argmax(tpr-fpr)]
-                data_chunked_agg["predictions"] = data_chunked_agg["predictions_weighted"]>best_treshold
-                data_chunked_agg = data_chunked_agg.loc[data_chunked_agg["num_cpgs"]>0,]
-                labels, predictions_binary, predictions = data_chunked_agg["label"], data_chunked_agg["predictions"], data_chunked_agg["predictions_weighted"]
+                else:
+                    predictions_binary = np.argmax(predictions, axis=1)
+                    best_threshold = None
             else:
-                best_treshold = 0.5
+                # Binary classification
+                if predictions.ndim > 1:
+                    predictions = predictions.squeeze()
+                
+                if split_name not in ["train", "valid", "test"]:
+                    df, labels, predictions_binary, predictions, best_threshold = self._aggregate_predictions(
+                        df, predictions, num_classes=num_classes
+                    )
+                else:
+                    best_threshold = 0.5
+                    predictions_binary = predictions > best_threshold
 
-            # # Calculate metrics
-            predictions_binary = predictions > best_treshold
-            metrics = self._calculate_metrics(labels, predictions, predictions_binary,best_treshold)
+            # Calculate metrics
+            metrics = self._calculate_metrics(
+                labels, predictions, predictions_binary,
+                best_threshold=best_threshold if best_threshold else 0.5,
+                num_classes=num_classes
+            )
             
             # Create predictions dataframe
-            predictions_df = pd.DataFrame({
-                'true_label': labels,
-                'predicted_probability': predictions,
-                'predicted_label': predictions_binary
-            })
+            if num_classes > 2:
+                pred_dict = {'true_label': labels, 'predicted_label': predictions_binary}
+                if predictions.ndim == 2:
+                    for i in range(predictions.shape[1]):
+                        pred_dict[f'predicted_probability_class_{i}'] = predictions[:, i]
+                predictions_df = pd.DataFrame(pred_dict)
+            else:
+                predictions_df = pd.DataFrame({
+                    'true_label': labels,
+                    'predicted_probability': predictions,
+                    'predicted_label': predictions_binary
+                })
             
             return metrics, predictions_df
             
-        # except Exception as e:
-        #     print(f"Error making predictions for {split_name}: {e}")
-        #     return {}, pd.DataFrame()
+        except Exception as e:
+            print(f"Error making predictions for {split_name}: {e}")
+            import traceback
+            traceback.print_exc()
+            return {}, pd.DataFrame()
     
-    def train_chromosome(self, 
-                        chromosome,
+    def train_dataset(self, 
+                        dataset_name,
                         epochs=250,
                         batch_size=500,
                         lr=0.0004,
@@ -1492,12 +1474,13 @@ class MethylBertMLflowExperiment:
                         eval_freq=20,
                         training_args=None,
                         early_stopping_patience=10,
-                        early_stopping_threshold=0.001):
+                        early_stopping_threshold=0.001,
+                        output_dir=None):
         """
         Train a model for a specific chromosome and log everything to MLflow.
         
         Args:
-            chromosome (str): Chromosome name (directory name)
+            dataset_name (str): Dataset name (directory name)
             epochs (int): Number of training epochs
             batch_size (int): Training batch size
             lr (float): Learning rate
@@ -1511,12 +1494,12 @@ class MethylBertMLflowExperiment:
             dict: Training results and metrics
         """
         
-        with mlflow.start_run(run_name=f"chromosome_{chromosome}"):
+        with mlflow.start_run(run_name=f"dataset{dataset_name}"):
             try:
-                print(f"\n=== Training chromosome {chromosome} ===")
+                print(f"\n=== Training dataset {dataset_name} ===")
                 
                 # Log parameters
-                mlflow.log_param("chromosome", chromosome)
+                mlflow.log_param("dataset_name", dataset_name)
                 mlflow.log_param("max_sequence_length", self.max_sequence_length)
                 mlflow.log_param("foundation_model", self.foundation_model_huggingface)
                 mlflow.log_param("epochs", epochs)
@@ -1529,8 +1512,8 @@ class MethylBertMLflowExperiment:
                 mlflow.log_param("early_stopping_patience", early_stopping_patience)
                 mlflow.log_param("early_stopping_threshold", early_stopping_threshold)
                 
-                # Get chromosome directory
-                chr_dir = self.chromosome_dirs[chromosome]
+                # Get dataset directory
+                chr_dir = self.data_dirs[dataset_name]
                 
                 # Calculate and log data statistics
                 data_stats = {}
@@ -1544,7 +1527,7 @@ class MethylBertMLflowExperiment:
                         mlflow.log_metric(f"data_{split}_{key}", value)
                 
                 # Create DMR mapping from training data
-                print(f"Creating DMR mapping for chromosome {chromosome}")
+                print(f"Creating DMR mapping for dataset {dataset_name}")
                 dmr_dfs = []
                 for split in self.splits:
                     df = pd.read_parquet(chr_dir / f"{split}.parquet")
@@ -1564,7 +1547,7 @@ class MethylBertMLflowExperiment:
                 mlflow.log_param("num_dmr_labels", num_dmr_labels)
                 
                 # Prepare datasets
-                print(f"Preparing datasets for chromosome {chromosome}")
+                print(f"Preparing datasets for dataset {dataset_name}")
                 train_data = self._prepare_methylbert_list(chr_dir, "train", dmrs)
                 valid_data = self._prepare_methylbert_list(chr_dir, "valid", dmrs)
                 
@@ -1582,7 +1565,8 @@ class MethylBertMLflowExperiment:
                 )
                 
                 # Create output directory
-                output_dir = f"./output/methylbert_{chromosome}"
+                if output_dir is None:
+                    output_dir = f"./output/methylbert_{dataset_name}"
                 os.makedirs(output_dir, exist_ok=True)
                 
                 # Set up model config
@@ -1610,7 +1594,7 @@ class MethylBertMLflowExperiment:
                 ])
                 
                 # Initialize MethylBert model
-                print(f"Initializing MethylBert model for chromosome {chromosome}")
+                print(f"Initializing MethylBert model for dataset {dataset_name}")
                 model_instance = MethylBert(
                     custom_config=methylbert_config,
                     foundation_model_path=self.foundation_model_huggingface,
@@ -1645,7 +1629,7 @@ class MethylBertMLflowExperiment:
                 )
 
                 # Fine-tune the model
-                print(f"Starting fine-tuning for chromosome {chromosome}")
+                print(f"Starting fine-tuning for dataset {dataset_name}")
                 model_instance.fine_tune(
                     data_path=None,
                     train_dataset=train_dataset,
@@ -1665,8 +1649,8 @@ class MethylBertMLflowExperiment:
                 print(f"Using checkpoint: {checkpoint_path}")
                 mlflow.log_param("best_checkpoint", checkpoint_path)
                             # Log model artifacts
-                print(f"Logging model artifacts for chromosome {chromosome}")
-                checkpoint_folder_path = str(checkpoint_path).replace("\model.safetensors", "")
+                print(f"Logging model artifacts for dataset {dataset_name}")
+                checkpoint_folder_path = str(checkpoint_path).replace("\model.safetensors", "").replace("/model.safetensors", "")
                 if os.path.exists(checkpoint_folder_path):
                     mlflow.log_artifacts(checkpoint_folder_path, f"model")
 
@@ -1692,7 +1676,7 @@ class MethylBertMLflowExperiment:
                 for split in self.splits:
                     print(f"Calculating metrics for {split} split...")
                     metrics, predictions_df = self._make_predictions_and_calculate_metrics(
-                        model_instance, split, chromosome,
+                        model_instance, split, dataset_name,
                         train_dataset, 
                         valid_dataset,
                         dmrs
@@ -1706,7 +1690,7 @@ class MethylBertMLflowExperiment:
                         mlflow.log_metric(f"{split}_{metric_name}", metric_value)
                 
                 # Save predictions as artifacts
-                predictions_dir = f"predictions_{chromosome}"
+                predictions_dir = os.path.join(output_dir, f"predictions_{dataset_name}")
                 os.makedirs(predictions_dir, exist_ok=True)
                 
                 for split, pred_df in all_predictions.items():
@@ -1718,7 +1702,7 @@ class MethylBertMLflowExperiment:
                 
                 # Save comprehensive results
                 results = {
-                    'chromosome': chromosome,
+                    'dataset_name': dataset_name,
                     'data_stats': data_stats,
                     'metrics': all_metrics,
                     'model_params': {
@@ -1737,7 +1721,7 @@ class MethylBertMLflowExperiment:
                 }
                 
                 # Save results as JSON artifact
-                results_file = f"results_{chromosome}.json"
+                results_file = os.path.join(output_dir, f"results_{dataset_name}.json")
                 with open(results_file, 'w') as f:
                     json.dump(results, f, indent=2, default=str)
                 mlflow.log_artifact(results_file, "results")
@@ -1754,35 +1738,10 @@ class MethylBertMLflowExperiment:
                 gc.collect()
                 torch.cuda.empty_cache()
                 
-                print(f"✓ Completed training for chromosome {chromosome}")
+                print(f"✓ Completed training for daset {dataset_name}")
                 return results
                 
             except Exception as e:
-                print(f"✗ Error training chromosome {chromosome}: {e}")
+                print(f"✗ Error training dataset {dataset_name}: {e}")
                 mlflow.log_param("error", str(e))
-                raise e
-    
-    def run_full_experiment(self, **training_kwargs):
-        """
-        Run the complete experiment across all chromosomes.
-        
-        Args:
-            **training_kwargs: Arguments to pass to train_chromosome method
-        """
-        print(f"Starting full experiment: {self.experiment_name}")
-        print(f"Training {len(self.chromosome_dirs)} chromosome folders")
-        print(f"Chromosome folders: {list(self.chromosome_dirs.keys())}")
-        
-        all_results = {}
-        failed_chromosomes = []
-        
-        for chromosome in self.chromosome_dirs.keys():
-            # try:
-
-            results = self.train_chromosome(chromosome, **training_kwargs)
-            all_results[chromosome] = results
-            # except Exception as e:
-            #     print(f"Failed to train chromosome {chromosome}: {e}")
-            #     failed_chromosomes.append(chromosome)
-            #     continue
-        
+                raise e    

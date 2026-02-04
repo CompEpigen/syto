@@ -20,10 +20,13 @@ import torch
 import transformers
 from torch.utils.data import Dataset
 
-from methyldl.modelling.evaluation import preprocess_logits_for_metrics, compute_metrics,preprocess_logits_for_prediction,keep_logits_only
+from methyldl.modelling.evaluation import compute_metrics,preprocess_logits_for_prediction,keep_logits_only
 from methyldl.modelling.utils import calculate_batch_size
 from methyldl.data.dataset import *
 from safetensors.torch import load_file
+from transformers.models.bert.configuration_bert import BertConfig
+from methyldl.modelling.common import DMRAttentionClassifier
+
 
 class BertEmbeddings(nn.Module):
     """Construct the embeddings for words, ignoring position.
@@ -67,7 +70,7 @@ class BertEmbeddings(nn.Module):
         cpg_methylation: Optional[torch.LongTensor] = None,
         m6a_methylation: Optional[torch.LongTensor] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
-        past_key_values_length: int = 0,
+        past_key_values_length: int = 0
     ) -> torch.Tensor:
         if (input_ids is not None) == (inputs_embeds is not None):
             raise ValueError('Must specify either input_ids or inputs_embeds!')
@@ -234,15 +237,27 @@ class BertForSequenceClassification(BertPreTrainedModel):
     e.g., GLUE tasks.
     """
 
-    def __init__(self, prertained_model):
+    def __init__(self, prertained_model, num_labels=None, num_dmr_labels=None):
         super().__init__(prertained_model.config)
-        self.num_labels = prertained_model.config.num_labels
+        # Overwritting num_labels if those were provided during constructio since the foundational model features classifier with 2 labels
+        # Sometimes, one need to overwrite it before fine-tunning for multi-label learning
+        # TODO: Think about more elegant way
+        if num_labels is not None:
+            self.num_labels = num_labels
+            self.config.num_labels = num_labels
+        else:
+            self.num_labels = prertained_model.config.num_labels
         self.config = prertained_model.config
 
         self.bert = BertModel(prertained_model.bert) # Reconstructing original model 
         self.dropout = prertained_model.dropout
-        self.classifier = prertained_model.classifier
-
+        self.num_dmr_labels = num_dmr_labels
+        if num_dmr_labels is None:
+            self.classifier = prertained_model.classifier
+        else:
+            self.config.num_dmr_labels=num_dmr_labels
+            self.config.num_labels=num_labels
+            self.classifier = DMRAttentionClassifier(self.config)
         # Initialize weights and apply final processing
         self.post_init() 
 
@@ -261,6 +276,7 @@ class BertForSequenceClassification(BertPreTrainedModel):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
+        dmr_ids: Optional[torch.Tensor] =None  # DMR labels
     ) -> Union[Tuple[torch.Tensor], SequenceClassifierOutput]:
         # labels (`torch.LongTensor` of shape `(batch_size,)`, *optional*):
         # Labels for computing the sequence classification/regression loss.
@@ -285,10 +301,16 @@ class BertForSequenceClassification(BertPreTrainedModel):
             return_dict=return_dict,
         )
 
-        pooled_output = outputs[1]
-
-        pooled_output = self.dropout(pooled_output)
-        logits = self.classifier(pooled_output)
+        if self.num_dmr_labels is None:
+            pooled_output = outputs[1]
+            pooled_output = self.dropout(pooled_output)
+            logits = self.classifier(pooled_output)
+        else:
+            sequence_output = outputs[0]
+            sequence_output = self.dropout(sequence_output)
+            logits,_ = self.classifier(
+                sequence_output, dmr_ids, attention_mask
+            )
 
         loss = None
         if labels is not None:
@@ -363,6 +385,13 @@ class TrainingArguments(transformers.TrainingArguments):
     skip_memory_metrics: bool = field(default=True)
     auto_find_batch_size: bool = field(default=False)
 
+def initialize_model_with_custom_embeddings(base_model, use_cpg, use_m6a, num_labels=None,num_dmr_labels=None):
+    base_model.bert.embeddings = BertEmbeddings(base_model.bert, use_cpg, use_m6a)
+    model = BertForSequenceClassification(base_model, num_labels=num_labels,num_dmr_labels=num_dmr_labels)
+    if num_dmr_labels is None:
+        model.classifier = nn.Linear(768,out_features=num_labels,bias=True)
+    return model
+
 class EpigenDnabert2():
     def __init__(self, 
                   foundation_model_huggingface:str = "zhihan1996/DNABERT-2-117M", 
@@ -372,21 +401,26 @@ class EpigenDnabert2():
                   num_labels:int =2,
                   use_cpg_methylation=True, 
                   use_m6a_methylation=False,
-                  trust_remote_code=True):
+                  trust_remote_code=True,
+                  use_triton=True,
+                  training_args=None,
+                  num_dmr_labels=None):
         
         assert len(foundation_model_huggingface), "Must specify foundation model path hosted on Hugging Face"
+        self.num_dmr_labels = num_dmr_labels
 
-
-        # Helper method to initialize and customize the model
-        def initialize_model_with_custom_embeddings(base_model, use_cpg, use_m6a):
-            base_model.bert.embeddings = BertEmbeddings(base_model.bert, use_cpg, use_m6a)
-            return BertForSequenceClassification(base_model)
-        
         config = BertForSequenceClassification.config_class.from_pretrained(foundation_model_huggingface)
+        config = BertConfig(**config.to_dict(),use_triton=use_triton)
         # Does not load weights just yet, because if we have a checkpoint, the weights will be retrived from it 
-        base_model = transformers.AutoModelForSequenceClassification.from_config(trust_remote_code=trust_remote_code, config = config)
-        model = initialize_model_with_custom_embeddings(base_model, use_cpg_methylation, use_m6a_methylation)
-        model.classifier = nn.Linear(768,out_features=num_labels,bias=True)
+        # base_model = transformers.AutoModelForSequenceClassification.from_config(trust_remote_code=trust_remote_code, config = config)
+        base_model = transformers.AutoModelForSequenceClassification.from_pretrained(
+                foundation_model_huggingface,
+                trust_remote_code=trust_remote_code,
+                config = config,
+                local_files_only=True,  
+                cache_dir=None)  
+        model = initialize_model_with_custom_embeddings(base_model, use_cpg_methylation, use_m6a_methylation,num_labels=num_labels,num_dmr_labels=num_dmr_labels)
+
         self.num_labels=num_labels
         model.num_labels = num_labels
         if fine_tuned_model_path is not None:
@@ -404,7 +438,7 @@ class EpigenDnabert2():
                 foundation_model_huggingface,
                 trust_remote_code=trust_remote_code,
                 config = config)
-            model = initialize_model_with_custom_embeddings(base_model, use_cpg_methylation, use_m6a_methylation)
+            model = initialize_model_with_custom_embeddings(base_model, use_cpg_methylation, use_m6a_methylation,num_labels=num_labels,num_dmr_labels=num_dmr_labels)
         self.model = model
         self.num_labels = num_labels
         self.config = config
@@ -439,9 +473,11 @@ class EpigenDnabert2():
             skip_memory_metrics=True,
             auto_find_batch_size=False,
             )
-
-        self.training_args = default_training_args
-
+        if training_args == None:
+            self.training_args = default_training_args
+        else:
+            self.training_args = training_args
+        self.max_sequence_length = max_sequence_length
         self.model_max_length = model_max_length
         self.tokenizer = transformers.AutoTokenizer.from_pretrained(
             foundation_model_huggingface,
@@ -451,7 +487,7 @@ class EpigenDnabert2():
             trust_remote_code=trust_remote_code,
         )
         self.data_collator = DataCollatorForSupervisedDataset(tokenizer=self.tokenizer)
-        self.trainer = self._init_trainer() # default trainer to use for predictions 
+        self.trainer = None
     
     def __str__(self):
         str(self.model.__str__())
@@ -473,7 +509,7 @@ class EpigenDnabert2():
                                 callbacks = callbacks,
                                 optimizers = optimizers,
                                 tokenizer=self.tokenizer,
-                                preprocess_logits_for_metrics=preprocess_logits_for_metrics,
+                                preprocess_logits_for_metrics=preprocess_logits_for_prediction,
                                 compute_metrics=compute_metrics)
         elif self.num_labels>2:
             return transformers.Trainer(model=self.model,
@@ -494,16 +530,50 @@ class EpigenDnabert2():
                     gradient_checkpointing=False,
                     skip_memory_metrics=True,
                     auto_find_batch_size=False,
-                    per_device_eval_batch_size = batch_size
+                    per_device_eval_batch_size = batch_size,
+                    output_dir=self.training_args.output_dir
                     )
         else:
-            training_args = TrainingArguments(
-                    eval_strategy = "no",
-                    save_strategy = "no",
-                    gradient_checkpointing=False,
-                    skip_memory_metrics=True,
-                    auto_find_batch_size=True
-                    )
+            # TODO Must be a better way
+            # Also, when using Flash Attention, we are forced to have batch size as multiples of 64 to avoid race conditions.
+            if self.max_sequence_length <= 1000:
+                training_args = TrainingArguments(
+                        eval_strategy = "no",
+                        save_strategy = "no",
+                        gradient_checkpointing=False,
+                        skip_memory_metrics=True,
+                        auto_find_batch_size=False,
+                        per_device_eval_batch_size = 64*6
+                        )
+            elif self.max_sequence_length <= 2000:
+                training_args = TrainingArguments(
+                        eval_strategy = "no",
+                        save_strategy = "no",
+                        gradient_checkpointing=False,
+                        skip_memory_metrics=True,
+                        auto_find_batch_size=False,
+                        per_device_eval_batch_size = 64*3,
+                        output_dir=self.training_args.output_dir
+                        )
+            elif self.max_sequence_length <= 3000:
+                training_args = TrainingArguments(
+                        eval_strategy = "no",
+                        save_strategy = "no",
+                        gradient_checkpointing=False,
+                        skip_memory_metrics=True,
+                        auto_find_batch_size=False,
+                        per_device_eval_batch_size = 64,
+                        output_dir=self.training_args.output_dir
+                        )
+            else:
+                training_args = TrainingArguments(
+                        eval_strategy = "no",
+                        save_strategy = "no",
+                        gradient_checkpointing=False,
+                        skip_memory_metrics=True,
+                        auto_find_batch_size=True,
+                        output_dir=self.training_args.output_dir
+                        )
         if self.num_labels==2:
             prediction_trainer = transformers.Trainer(
                 model=self.model,
@@ -511,7 +581,7 @@ class EpigenDnabert2():
                 data_collator=self.data_collator,
                 tokenizer=self.tokenizer,
                 preprocess_logits_for_metrics=preprocess_logits_for_prediction,
-                compute_metrics=None  # Also remove compute_metrics to avoid issues
+                compute_metrics=None
             )
 
         
@@ -550,7 +620,8 @@ class EpigenDnabert2():
                   val_dataset: Optional[SupervisedDataset] = None,
                   test_dataset: Optional[SupervisedDataset] = None,
                   callbacks: Optional[List[TrainerCallback]] = None,
-                  data_interface: str = "csv"):
+                  data_interface: str = "csv",
+                  resume_from_checkpoint: Optional[Union[bool, str]] = None):
         
         # Ensure that either data_path is provided or all datasets are provided
         assert data_path or (train_dataset and val_dataset and test_dataset), (
@@ -567,10 +638,6 @@ class EpigenDnabert2():
                                         data_path_or_list=os.path.join(data_path, "valid"), 
                                         kmer=-1,data_interface=data_interface)
         print("Val is initialized")
-        # test_dataset = test_dataset or SupervisedDataset(tokenizer=self.tokenizer, 
-        #                                 data_path_or_list=os.path.join(data_path, "test"), 
-        #                                 kmer=-1,data_interface=data_interface)
-        # print("Test is initialized")
         
         if training_args is not None:
             self.training_args = training_args # overwritting default training args
@@ -581,16 +648,20 @@ class EpigenDnabert2():
                                      callbacks=callbacks)
         
         print("All datasets are successfully initiated")
-        self.trainer.train()
+        # Determine checkpoint resumption strategy
+        checkpoint_path = None
+        if resume_from_checkpoint is not None:
+            if isinstance(resume_from_checkpoint, bool) and resume_from_checkpoint:
+                # Resume from the last checkpoint in output_dir
+                checkpoint_path = True
+            elif isinstance(resume_from_checkpoint, str):
+                # Resume from specific checkpoint path
+                checkpoint_path = resume_from_checkpoint
+        elif hasattr(self, 'resume_from_checkpoint') and self.resume_from_checkpoint:
+            # Use checkpoint path from initialization if provided
+            checkpoint_path = self.resume_from_checkpoint
+
+        self.trainer.train(resume_from_checkpoint=checkpoint_path)
         if self.training_args.save_model:
             self.trainer.save_state()
             self.safe_save_model_for_hf_trainer(output_dir=training_args.output_dir)
-
-        # # get the evaluation results from trainer
-        # if training_args.eval_and_save_results:
-        #     results_path = os.path.join(training_args.output_dir, "results", training_args.run_name)
-        #     results = self.trainer.evaluate(eval_dataset=test_dataset)
-        #     os.makedirs(results_path, exist_ok=True)
-        #     with open(os.path.join(results_path, "eval_results.json"), "w") as f:
-        #         json.dump(results, f)
-        

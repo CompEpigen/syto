@@ -110,43 +110,44 @@ def pretrain_data_preprocess(f_ref: str, k: int = 3, seq_len: int = 510, f_outpu
 
     print(f"Processing completed. Output saved to {f_output}")
 
-def parse_args():
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--kmer",
-        default=1,
-        type=int,
-        help="K-mer",
-    )
-    parser.add_argument(
-        "--length",
-        default=10000,
-        type=int,
-        help="Length of the sampled sequence",
-    )
-    parser.add_argument(
-        "--file_path",
-        default=None,
-        type=str,
-        help="The path of the file to be processed",
-    )
-    parser.add_argument(
-        "--output_path",
-        default=None,
-        type=str,
-        help="The path of the processed data",
-    )
-    parser.add_argument(
-        "--num_cores",
-        default=None,
-        type=str,
-        help="The number of cores used for processing",
-    )
-    args = parser.parse_args()
-    return args
+# TODO: Cover the actual standalone application in scripts instead (not part of the package)
+# def parse_args():
+#     parser = argparse.ArgumentParser()
+#     parser.add_argument(
+#         "--kmer",
+#         default=1,
+#         type=int,
+#         help="K-mer",
+#     )
+#     parser.add_argument(
+#         "--length",
+#         default=10000,
+#         type=int,
+#         help="Length of the sampled sequence",
+#     )
+#     parser.add_argument(
+#         "--file_path",
+#         default=None,
+#         type=str,
+#         help="The path of the file to be processed",
+#     )
+#     parser.add_argument(
+#         "--output_path",
+#         default=None,
+#         type=str,
+#         help="The path of the processed data",
+#     )
+#     parser.add_argument(
+#         "--num_cores",
+#         default=None,
+#         type=str,
+#         help="The number of cores used for processing",
+#     )
+#     args = parser.parse_args()
+#     return args
     
-if __name__ == "__main__":
-    args = parse_args()
-    pretrain_data_preprocess(args.file_path, k=args.kmer, 
-                             seq_len=args.length, f_output=args.output_path, num_cores = args.num_cores)
+# if __name__ == "__main__":
+#     args = parse_args()
+#     pretrain_data_preprocess(args.file_path, k=args.kmer, 
+#                              seq_len=args.length, f_output=args.output_path, num_cores = args.num_cores)
 

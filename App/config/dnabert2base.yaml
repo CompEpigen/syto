@@ -1,0 +1,58 @@
+# EpigenBERT2 Base Configuration
+# This configuration provides standard settings for fine-tuning EpigenBERT2
+
+# Model Configuration
+model:
+  architecture: epigenbert2
+  flavor: null  # Not used for transformer models
+  foundation_model: ../foundationalModels/DNABERT-2-117M  # Base DNABERT-2 model
+  use_cpg_methylation: true
+  use_m6a_methylation: false
+  use_triton: false  # Set to true if Triton is available for optimization
+
+# Data Configuration
+data_path: ../../../Data/
+max_sequence_length: 500
+
+# Dataset splits
+splits:
+  - train
+  - valid
+  - test
+
+# Datasets to train on (use 'all' or list specific datasets)
+datasets: all
+
+# MLflow Configuration
+mlflow:
+  experiment_name: epigenbert2_base_experiment
+  tracking_uri: null  # Leave as null for local tracking or specify remote URI
+
+# Training Configuration
+training:
+  training_arguments:
+    per_device_train_batch_size : 42
+    per_device_eval_batch_size : 100
+    gradient_accumulation_steps : 1
+    learning_rate : 0.00003
+    fp16 : true
+    save_steps : 50
+    output_dir : ./results/epigenbert2_base
+    eval_strategy : steps
+    eval_steps : 50 
+    warmup_steps : 100 
+    logging_steps : 100
+    logging_dir: ./logs/epigenbert2_base 
+    num_train_epochs : 2 
+    overwrite_output_dir : true 
+    log_level : info
+    batch_eval_metrics : false
+    eval_accumulation_steps : 8
+    torch_empty_cache_steps : 10
+    prediction_loss_only: false
+    gradient_checkpointing: false
+    skip_memory_metrics: true
+    auto_find_batch_size: false
+    seed: 42
+    metric_for_best_model: eval_loss
+    save_model: true

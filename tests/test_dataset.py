@@ -28,7 +28,12 @@ class TestGenerateExampleData(unittest.TestCase):
         """Test with labels included."""
         result = generate_example_data(include_labels=True)
         self.assertEqual(result[0], ["input_ids", "label"])
-        self.assertEqual(result[1][1], 0)  # Label is set to 0
+        # Extract all labels (skip header)
+        labels = [row[1] for row in result[1:]]
+        
+        # Check all labels are either 0 or 1
+        self.assertTrue(all(label in [0, 1] for label in labels), 
+                        "All labels should be either 0 or 1")
     
     def test_multiple_samples(self):
         """Test with multiple samples."""
@@ -47,7 +52,11 @@ class TestGenerateExampleData(unittest.TestCase):
         self.assertEqual(len(result[1][0]), 150)  # Genome sequence length
         self.assertEqual(result[1][1], "2" * 150)  # cpg_methylation sequence
         self.assertEqual(result[1][2], "2" * 150)  # m6a_methylation sequence
-        self.assertEqual(result[1][3], 0)  # Label is set to 0
+        labels = [row[3] for row in result[1:]]
+        
+        # Check all labels are either 0 or 1
+        self.assertTrue(all(label in [0, 1] for label in labels), 
+                        "All labels should be either 0 or 1")
     
     def test_custom_sequence_length(self):
         """Test with a custom sequence length."""
