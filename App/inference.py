@@ -34,21 +34,26 @@ from methyldl.modelling.methylbert import (
 )
 
 # edautils is in EDA/ relative to project root
-
 from EDA.edautils import (
     process_bam_with_chunking,
-    prepare_reads_for_uxm,
     aggregate_predictions_by_dmr,
     prepare_methylbert_list_inference,
     aggregate_chuncked_predictions_weighted,    
-    uxm_deconvolution,
-    rearange_uxm_deconvolution_results,
-    XGBoostDeconvolver,
-    XGBDeconvolverConfig,
     cell_type_match_dict
 )
 from methyldl.data.genome import generate_kmer_str_with_overlap
 
+from methyldl.deconvolution.uxm import (
+    prepare_reads_for_uxm,
+    uxm_deconvolution,
+    rearange_uxm_deconvolution_results,
+    load_atlas
+)
+
+from methyldl.deconvolution.xgbdeconvolver import (
+    XGBoostDeconvolver,
+    XGBDeconvolverConfig,
+)
 
 class InferencePipeline:
     """
@@ -532,14 +537,6 @@ class InferencePipeline:
         """
         Run UXM deconvolution.
         """
-        try:
-            # from src.deconv import load_atlas, decon_single_samp
-            from EDA.edautils import load_atlas, decon_single_samp
-        except ImportError:
-            raise ImportError(
-                "Cannot import UXM deconvolution code"
-            )
-
         # Load atlas for UXM (uses its own loader)
         atlas_path = self.config["atlas_path"]
         uxm_atlas, ref_cells = load_atlas(atlas_path)
