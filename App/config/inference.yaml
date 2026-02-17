@@ -1,0 +1,75 @@
+# MethylBERT Inference Configuration
+# This configuration provides settings for running the inference pipeline.
+
+# Model Configuration
+model:
+  architecture: methylbert
+  foundation_model: foundationalModels/methylbert_hg19_12l
+
+# Path to fine-tuned MethylBERT classifier checkpoint
+checkpoint_path: Tutorials/methylBertLoyferWithReject_attentionClassifier_DMRs_stratified_hg38_dmr_ctype_label_mincpg_4_minlen_10/checkpoint-1650
+
+# Labels dictionary: JSON file mapping int label -> cell type name
+# e.g. {"0": "B-cells", "1": "T-cells", ...}
+labels_dict_path: App/labels_dict.json
+
+# Optional cell type name matching dict (atlas target name -> labels_dict name)
+# If atlas uses different naming than labels_dict, this maps between them.
+# Set to null if names already match.
+cell_type_match_dict_path: null
+
+# Atlas file (TSV with columns: chr, start, end, name, target, ...)
+atlas_path: ../UXM_deconv/supplemental/Atlas.U25.l4.hg38.full.tsv
+
+# Input configuration
+input:
+  # Input type: "bam" for raw BAM files, "processed_reads" for pre-processed pickle
+  type: predicted_reads
+  # type: bam
+  # Path to input BAM file (used when type: bam)
+  bam_path: /data/dmytro/dimelo_antonella/BSBolt/WGBS/AS-136075.rmdup.bam
+  # Path to pre-processed reads pickle (used when type: processed_reads)
+  # Must match output format of process_bam_with_chunking()
+  parsed_reads_path: null
+  predicted_reads_path: inference_output_AS-136075/predictions.pkl
+  # Path to reference genome FASTA (required for WGBS BAMs)
+  reference_path: ../wgbs_tools/references/hg38/hg38.fa.gz
+  # Data type: null for auto-detect, or "ont" / "wgbs"
+  data_type: wgbs
+  # Chromosomes to process: list of chromosome names, or "all"
+  chromosomes: all
+
+# BAM processing parameters (used when input.type: bam)
+bam_processing:
+  n_jobs: 4
+  min_mapq: 10
+  require_flags: 3
+  exclude_flags: 1796
+  min_cpgs: 1
+  merge_pairs: true
+
+# MethylBERT prediction parameters
+max_sequence_length: 150
+prediction_batch_size: 2200
+
+# Deconvolution configuration
+deconvolution:
+  methods:
+    - name: xgboost
+      enabled: true
+      checkpoint_path: EDA/deconvolution_models/xgb_dpth15.pt
+    - name: uxm
+      enabled: true
+    - name: 3Layer_MLP
+      enabled: true
+      checkpoint_path: Tutorials/methylBertLoyferWithReject_attentionClassifier_DMRs_stratified_hg38_dmr_ctype_label_mincpg_4_minlen_10/3LMLP_best_deconvolver.pt
+    - name: Shallow_Wide_Network
+      enabled: true
+      checkpoint_path: Tutorials/methylBertLoyferWithReject_attentionClassifier_DMRs_stratified_hg38_dmr_ctype_label_mincpg_4_minlen_10/swn_deconvolver.pt
+
+# Output configuration
+output:
+  output_dir: inference_output_AS-136075
+  save_processed_reads: true   # Save processed reads as pickle
+  save_predictions: true       # Save MethylBERT predictions as pickle
+  save_deconvolution: true     # Save deconvolution proportions as CSV

@@ -22,12 +22,15 @@ from methyldl.modelling.experiment_wrappers import (
 )
 from methyldl.modelling.dnabert2 import TrainingArguments #TODO - must be different for MethylBERT 
 
+from EDA.edautils import XGBoostDeconvolver,XGBDeconvolverConfig,XGBTrainingHistory
+
 def setup_logging(verbose: bool = False):
     """Configure logging for the application."""
     level = logging.DEBUG if verbose else logging.INFO
     logging.basicConfig(
         level=level,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        force=True,
         handlers=[
             logging.StreamHandler(),
             logging.FileHandler('methyldl_training.log')
@@ -46,7 +49,7 @@ def validate_config(config: Dict[str, Any], task: str) -> None:
     required_fields = {
         'fine_tune': ['model', 'data_path', 'max_sequence_length'],
         'pretrain': ['model', 'data_path'],  # Add pretrain requirements
-        'inference': ['model', 'checkpoint_path', 'data_path']  # Add inference requirements
+        'inference': ['model', 'checkpoint_path', 'labels_dict_path', 'atlas_path', 'input']
     }
     
     if task not in required_fields:
@@ -171,9 +174,33 @@ def run_fine_tuning(config: Dict[str, Any], logger: logging.Logger) -> None:
 
 def run_inference(config: Dict[str, Any], logger: logging.Logger) -> None:
     """Run inference based on configuration."""
-    logger.info("Inference mode not yet implemented")
-    # TODO: Implement inference logic
-    raise NotImplementedError("Inference mode is not yet implemented")
+    from inference import InferencePipeline
+
+    logger.info("Starting inference pipeline")
+    pipeline = InferencePipeline(config=config, logger=logger)
+    results = pipeline.run()
+
+    # Log summary
+    logger.info("=" * 60)
+    logger.info("INFERENCE RESULTS SUMMARY")
+    logger.info("=" * 60)
+    for method_name, proportions in results.items():
+        # Flatten the proportions array if it is 2D (e.g., shape (1, 39))
+        flat_props = proportions.flatten() 
+        # 1. Pair the labels with their values
+        # pipeline.labels_dict is {int: str}, so we match by index
+        cell_contributions = []
+        for idx, name in pipeline.labels_dict.items():
+            if idx < len(flat_props):
+                cell_contributions.append((name, flat_props[idx]))
+        # 2. Sort by proportion (the second element of the tuple) in descending order
+        cell_contributions.sort(key=lambda x: x[1], reverse=True)
+        # 3. Take the top 5
+        top_5 = cell_contributions[:5]
+        # 4. Format and log
+        top5_str = ", ".join([f"{name}: {val:.4f}" for name, val in top_5])
+        logger.info(f"  {method_name} Top 5: {top5_str}")
+        logger.info("=" * 60)
 
 def run_pretraining(config: Dict[str, Any], logger: logging.Logger) -> None:
     """Run pretraining based on configuration."""
@@ -223,6 +250,18 @@ Examples:
     parser.add_argument('--checkpoint', 
                        type=str,
                        help='Path to model checkpoint for inference')
+    parser.add_argument('--bam',
+                       type=str,
+                       help='Path to input BAM file (inference mode)')
+    parser.add_argument('--atlas',
+                       type=str,
+                       help='Path to atlas TSV file (inference mode)')
+    parser.add_argument('--labels-dict',
+                       type=str,
+                       help='Path to labels dictionary JSON (inference mode)')
+    parser.add_argument('--output-dir',
+                       type=str,
+                       help='Output directory for inference results')
     parser.add_argument('--datasets', 
                        nargs='+',
                        help='Specific datasets to train on (default: all)')
@@ -273,6 +312,28 @@ Examples:
             config['checkpoint_path'] = args.checkpoint
             logger.info(f"Override: checkpoint_path = {args.checkpoint}")
         
+        # Inference-specific overrides
+        if hasattr(args, 'bam') and args.bam:
+            if 'input' not in config:
+                config['input'] = {}
+            config['input']['type'] = 'bam'
+            config['input']['bam_path'] = args.bam
+            logger.info(f"Override: input.bam_path = {args.bam}")
+
+        if hasattr(args, 'atlas') and args.atlas:
+            config['atlas_path'] = args.atlas
+            logger.info(f"Override: atlas_path = {args.atlas}")
+
+        if hasattr(args, 'labels_dict') and args.labels_dict:
+            config['labels_dict_path'] = args.labels_dict
+            logger.info(f"Override: labels_dict_path = {args.labels_dict}")
+
+        if hasattr(args, 'output_dir') and args.output_dir:
+            if 'output' not in config:
+                config['output'] = {}
+            config['output']['output_dir'] = args.output_dir
+            logger.info(f"Override: output.output_dir = {args.output_dir}")
+
         if args.datasets:
             config['datasets'] = args.datasets
             logger.info(f"Override: datasets = {args.datasets}")

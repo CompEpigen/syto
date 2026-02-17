@@ -29,20 +29,114 @@ from sklearn.metrics import confusion_matrix
 import shutil
 import tempfile
 import gc
-
+import xgboost as xgb
+from sklearn.multioutput import MultiOutputRegressor
+import os.path as op
 import sys
+from scipy import optimize
+import joblib
 
 # TODO: Copy or source this code from uxm library directly (requires the uxm library to be installed)
-repo_path = os.path.abspath("../../UXM_deconv/src")
-if repo_path not in sys.path:
-    sys.path.append(repo_path)
+# repo_path = os.path.abspath("../../UXM_deconv/src")
+# if repo_path not in sys.path:
+#     sys.path.append(repo_path)
 
-repo_path = os.path.abspath("../../UXM_deconv")
-if repo_path not in sys.path:
-    sys.path.append(repo_path)
+# repo_path = os.path.abspath("../../UXM_deconv")
+# if repo_path not in sys.path:
+#     sys.path.append(repo_path)
 
-from src.deconv import load_atlas,decon_single_samp
+# from src.deconv import load_atlas,decon_single_samp
 
+### Selected deconvolution code from https://github.com/nloyfer/UXM_deconv ###
+
+def eprint(*args,  **kargs):
+    print(*args, file=sys.stderr, **kargs)
+
+def validate_ref_tissues(df, tissue_list):
+    for col in tissue_list:
+        if col not in df.columns:
+            eprint('Invalid cell type (not in atlas):', col)
+            exit()
+
+def validate_file(fpath):
+    if not op.isfile(fpath):
+        eprint('Invalid file', fpath)
+        exit()
+    return fpath
+
+def load_atlas(atlas_path, ignore=None, include=None):
+    if not op.isfile(atlas_path):
+        eprint('Invalid reference atlas (--atlas flag)')
+    validate_file(atlas_path)
+
+    # take a peek:
+    df = pd.read_csv(atlas_path, sep='\t', nrows=2)
+    if df.shape[1] < 8:
+        eprint(f'Invalid atlas: {atlas_path}')
+        exit(1)
+    df = pd.read_csv(atlas_path, sep='\t')
+    if df['name'].str.startswith('chr').sum() != df.shape[0]:
+        eprint(f'Invalid atlas: {atlas_path}. "name" column must all start with "chr"')
+        exit(1)
+
+    if ignore is not None:
+        validate_ref_tissues(df, ignore)
+        for col in ignore:
+            del df[col]
+            df = df[df.target != col]
+    elif include is not None:
+        validate_ref_tissues(df, include)
+        df = df[df.target.isin(include)]
+        keep = list(df.columns[:8]) + include
+        df = df[keep]
+
+    df.reset_index(inplace=True, drop=True)
+    return df, list(df.columns[8:])
+
+
+def decon_single_samp(samp, atlas, counts, verbose, debug=False):
+    """
+    Deconvolve a single sample, using NNLS, to get the mixture coefficients.
+    :param samp: a vector of a single sample
+    :param atlas: the atlas DataFrame
+    :return: the mixture coefficients
+    """
+
+    name = samp.columns[2]
+    counts.columns = ['name', 'direction', 'counts']
+
+    # remove missing sites from both sample and atlas:
+    # TODO: imputation for the atlas?
+    nd_cols = ['name', 'direction']
+    data = samp.merge(atlas.drop_duplicates(nd_cols, ignore_index=True), on=nd_cols, how='inner').copy().dropna(axis=0)
+    data = data.merge(counts.drop_duplicates(nd_cols, ignore_index=True), on=nd_cols, how='left')
+
+    if data.empty:
+        eprint(f'Warning: skipping an empty sample {name}')
+        return np.nan, np.nan
+
+    if data.shape[0] > atlas.shape[0]:
+        eprint('ERROR: merge went wrong. Validate your atlas')
+        return None, None
+    if verbose:
+        eprint('{}: {} \ {} markers'.format(name, data.shape[0], atlas.shape[0]))
+    del data['name'], data['direction']
+
+    samp = data.iloc[:, 0]
+    counts = data.iloc[:, -1]
+    red_atlas = data.iloc[:, 1:-1]
+
+    # apply weights:
+    red_atlas = red_atlas * counts.values[:, np.newaxis]
+    samp = samp * counts
+
+    # get the mixture coefficients by deconvolution 
+    # (non-negative least squares)
+    mixture, residual = optimize.nnls(red_atlas, samp)
+    mixture /= np.sum(mixture)
+    return mixture
+
+### End of UXM Code ### 
 
 cell_type_match_dict = {
 "Adipocytes": "Adipocytes",
@@ -462,7 +556,9 @@ def aggregate_predictions_by_dmr(
     group_cols: List[str] = ['dmr_label', 'file', 'original_label'],
     prediction_cols: Optional[List[str]] = None,
     weight_col: str = 'total_marked_cpgs',
-    create_weight_from_cpgs: bool = True
+    create_weight_from_cpgs: bool = True,
+    fill_in_missing_labels: bool = False,
+    labels_dict: dict = None
 ) -> pd.DataFrame:
     """
     Aggregate predictions for each class across all reads at the DMR level.
@@ -479,6 +575,11 @@ def aggregate_predictions_by_dmr(
         Column name to use for weighted aggregation. Default: 'total_marked_cpgs'
     create_weight_from_cpgs : bool
         If True and weight_col doesn't exist, creates it from methylated_CpGs + unmethylated_CpGs.
+    fill_in_missing_labels: bool
+        If True, fills in additional rows from labels_dict labels not presented in the data. All predictions in
+        these rows will be zero
+    labels_dict: dict
+        Must be provided if fill_in_missing_labels is set to True
         
     Returns
     -------
@@ -487,6 +588,9 @@ def aggregate_predictions_by_dmr(
     """
     
     df = df.copy()
+    if fill_in_missing_labels:
+        if labels_dict is None:
+            raise ValueError("labels_dict must be provided when fill_in_missing_labels is set to True")
     
     # Auto-detect prediction columns if not provided
     if prediction_cols is None:
@@ -535,7 +639,15 @@ def aggregate_predictions_by_dmr(
     if metadata_cols:
         metadata = df.groupby(group_cols)[metadata_cols].first()
         result = result.join(metadata)
-    
+    if fill_in_missing_labels:
+        labels_dict_pd = pd.DataFrame(labels_dict, index=["dmr_ctype"]).T.reset_index()
+        labels_dict_pd.columns = ["dmr_ctype_label", "dmr_ctype"]
+        if not set(x["dmr_ctype_label"]).difference(set(labels_dict_pd["dmr_ctype_label"])):
+            result = pd.merge(result, labels_dict_pd, on =["dmr_ctype_label", "dmr_ctype"], how="outer")
+            result[result.isna()] = 0
+            result["label"] = -1
+            result["total_weight"] = result["total_weight"].apply(lambda x: max(x,1))
+
     return result.reset_index()
 
 def get_final_prediction(
@@ -609,7 +721,6 @@ def random_select_with_weights(elements, n):
 
 
 def uxm_deconvolution(atlas, ref_cells, sf, counts, sample_names=["pseudo_balk_sample"]):
-    df = pd.DataFrame(columns=sample_names, index=ref_cells)
     params = [(sf[['name', 'direction', samp]],
                atlas[['name', 'direction'] + ref_cells],
                counts[['name', 'direction', samp]],
@@ -1090,7 +1201,426 @@ class DMRAttentionDeconvolver(nn.Module):
         logits = self.proportion_head(pooled)
         
         return torch.softmax(logits, dim=-1)
+
+@dataclass
+class XGBDeconvolverConfig:
+    """Configuration for XGBoost Deconvolver."""
+    n_estimators: int = 200
+    max_depth: int = 6
+    learning_rate: float = 0.1
+    subsample: float = 0.8
+    colsample_bytree: float = 0.8
+    min_child_weight: int = 3
+    reg_alpha: float = 0.1
+    reg_lambda: float = 1.0
+    early_stopping_rounds: Optional[int] = 20
+    random_state: int = 42
+
+@dataclass
+class XGBTrainingHistory:
+    """Stores training metrics matching PyTorch version."""
+    train_loss: list = field(default_factory=list)
+    train_mae: list = field(default_factory=list)
+    train_mse: list = field(default_factory=list)
+    train_kl: list = field(default_factory=list)
+    train_max_error: list = field(default_factory=list)
+    train_cosine_sim: list = field(default_factory=list)
+    val_loss: list = field(default_factory=list)
+    val_mae: list = field(default_factory=list)
+    val_mse: list = field(default_factory=list)
+    val_kl: list = field(default_factory=list)
+    val_max_error: list = field(default_factory=list)
+    val_cosine_sim: list = field(default_factory=list)
+    best_iteration: int = 0
+    stopped_early: bool = False
     
+    def to_dict(self) -> dict:
+        return {
+            'train_loss': self.train_loss,
+            'train_mae': self.train_mae,
+            'train_mse': self.train_mse,
+            'train_kl': self.train_kl,
+            'train_max_error': self.train_max_error,
+            'train_cosine_sim': self.train_cosine_sim,
+            'val_loss': self.val_loss,
+            'val_mae': self.val_mae,
+            'val_mse': self.val_mse,
+            'val_kl': self.val_kl,
+            'val_max_error': self.val_max_error,
+            'val_cosine_sim': self.val_cosine_sim,
+            'best_iteration': self.best_iteration,
+            'stopped_early': self.stopped_early
+        }
+
+class XGBoostDeconvolver:
+    """
+    XGBoost-based deconvolver using diagonal and rejection features.
+    
+    Uses only:
+    - Diagonal elements: x[i, i] for i in 0..n_dmr-1 (39 features)
+    - Rejection column: x[:, -1] (39 features)
+    Total: 78 features → 39 cell type proportions
+    
+    Parameters
+    ----------
+    n_dmr_groups : int
+        Number of DMR groups (default: 39)
+    n_pred_classes : int
+        Number of prediction classes including rejection (default: 40)
+    n_cell_types : int
+        Number of output cell types (default: 39)
+    config : XGBDeconvolverConfig
+        XGBoost hyperparameters
+    output_transform : str
+        How to handle outputs:
+        - 'none': Direct prediction (use when targets are proportions)
+        - 'clip_normalize': Clip to [0,∞) and normalize to sum=1
+        - 'softmax': Apply softmax (use when training on logits)
+    """
+    
+    def __init__(
+        self,
+        n_dmr_groups: int = 39,
+        n_pred_classes: int = 40,
+        n_cell_types: int = 39,
+        with_reject_features = True,
+        process_inputs = True,
+        config: Optional[XGBDeconvolverConfig] = None,
+        output_transform: Literal['none', 'clip_normalize', 'softmax'] = 'clip_normalize'
+    ):
+        self.n_dmr = n_dmr_groups
+        self.n_pred_classes = n_pred_classes
+        self.n_cell_types = n_cell_types
+        self.config = config or XGBDeconvolverConfig()
+        self.output_transform = output_transform
+        self.with_reject_features = with_reject_features
+        self.process_inputs = process_inputs 
+        if with_reject_features:
+            self.n_features = n_dmr_groups * 2  # diagonal + reject column
+        else:
+            self.n_features = n_dmr_groups
+        
+        self.model = None
+        self.best_model = None
+        self.history = None
+        self._is_fitted = False
+        
+    def _build_model(self,verbose=0) -> MultiOutputRegressor:
+        """Build XGBoost multi-output regressor."""
+        base_model = xgb.XGBRegressor(
+            n_estimators=self.config.n_estimators,
+            max_depth=self.config.max_depth,
+            learning_rate=self.config.learning_rate,
+            subsample=self.config.subsample,
+            colsample_bytree=self.config.colsample_bytree,
+            min_child_weight=self.config.min_child_weight,
+            reg_alpha=self.config.reg_alpha,
+            reg_lambda=self.config.reg_lambda,
+            random_state=self.config.random_state,
+            n_jobs=-1,
+            verbosity=verbose
+        )
+        return MultiOutputRegressor(base_model)
+    
+    def extract_features(self, X: np.ndarray) -> np.ndarray:
+        """
+        Extract diagonal and rejection column features.
+        
+        Parameters
+        ----------
+        X : np.ndarray
+            Input array of shape (n_samples, n_dmr_groups, n_pred_classes)
+            
+        Returns
+        -------
+        features : np.ndarray
+            Extracted features of shape (n_samples, n_dmr_groups * 2)
+        """
+        if not self.process_inputs:
+            return X
+        
+        if X.ndim == 2:
+            X = X[np.newaxis, ...]
+            
+        n_samples = X.shape[0]
+        
+        # Extract diagonal: x[i, i] for i in 0..n_dmr-1
+        diagonal = np.array([
+            np.diag(X[i, :, :self.n_dmr]) 
+            for i in range(n_samples)
+        ])  # (n_samples, 39)
+        
+        # Extract rejection column (last column)
+        if self.with_reject_features:
+            reject_col = X[:, :, -1]  # (n_samples, 39)
+            # Concatenate features
+            features = np.concatenate([diagonal, reject_col], axis=1)
+        else:
+            features = diagonal
+        return features
+    
+    def _transform_output(self, raw_output: np.ndarray) -> np.ndarray:
+        """
+        Transform raw model outputs to valid proportions.
+        """
+        if self.output_transform == 'none':
+            # Just ensure valid proportions
+            output = np.clip(raw_output, 0, 1)
+            row_sums = output.sum(axis=1, keepdims=True)
+            # Only normalize if sum > 0
+            row_sums = np.where(row_sums == 0, 1, row_sums)
+            return output / row_sums
+        
+        elif self.output_transform == 'clip_normalize':
+            # Clip negative values and normalize
+            clipped = np.clip(raw_output, 0, None)
+            row_sums = clipped.sum(axis=1, keepdims=True)
+            row_sums = np.where(row_sums == 0, 1, row_sums)
+            return clipped / row_sums
+        
+        elif self.output_transform == 'softmax':
+            # Softmax (use only if training on log-odds/logits)
+            exp_out = np.exp(raw_output - np.max(raw_output, axis=1, keepdims=True))
+            return exp_out / exp_out.sum(axis=1, keepdims=True)
+        
+        else:
+            raise ValueError(f"Unknown output_transform: {self.output_transform}")
+    
+    def _predict_raw(self, X_features: np.ndarray) -> np.ndarray:
+        """Get raw model predictions without transformation."""
+        return self.model.predict(X_features)
+    
+    def fit(
+        self,
+        X_train: np.ndarray,
+        y_train: np.ndarray,
+        X_val: Optional[np.ndarray] = None,
+        y_val: Optional[np.ndarray] = None,
+        loss_weights: Optional[Dict[str, float]] = None,
+        early_stopping_metric: Literal['val_loss', 'val_mae', 'val_mse', 'val_kl', 'val_max_error', 'val_cosine_sim'] = 'val_mae',
+        verbose: int = 1
+    ) -> 'XGBoostDeconvolver':
+        """
+        Fit the XGBoost deconvolver with metric tracking.
+        
+        Parameters
+        ----------
+        X_train : np.ndarray
+            Training data of shape (n_samples, n_dmr_groups, n_pred_classes)
+        y_train : np.ndarray
+            Training labels of shape (n_samples, n_cell_types)
+        X_val : np.ndarray, optional
+            Validation data
+        y_val : np.ndarray, optional
+            Validation labels
+        loss_weights : dict, optional
+            Weights for combined loss: {'mse': float, 'kl': float}
+        early_stopping_metric : str
+            Metric to monitor for early stopping
+        verbose : int
+            Verbosity level (0=silent, 1=progress, 2=detailed)
+            
+        Returns
+        -------
+        self : XGBoostDeconvolver
+        """
+        if loss_weights is None:
+            loss_weights = {'mse_weight': 1.0, 'kl_weight': 0.5}
+        
+        
+        # Determine if we should maximize or minimize
+        maximize_metrics = {'val_cosine_sim'}
+        minimize = early_stopping_metric not in maximize_metrics
+        
+        # Extract features
+        X_train_feat = self.extract_features(X_train)
+        X_val_feat = self.extract_features(X_val) if X_val is not None else None
+        
+        if verbose:
+            print(f"Training XGBoost Deconvolver")
+            print(f"  Input shape: {X_train.shape} → Features: {X_train_feat.shape}")
+            print(f"  Output shape: {y_train.shape}")
+            print(f"  Output transform: {self.output_transform}")
+            print(f"  Early stopping on: {early_stopping_metric}")
+            print("-" * 60)
+        
+        # Initialize history
+        self.history = XGBTrainingHistory()
+        
+        # For proper early stopping, we'll train incrementally
+        best_score = float('inf') if minimize else float('-inf')
+        patience_counter = 0
+        best_iteration = 0
+        
+        # Build fresh model
+        self.model = self._build_model(verbose=verbose)
+        
+        # Train for n_estimators rounds, checking validation each time
+        # Note: This is a workaround since sklearn's MultiOutputRegressor
+        # doesn't support per-round callbacks easily
+        
+        # For simplicity, we'll train the full model first, then evaluate
+        # If you need true incremental training, use the Native version below
+        
+        self.model.fit(X_train_feat, y_train)
+        
+        # Compute final metrics
+        train_pred_raw = self._predict_raw(X_train_feat)
+        train_pred = self._transform_output(train_pred_raw)
+        train_metrics = compute_deconvolution_metrics_np(train_pred, y_train)
+        train_loss = compute_combined_loss(train_pred, y_train, **loss_weights)
+        
+        self.history.train_loss.append(train_loss)
+        self.history.train_mae.append(train_metrics['mae'])
+        self.history.train_mse.append(train_metrics['mse'])
+        self.history.train_kl.append(train_metrics['kl'])
+        self.history.train_max_error.append(train_metrics['max_error'])
+        self.history.train_cosine_sim.append(train_metrics['cosine_sim'])
+        
+        if X_val is not None and y_val is not None:
+            val_pred_raw = self._predict_raw(X_val_feat)
+            val_pred = self._transform_output(val_pred_raw)
+            val_metrics = compute_deconvolution_metrics_np(val_pred, y_val)
+            val_loss = compute_combined_loss(val_pred, y_val, **loss_weights)
+            
+            self.history.val_loss.append(val_loss)
+            self.history.val_mae.append(val_metrics['mae'])
+            self.history.val_mse.append(val_metrics['mse'])
+            self.history.val_kl.append(val_metrics['kl'])
+            self.history.val_max_error.append(val_metrics['max_error'])
+            self.history.val_cosine_sim.append(val_metrics['cosine_sim'])
+        
+        self._is_fitted = True
+        
+        if verbose:
+            print(f"\nTraining Results:")
+            print(f"  Train Loss: {train_loss:.4f}")
+            print(f"  Train MAE:  {train_metrics['mae']:.4f}")
+            print(f"  Train MSE:  {train_metrics['mse']:.4f}")
+            print(f"  Train KL:   {train_metrics['kl']:.4f}")
+            print(f"  Train Max Error: {train_metrics['max_error']:.4f}")
+            print(f"  Train Cosine Sim: {train_metrics['cosine_sim']:.4f}")
+            
+            if X_val is not None:
+                print(f"\nValidation Results:")
+                print(f"  Val Loss:   {val_loss:.4f}")
+                print(f"  Val MAE:    {val_metrics['mae']:.4f}")
+                print(f"  Val MSE:    {val_metrics['mse']:.4f}")
+                print(f"  Val KL:     {val_metrics['kl']:.4f}")
+                print(f"  Val Max Error: {val_metrics['max_error']:.4f}")
+                print(f"  Val Cosine Sim: {val_metrics['cosine_sim']:.4f}")
+        
+        return self
+    
+    def predict(self, X: np.ndarray) -> np.ndarray:
+        """
+        Predict cell type proportions.
+        
+        Parameters
+        ----------
+        X : np.ndarray
+            Input data of shape (n_samples, n_dmr_groups, n_pred_classes)
+            
+        Returns
+        -------
+        proportions : np.ndarray
+            Predicted proportions of shape (n_samples, n_cell_types)
+        """
+        if not self._is_fitted:
+            raise RuntimeError("Model must be fitted before prediction")
+        
+        single_sample = X.ndim == 2
+        features = self.extract_features(X)
+        
+        raw_output = self._predict_raw(features)
+        proportions = self._transform_output(raw_output)
+        
+        if single_sample:
+            proportions = proportions[0]
+            
+        return proportions
+    
+    def evaluate(
+        self, 
+        X: np.ndarray, 
+        y: np.ndarray,
+        loss_weights: Optional[Dict[str, float]] = None
+    ) -> Dict[str, float]:
+        """
+        Evaluate model on given data.
+        
+        Returns all metrics matching the PyTorch version.
+        """
+        if loss_weights is None:
+            loss_weights = {'mse': 1.0, 'kl': 0.5}
+            
+        pred = self.predict(X)
+        metrics = compute_deconvolution_metrics_np(pred, y)
+        metrics['loss'] = compute_combined_loss(pred, y, **loss_weights)
+        
+        return metrics
+    
+    def get_feature_importance(self, aggregate: bool = True) -> Dict[str, np.ndarray]:
+        """Get feature importance scores."""
+        if not self._is_fitted:
+            raise RuntimeError("Model must be fitted before getting importance")
+        
+        importances = np.array([
+            est.feature_importances_ 
+            for est in self.model.estimators_
+        ])
+        
+        if aggregate:
+            importances = importances.mean(axis=0)
+        
+        return {
+            'diagonal': importances[..., :self.n_dmr],
+            'reject': importances[..., self.n_dmr:],
+            'all': importances
+        }
+    
+    def save(self, filepath: str):
+        """
+        Save the entire model object to disk using joblib.
+        
+        Parameters
+        ----------
+        filepath : str
+            Path to save the model (e.g., 'model.pkl' or 'model.joblib')
+        """
+        # Ensure directory exists
+        os.makedirs(os.path.dirname(os.path.abspath(filepath)), exist_ok=True)
+        
+        # We save 'self' which includes the config, the fitted model, and history
+        joblib.dump(self, filepath)
+        print(f"Model saved to {filepath}")
+
+    @classmethod
+    def load(cls, filepath: str) -> 'XGBoostDeconvolver':
+        """
+        Load a saved model from disk.
+        
+        Parameters
+        ----------
+        filepath : str
+            Path to the saved model file.
+            
+        Returns
+        -------
+        model : XGBoostDeconvolver
+            The loaded model instance.
+        """
+        if not os.path.exists(filepath):
+            raise FileNotFoundError(f"Model file not found at {filepath}")
+            
+        model = joblib.load(filepath)
+        
+        # Basic validation to ensure it's the right class
+        if not isinstance(model, cls):
+            raise TypeError(f"Loaded object is not of type {cls.__name__}")
+            
+        return model
+
 @dataclass
 class DeconvolverOutput:
     """Structured output from the deconvolver containing predictions and intermediate features."""
@@ -4349,10 +4879,10 @@ def process_bam_with_chunking(bam_path, chromosomes,
         print("Merging paired-end reads into fragments...")
         df = merge_paired_reads(df, verbose=True)
         
-        # Add reference CpG counts to get accurate unknown counts
-        # This counts all CpGs in the fragment span, including insert region
-        if reference_path is not None:
-            df = add_reference_cpg_counts(df, reference_path, verbose=True)
+        # # Add reference CpG counts to get accurate unknown counts
+        # # This counts all CpGs in the fragment span, including insert region
+        # if reference_path is not None:
+        #     df = add_reference_cpg_counts(df, reference_path, verbose=True)
     
     return df
 
@@ -5385,6 +5915,122 @@ def plot_confusion_matrix_for_target_confidence(predictions, confidence, target_
 
     plt.tight_layout()
     plt.show()
+
+def chunk_tokens(tokens, window_size, stride):
+    """
+    Splits a list of tokens into overlapping chunks of fixed size.
+    Ensures no chunk is shorter than window_size (unless the total read is shorter).
+    """
+    total_len = len(tokens)
+    
+    # Case 1: Read is shorter than the window. Return as is.
+    if total_len <= window_size:
+        yield tokens
+        return
+
+    # Case 2: Sliding window
+    # We iterate until the window would go out of bounds
+    for i in range(0, total_len - window_size + 1, stride):
+        yield tokens[i : i + window_size]
+        
+    # Case 3: Handle the "Tail"
+    # If the last sliding window didn't exactly align with the end,
+    # we yield one final chunk containing the *last* window_size elements.
+    # This creates a variable overlap for the last segment, but ensures full context.
+    if total_len % stride != 0:
+        yield tokens[-window_size:]
+
+def generate_valid_tokens(read_data, k=3):
+    """
+    Yields valid k-mers and their ORIGINAL indices.
+    Skips any k-mer containing 'N'.
+    """
+    seq = read_data['input_ids']
+    pattern = read_data['methylation_ids']
+    
+    # We iterate up to len(seq) - k + 1
+    for i in range(len(seq) - k + 1):
+        kmer = seq[i : i+k]
+        
+        # 1. Check for 'N' in the window
+        if 'N' in kmer:
+            continue
+            
+        center_idx = i + 1
+        methylation_code = pattern[center_idx]
+        
+        # Yield the clean k-mer and its specific methylation label
+        yield [kmer,methylation_code]
+
+def aggregate_chuncked_predictions_weighted(pred_df, weight_col='ncpgs_marked', group_col='read_name'):
+    """
+    Calculates the weighted average of prediction columns grouped by read_name.
+    """
+    # 1. Identify prediction columns (prediction_0 ... prediction_39)
+    pred_cols = [c for c in pred_df.columns if c.startswith('prediction_')]
+    
+    # 2. Create a working copy to avoid SettingWithCopy warnings
+    df = pred_df.copy()
+    
+    # 3. Vectorized Weighting: Multiply all prediction columns by the weight column
+    # This is much faster than doing it inside the groupby
+    df[pred_cols] = df[pred_cols].multiply(df[weight_col], axis=0)
+    
+    # 4. Group by read_name and sum both the weighted predictions and the weights
+    grouped = df.groupby(group_col)
+    
+    # Sum the weighted scores
+    summed_preds = grouped[pred_cols].sum()
+    
+    # Sum the weights (the total number of CpGs seen across all chunks for this read)
+    summed_weights = grouped[weight_col].sum()
+    
+    # 5. Divide to get the Weighted Average
+    # We use .div with axis=0 to align by the index (read_name)
+    final_averaged_df = summed_preds.div(summed_weights, axis=0)
+    
+    # 6. Cleanup
+    # Handle cases where total weight might be 0 (avoid division by zero errors)
+    # Though your filtering likely prevents this, it's good practice.
+    final_averaged_df = final_averaged_df.fillna(0)
+    
+    # Reset index so 'read_name' becomes a column again
+    return final_averaged_df.reset_index()
+
+def prepare_methylbert_list_inference(results_df, dmr_label_column, seq_length=150, stride=75):
+    """
+    Prepares inference data with sliding window chunking.
+    params:
+        stride: How far to move the window (75 = 50% overlap for 150bp window)
+    """
+    data_list = [['dna_seq', 'methyl_seq', 'dmr_ctype', 'dmr_label', 'ctype', 'original_label', 'read_name', "ncpgs_marked"]]
+    
+    for i, row in results_df.iterrows():
+        # 1. Get the CLEAN stream of tokens (Ns removed)
+        processed_read_full = list(generate_valid_tokens(row))
+        read_name = row["read_name"]
+        # If read was entirely Ns or empty, skip
+        if not processed_read_full:
+            continue
+            
+        # 2. Chunk the valid tokens
+        # We process the read in chunks of 'seq_length'
+        for chunk in chunk_tokens(processed_read_full, window_size=seq_length, stride=stride):
+            
+            dna = " ".join([x[0] for x in chunk])
+            methyl = "".join([x[1] for x in chunk])
+            ncpgs_marked = methyl.count("0")+ methyl.count("1")
+            # Metadata propagation
+            # Note: You might want to track which chunk this is (e.g., read_id_0, read_id_1)
+            # but for bulk inference, this format works.
+            label = 39 
+            o_label = 39 
+            dmr_label = row[dmr_label_column]
+            dmr_ctype = row["dmr_ctype_label"]
+            
+            data_list.append([dna, methyl, dmr_ctype, dmr_label, label, o_label,read_name,ncpgs_marked])
+            
+    return data_list
 
 
 def prepare_reads_for_uxm(reads_data,atlas,labels_dict, cell_type_match_dict,
