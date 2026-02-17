@@ -1167,7 +1167,7 @@ class EpigenBERT2MLflowExperiment(TransformersMLFLowExperiment):
                     foundation_model_huggingface=self.foundation_model_huggingface,
                     use_triton=self.use_triton
                 )
-                print(f"Weights sum for -2 layer: {np.sum(list(model_instance.model.parameters())[-2].to("cpu").detach().numpy())}")
+                print(f"Weights sum for -2 layer: {np.sum(list(model_instance.model.parameters())[-2].to('cpu').detach().numpy())}")
                 training_args.seed = seed
                 print(f"Seed for training args is {training_args.seed}")
 
