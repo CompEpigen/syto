@@ -19,7 +19,6 @@ from scipy import stats
 import warnings
 import pysam
 from multiprocessing import Pool, cpu_count
-from intervaltree import IntervalTree
 from collections import defaultdict
 import numba as nb
 import re
@@ -3271,35 +3270,8 @@ def extract_cpg_ml_values(ml_array, mm_info):
         # Handle edge case where ML array is shorter than expected
         return np.array(ml_array[offset:])
 
-
-def build_dmr_trees(dmr_df):
-    """
-    Build interval trees for efficient DMR overlap queries.
-    """
-    trees = defaultdict(IntervalTree)
-    for _, dmr in dmr_df.iterrows():
-        chrom = dmr['chr']
-        start = dmr['start']
-        end = dmr['end']
-        dmr_data = {
-            'startCpG': dmr["startCpG"], 
-            'endCpG': dmr["endCpG"], 
-            'type': dmr["target"], 
-            'name': dmr["name"],
-            # 'length': dmr['Length'],
-            # 'nCG': dmr['Number of CpGs'],
-            # 'meanMethy1': dmr['Target meth. '],
-            # 'meanMethy2': dmr['Background meth.'],
-            # 'diff.Methy': dmr['Diff'],
-            # 'name': dmr["dmr_label"],
-            # 'type': dmr['Type']
-        }
-        trees[chrom][start:end] = dmr_data
-    return dict(trees)
-
 import numpy as np
 from collections import defaultdict
-from intervaltree import IntervalTree
 
 def analyze_read_dmr_overlap(read_start, read_end, chrom, dmr_trees, strict=False):
     """
@@ -4337,163 +4309,6 @@ def process_bam_with_chunking(bam_path, chromosomes,
     
     return df
 
-
-# =============================================================================
-# INTERACTIVE TESTING UTILITIES
-# =============================================================================
-
-def test_single_read_ont(bam_path, dmr_df, read_name=None, chromosome=None, position=None,read_chunk_size=150):
-    """
-    Test processing of a single ONT read interactively.
-    
-    Parameters:
-    -----------
-    bam_path : str
-        Path to BAM file
-    dmr_df : pd.DataFrame
-        DataFrame with DMR regions
-    read_name : str, optional
-        Specific read name to process
-    chromosome : str, optional
-        Chromosome to fetch from (if not using read_name)
-    position : int, optional
-        Position to fetch from (if not using read_name)
-    
-    Returns:
-    --------
-    dict with:
-        'read': the read object
-        'chunks': list of chunk dictionaries
-        'mm_info': parsed MM tag info
-        'ml_values': extracted C+m ML values
-    """
-    dmr_trees = build_dmr_trees(dmr_df)
-    
-    with pysam.AlignmentFile(bam_path, "rb") as bam:
-        # Get a read to test
-        if read_name:
-            # Find specific read by name
-            read = None
-            for r in bam:
-                if r.query_name == read_name:
-                    read = r
-                    break
-            if read is None:
-                raise ValueError(f"Read {read_name} not found")
-        elif chromosome and position is not None:
-            # Get first read at position
-            for read in bam.fetch(chromosome, position, position + 1):
-                if not read.is_unmapped:
-                    break
-        else:
-            # Get first mapped read
-            for read in bam:
-                if not read.is_unmapped:
-                    break
-        
-        # Parse tags
-        try:
-            ml_full = read.get_tag('ML')
-            mm_tag = read.get_tag('MM')
-            mm_info = parse_mm_tag(mm_tag)
-            ml_cpg = extract_cpg_ml_values(ml_full, mm_info)
-        except KeyError as e:
-            print(f"Missing tag: {e}")
-            mm_info = None
-            ml_cpg = []
-        
-        # Process read
-        chunks = process_single_read(
-            read=read,
-            data_type='ont',
-            dmr_trees=dmr_trees,
-            read_chunk_size=read_chunk_size,
-            methyl_tr=122
-        )
-        
-        return {
-            'read': read,
-            'chunks': chunks,
-            'mm_info': mm_info,
-            'ml_values': ml_cpg,
-            'mm_tag': mm_tag if mm_info else None,
-            'ml_full': ml_full if mm_info else None
-        }
-
-
-def test_single_read_wgbs(bam_path, reference_path, dmr_df, 
-                          read_name=None, chromosome=None, position=None):
-    """
-    Test processing of a single WGBS read interactively.
-    
-    Parameters:
-    -----------
-    bam_path : str
-        Path to BAM file
-    reference_path : str
-        Path to reference genome FASTA
-    dmr_df : pd.DataFrame
-        DataFrame with DMR regions
-    read_name : str, optional
-        Specific read name to process
-    chromosome : str, optional
-        Chromosome to fetch from
-    position : int, optional
-        Position to fetch from
-    
-    Returns:
-    --------
-    dict with:
-        'read': the read object
-        'chunks': list of chunk dictionaries
-        'ref_seq': reference sequence
-        'read_seq': read sequence
-    """
-    dmr_trees = build_dmr_trees(dmr_df)
-    ref_fasta = pysam.FastaFile(reference_path)
-    
-    with pysam.AlignmentFile(bam_path, "rb") as bam:
-        # Get a read to test
-        if read_name:
-            read = None
-            for r in bam:
-                if r.query_name == read_name:
-                    read = r
-                    break
-            if read is None:
-                raise ValueError(f"Read {read_name} not found")
-        elif chromosome and position is not None:
-            for read in bam.fetch(chromosome, position, position + 1):
-                if not read.is_unmapped:
-                    break
-        else:
-            for read in bam:
-                if not read.is_unmapped:
-                    break
-        
-        # Get sequences
-        ref_seq = ref_fasta.fetch(read.reference_name, 
-                                   read.reference_start, 
-                                   read.reference_end).upper()
-        read_seq = read.query_alignment_sequence
-        
-        # Process read
-        chunks = process_single_read(
-            read=read,
-            data_type='wgbs',
-            dmr_trees=dmr_trees,
-            read_chunk_size=150,
-            ref_fasta=ref_fasta
-        )
-        
-        ref_fasta.close()
-        
-        return {
-            'read': read,
-            'chunks': chunks,
-            'ref_seq': ref_seq,
-            'read_seq': read_seq
-        }
 
 class DeconvolverVisualizer:
     """

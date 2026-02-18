@@ -2870,6 +2870,53 @@ files = [
 diagrams = ["jinja2", "railroad-diagrams"]
 
 [[package]]
+name = "pysam"
+version = "0.23.3"
+description = "Package for reading, manipulating, and writing genomic data"
+optional = false
+python-versions = ">=3.8"
+groups = ["main"]
+files = [
+    {file = "pysam-0.23.3-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:a0b99d875f293fad0bd9c9c923e8910c03af62d291ebb7d20e69ceaf39e383d4"},
+    {file = "pysam-0.23.3-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:725a32970cf4ce322f4ab2a52b755163297027a0349f0d151537fe16bdf525e5"},
+    {file = "pysam-0.23.3-cp310-cp310-manylinux_2_28_aarch64.whl", hash = "sha256:5fd54146c0a5a41e37b67212e3b9b0c123b73d1dd2ba58082d21dc2236c1b290"},
+    {file = "pysam-0.23.3-cp310-cp310-manylinux_2_28_x86_64.whl", hash = "sha256:a7d6b3dcbf4756bd178e217fa391187edc5793f8f50c3034e585d1e4d282d29b"},
+    {file = "pysam-0.23.3-cp310-cp310-musllinux_1_2_aarch64.whl", hash = "sha256:bc391a099ca74a1134a1cf71812c8ddf9934ab9d6675f3a97fe299466f227a1f"},
+    {file = "pysam-0.23.3-cp310-cp310-musllinux_1_2_x86_64.whl", hash = "sha256:d98ce73c07926d400c684773ce2521f03f78247a3dd6968c8206ba31b077b503"},
+    {file = "pysam-0.23.3-cp311-cp311-macosx_10_9_x86_64.whl", hash = "sha256:cb4c9c4eb245d643b60c7ec750d5554ebf17c6c9646f4f54439f94a3b3de15de"},
+    {file = "pysam-0.23.3-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:3449070e0bbe716f9eccd3911d2482476478fbad63f739378d0203f470a446d6"},
+    {file = "pysam-0.23.3-cp311-cp311-manylinux_2_28_aarch64.whl", hash = "sha256:c6cb7069dcecca3d40bbe4a6d5adea5cafe483c11854892dbabd6e10e5776049"},
+    {file = "pysam-0.23.3-cp311-cp311-manylinux_2_28_x86_64.whl", hash = "sha256:a7e9c835126f94ff57199e2f58e61436e12e84d47077e70aac8aa03531c4cc71"},
+    {file = "pysam-0.23.3-cp311-cp311-musllinux_1_2_aarch64.whl", hash = "sha256:9b249367a4ad100e61afac9156bde6183c6119f2612bbd5d97ebe3153c643aed"},
+    {file = "pysam-0.23.3-cp311-cp311-musllinux_1_2_x86_64.whl", hash = "sha256:a720cc0818aa84aca5ee4ef884fda82367598e77ec0c95d2050f670fb1fd0db5"},
+    {file = "pysam-0.23.3-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:69f90c0867fe43f04004bcea963f6b2e68b39180afab54bf551f61f43856638b"},
+    {file = "pysam-0.23.3-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:2310d72bfae7a0980d414156267e25b57aa221a768c11c087f3f7d00ceb9fed4"},
+    {file = "pysam-0.23.3-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:b2e45983efea190d374fcda0b6e0c835d6e9e474e02694729f3b3a14d680fa62"},
+    {file = "pysam-0.23.3-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:4099393fc5097b5081c7efaf46b0109e4f0a8ed18f86d497219a8bf739c73992"},
+    {file = "pysam-0.23.3-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:4f04b9aa9b23d767fe36652eacb8370791e3b56816a7e50553d52c65ccdce77f"},
+    {file = "pysam-0.23.3-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:701843e5dc67c8eb217c3265039c699a5f83cce64fbc4225268141796e972353"},
+    {file = "pysam-0.23.3-cp313-cp313-macosx_10_13_x86_64.whl", hash = "sha256:2d3177c5b3e102bde297f86e079d23fa385ac88f16c4252502079ef368056d55"},
+    {file = "pysam-0.23.3-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:2b6f6891684213e89ee679c5ac786b4e845e7d39d24f6ea0e4d8ed8be9c34f48"},
+    {file = "pysam-0.23.3-cp313-cp313-manylinux_2_28_aarch64.whl", hash = "sha256:735b938b809f0dc19a389cf3cee04fe7a451e21e2b20d3e45fa6bc23016ae21d"},
+    {file = "pysam-0.23.3-cp313-cp313-manylinux_2_28_x86_64.whl", hash = "sha256:b721ae4c9118e0c27e1500be278c3b62022c886eeb913ecabc0463fdf98da38f"},
+    {file = "pysam-0.23.3-cp313-cp313-musllinux_1_2_aarch64.whl", hash = "sha256:915bd2883eed08b16a41964a33923818e67166ca69a51086598d27287df6bb4f"},
+    {file = "pysam-0.23.3-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:b80f1092ba290b738d6ed230cc58cc75ca815fda441afe76cb4c25639aec7ee7"},
+    {file = "pysam-0.23.3-cp38-cp38-macosx_10_9_x86_64.whl", hash = "sha256:9bf6281fc4709125f5089b5c8f83ffcb1b911c4aa9c601a0a4f62beb1de82413"},
+    {file = "pysam-0.23.3-cp38-cp38-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:456fb5f1a22001cb237fcc5b2ec03960979e5e18a3171c8e0a0116e02d86f31a"},
+    {file = "pysam-0.23.3-cp38-cp38-manylinux_2_28_aarch64.whl", hash = "sha256:7565c85fc636d75029ef4e133461c513a848c2d0ecd0489571f4fde1efa22d3b"},
+    {file = "pysam-0.23.3-cp38-cp38-manylinux_2_28_x86_64.whl", hash = "sha256:ad3cf30c6a48f3e2751a0b78d36c47cd4b272249cb6428be655b46473676d8f9"},
+    {file = "pysam-0.23.3-cp38-cp38-musllinux_1_2_aarch64.whl", hash = "sha256:15945db1483fef9760f32cfa112af3c3b7d50d586edfaf245edce52b99bb5c25"},
+    {file = "pysam-0.23.3-cp38-cp38-musllinux_1_2_x86_64.whl", hash = "sha256:013738cca990e235c56a7200ccfa9f105d7144ef34c2683c1ae8086ee030238b"},
+    {file = "pysam-0.23.3-cp39-cp39-macosx_10_9_x86_64.whl", hash = "sha256:83f6f22995fa9b89b619f0d932a6714108d0dd1536fff684d3e02257c3f59b3a"},
+    {file = "pysam-0.23.3-cp39-cp39-macosx_11_0_arm64.whl", hash = "sha256:ecf7cbc3d15c84cbc14a6c00af0f866b8f5e6b8ea3d2a496f18ad87adf55bcc5"},
+    {file = "pysam-0.23.3-cp39-cp39-manylinux_2_28_aarch64.whl", hash = "sha256:be2283f2ff15346d6ac10ba3b4370359ac3c1afc34b99bb0f2f39e715749cb8b"},
+    {file = "pysam-0.23.3-cp39-cp39-manylinux_2_28_x86_64.whl", hash = "sha256:513fa67af426e9e01f82653654e384d7774d81876d7dc3020ad7f72aa1d9c309"},
+    {file = "pysam-0.23.3-cp39-cp39-musllinux_1_2_aarch64.whl", hash = "sha256:fd35287d2f8d243d6e54746e8cd5df3eb6239b016e51e20bbca1a2b6ef5899df"},
+    {file = "pysam-0.23.3-cp39-cp39-musllinux_1_2_x86_64.whl", hash = "sha256:7ddbf573f0d3c650a03f2dcb4cdce50d536d380dbbc692f434b1cfa0cd7da4d2"},
+    {file = "pysam-0.23.3.tar.gz", hash = "sha256:9ebcb1f004b296fd139b103ec6fd7e415e80f89f194eb7d0d972ac6d11bbaf24"},
+]
+
+[[package]]
 name = "python-dateutil"
 version = "2.9.0.post0"
 description = "Extensions to the standard Python datetime module"
@@ -4173,4 +4220,4 @@ eda = []
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.10"
-content-hash = "48a03d7279fd3a853eebd6a71eb8553fc615b6cafc7af23ca34e0fa92f7eef3f"
+content-hash = "afc522b0146dc9e3e60cc1486e86860ba4e38ac145b91656f677544b25415231"

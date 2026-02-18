@@ -22,8 +22,6 @@ from methyldl.modelling.experiment_wrappers import (
 )
 from methyldl.modelling.dnabert2 import TrainingArguments #TODO - must be different for MethylBERT 
 
-from EDA.edautils import XGBoostDeconvolver,XGBDeconvolverConfig,XGBTrainingHistory
-
 def setup_logging(verbose: bool = False):
     """Configure logging for the application."""
     level = logging.DEBUG if verbose else logging.INFO
@@ -33,7 +31,7 @@ def setup_logging(verbose: bool = False):
         force=True,
         handlers=[
             logging.StreamHandler(),
-            logging.FileHandler('methyldl_training.log')
+            logging.FileHandler('test_container_tmp/App.log')
         ]
     )
     return logging.getLogger(__name__)

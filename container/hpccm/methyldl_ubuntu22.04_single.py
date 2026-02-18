@@ -3,8 +3,8 @@
 Optimized for smaller image size with separate build and runtime stages
 
 Usage:
-    $ hpccm --recipe methyldl_ubuntu22_multi.py --format docker
-    $ hpccm --recipe methyldl_ubuntu22_multi.py --format singularity
+    $ hpccm --recipe methyldl_ubuntu22.04_single.py --format docker >> methyldl_ubuntu22.04_single.docker
+    $ hpccm --recipe methyldl_ubuntu22.04_single.py --format singularity >> methyldl_ubuntu22.04_single.def
 '''
 
 # ============= Stage 0: Builder =============
@@ -72,6 +72,7 @@ Stage0 += copy(src='./App', dest='/workspace/methyldl/App')
 Stage0 += copy(src='./README.md', dest='/workspace/methyldl/README.md')
 Stage0 += copy(src='./foundationalModels', dest='/workspace/methyldl/foundationalModels')
 Stage0 += copy(src='./tests', dest='/workspace/methyldl/tests')
+Stage0 += copy(src='./EDA/edautils.py', dest='/workspace/EDA/edautils.py')
 
 # Install the package itself
 Stage0 += shell(commands=[
