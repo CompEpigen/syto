@@ -13,11 +13,10 @@ git lfs pull
 # then install the dependencies
 poetry install --with dev
 
-# then run the tests
+# then run the tests (with triton use conditional on GPU accepting it)
 poetry run coverage run
 ```
 
 ## Step 1
 
 - Apply the [Black](https://black.readthedocs.io/en/stable/) module on all the code (it correct inconsistent indentation and inconsistent use of quotes, making the code more readable)
-- 
