@@ -1,11 +1,20 @@
 import unittest
 import os
+
+import torch
+
 from methyldl.data.dataset import SupervisedDataset, generate_example_data
 from methyldl.modelling.dnabert2 import EpigenDnabert2, TrainingArguments
 from unittest.mock import patch, MagicMock
 import tempfile
 from parameterized import parameterized
 
+def _has_triton_capable_gpu():
+    """Check if CUDA is available and GPU has compute capability >= 8.0 (Ampere+)."""
+    if not torch.cuda.is_available():
+        return False
+    capability = torch.cuda.get_device_capability()
+    return capability[0] >= 8
 
 class TestEpigenDnabert2Predict(unittest.TestCase):
     def setUp(self):
@@ -44,7 +53,8 @@ class TestEpigenDnabert2Predict(unittest.TestCase):
             max_sequence_length=self.default_max_sequence_length,
             use_m6a_methylation=self.default_use_m6a_methylation,
             num_labels=num_labels,
-            training_args=default_training_args
+            training_args=default_training_args,
+            use_triton=_has_triton_capable_gpu()
         )
     
     def create_synthetic_data(self, sequence_length, num_samples, include_cpg, include_m6a, include_labels):
@@ -163,6 +173,10 @@ class TestEpigenDnabert2FineTune(unittest.TestCase):
         """Test with use_triton=False."""
         self._run_fine_tune_test(use_triton=False)
     
+    @unittest.skipUnless(
+        _has_triton_capable_gpu(), 
+        "Triton flash attention requires GPU with compute capability >= 8.0"
+    )
     def test_fine_tune_with_triton(self):
         """Test with use_triton=True."""
         self._run_fine_tune_test(use_triton=True)
