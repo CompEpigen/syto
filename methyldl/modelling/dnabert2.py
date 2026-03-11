@@ -543,7 +543,7 @@ class EpigenDnabert2:
         self.trainer = None
 
     def __str__(self):
-        str(self.model.__str__())
+        return str(self.model)
 
     def _init_trainer(
         self,

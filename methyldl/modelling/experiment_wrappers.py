@@ -1061,6 +1061,7 @@ class EpigenBERT2MLflowExperiment(TransformersMLFLowExperiment):
                 use_cpg_methylation=self.use_cpg_methylation,
                 use_m6a_methylation=self.use_m6a_methylation,
                 foundation_model_huggingface=self.foundation_model_huggingface,
+                use_triton=self.use_triton,
             )
 
             # Create dataset for this subset
@@ -1117,7 +1118,12 @@ class EpigenBERT2MLflowExperiment(TransformersMLFLowExperiment):
                     from scipy.special import softmax
 
                     predictions = softmax(predictions, axis=1)
+
                 predictions_binary = np.argmax(predictions, axis=1)
+
+                if num_classes == 2:
+                    # binary classification: predictions should contain the probability of the predicted_class
+                    predictions = np.max(predictions, axis=1)
             else:
                 num_classes = 2
                 if predictions.ndim > 1:
@@ -1392,7 +1398,7 @@ class EpigenBERT2MLflowExperiment(TransformersMLFLowExperiment):
             print(f"Logging model artifacts for dataset {dataset_name}")
             checkpoint_folder_path = (
                 str(checkpoint_path)
-                .replace("\model.safetensors", "")
+                .replace("\\model.safetensors", "")
                 .replace("/model.safetensors", "")
             )
             if os.path.exists(checkpoint_folder_path):
@@ -1870,7 +1876,7 @@ class MethylBertMLflowExperiment(TransformersMLFLowExperiment):
                 print(f"Logging model artifacts for dataset {dataset_name}")
                 checkpoint_folder_path = (
                     str(checkpoint_path)
-                    .replace("\model.safetensors", "")
+                    .replace("\\model.safetensors", "")
                     .replace("/model.safetensors", "")
                 )
                 if os.path.exists(checkpoint_folder_path):
