@@ -33,13 +33,12 @@ from methyldl.modelling.methylbert import (
     default_methylbert_config,
 )
 
-# edautils is in EDA/ relative to project root
-from EDA.edautils import (
-    process_bam_with_chunking,
+from methyldl.data import CELL_TYPE_MATCH_DICT
+from methyldl.data.bam_processing import process_bam_with_chunking
+from methyldl.data.preprocessing import prepare_methylbert_list_inference
+from methyldl.inference.prediction_aggregation import (
     aggregate_predictions_by_dmr,
-    prepare_methylbert_list_inference,
     aggregate_chuncked_predictions_weighted,
-    cell_type_match_dict,
 )
 from methyldl.data.genome import generate_kmer_str_with_overlap
 
@@ -106,7 +105,7 @@ class InferencePipeline:
         #     )
         #     # Identity mapping – atlas target names already match labels_dict
         #     self.cell_type_match_dict = {}
-        self.cell_type_match_dict = cell_type_match_dict
+        self.cell_type_match_dict = CELL_TYPE_MATCH_DICT
 
         # ── Load atlas ──────────────────────────────────────────────────
         atlas_path = config["atlas_path"]
@@ -260,7 +259,7 @@ class InferencePipeline:
         """
         Overlap processed reads with atlas regions and resolve DMR labels.
 
-        Uses ``prepare_reads_for_uxm`` from edautils, which:
+        Uses ``prepare_reads_for_uxm`` from ``methyldl.deconvolution.uxm``, which:
         - iterates atlas regions and scans sorted reads for overlaps
         - trims reads to region boundaries
         - computes M / U / X counts
@@ -411,7 +410,7 @@ class InferencePipeline:
     def _aggregate_to_dmr(self) -> pd.DataFrame:
         """
         Aggregate read-level predictions to DMR level using
-        ``aggregate_predictions_by_dmr`` from edautils.
+        ``aggregate_predictions_by_dmr`` from ``methyldl.inference.prediction_aggregation``.
         """
         self.logger.info("Aggregating predictions by DMR ...")
 

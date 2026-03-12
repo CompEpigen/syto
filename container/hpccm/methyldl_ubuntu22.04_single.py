@@ -82,7 +82,6 @@ Stage0 += copy(
     src="./foundationalModels", dest="/workspace/methyldl/foundationalModels"
 )
 Stage0 += copy(src="./tests", dest="/workspace/methyldl/tests")
-Stage0 += copy(src="./EDA/edautils.py", dest="/workspace/EDA/edautils.py")
 
 # Install the package itself
 Stage0 += shell(
