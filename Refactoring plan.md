@@ -40,7 +40,7 @@ They are grouped by their main functionality and where they sould go.
     - Renamed into: "CELL_TYPE_MATCH_DICT"
 - **Miscellaneous utilities** → `methyldl/data/misc_utils.py`
   - `_merge_comma_separated` — Utility to merge two comma-separated strings keeping unique values
-- **BAM processing** → `methyldl/data/bam_processing.py`
+- **BAM processing** → `methyldl/data/sequencing/bam_processing.py`
   - `clean_cigar_sequence` — Processes CIGAR string to align read sequence to reference coordinates (handles insertions, deletions, soft clips)
   - `parse_mm_tag` — Parses BAM MM tag to extract modification types (e.g., C+m) and their positions for ML array indexing
   - `extract_cpg_ml_values` — Extracts only the ML probability values corresponding to C+m (CpG methylation) from the full ML array
@@ -52,15 +52,14 @@ They are grouped by their main functionality and where they sould go.
   - `cpg_scan` — Numba-accelerated scanner that finds CpG positions and their methylation states in an ONT read
   - `cpg_scan_wgbs_forward` — Numba-accelerated CpG scanner for WGBS forward-strand reads (C→T = unmethylated)
   - `cpg_scan_wgbs_reverse` — Numba-accelerated CpG scanner for WGBS reverse-strand reads (G→A = unmethylated)
-- **Read merging utilities** → `methyldl/data/read_merging.py`
   - `merge_paired_reads` — Merges paired-end read mates into single fragment entries, handling overlapping CpG consensus
   - `_merge_mate_pair` — Merges two mates of a paired-end read into a single fragment dict with combined methylation
   - `_merge_methylation_encodings` — Merges methylation encodings from two mates with consensus logic (agree/disagree/unknown)
-- **DMR overlap analysis** → `methyldl/data/dmr_overlap_analysis.py`
+- **DMR overlap analysis** → `methyldl/data/sequencing/dmr_overlap_analysis.py`
   - `_get_overlapping_dmrs` — Returns a list of individual overlapping DMR dicts (name, type, overlap) for iteration
   - `analyze_read_dmr_overlap` — Computes overlap metrics (bp, percentage) between a read segment and DMR interval trees
   - `_empty_overlap_result` — Returns a default empty-overlap dict when a read doesn't overlap any DMR
-- **Genome analysis utilities** → `methyldl/data/genome.py`
+- **Genome analysis utilities** → `methyldl/data/sequencing/genome.py`
   - `count_reference_cpgs` — Counts CpG dinucleotides in a reference genome region (used for unknown CpG calculation)
   - `add_reference_cpg_counts` — Adds reference-based CpG counts to a DataFrame, computing unknown CpGs in insert regions
 - **Pseudo-bulk generation** → `methyldl/data/pseudo_bulk_generation.py`
@@ -70,54 +69,37 @@ They are grouped by their main functionality and where they sould go.
   - `init_worker` — Initializes multiprocessing worker with shared data and pre-grouped DataFrames
   - `worker_task` — Worker function that generates a batch of pseudo-bulk samples with random cell type mixtures
   - `random_select_with_weights` — Randomly selects up to n elements and generates normalized random weights summing to 1
-- **Data preprocessing for inference** → `methyldl/data/preprocessing.py`
+- **Data preprocessing for inference** → `methyldl/modelling/data_inference_preprocessing.py`
   - `chunk_read_data` — Splits a read into fixed-size chunks, clips to DMR boundaries, and returns one entry per overlapping DMR
   - `chunk_tokens` — Splits a token sequence into overlapping windows of fixed size with a given stride
   - `generate_valid_tokens` — Generates (kmer, methylation_char) token pairs from a read, filtering out N-containing kmers
   - `prepare_methylbert_list_inference` — Prepares sliding-window chunked inference data in the format expected by MethylBERT
-- **Deconvolution models**
+- **Deconvolution models** → `methyldl/deconvolution/deep_deconvolvers/`
   - `FlattenMLPDeconvolver` (class) — Simple MLP that flattens the DMR×class prediction matrix and predicts cell type proportions
-    - Moved to `methyldl/deconvolution/flatten_mlp_deconvolver.py`
+    - Moved to `methyldl/deconvolution/deep_deconvolvers/flatten_mlp_deconvolver.py`
   - `DMRAttentionDeconvolver` (class) — Attention-based deconvolver that uses multi-head attention over DMR embeddings
-    - Moved to `methyldl/deconvolution/dmr_attention_deconvolver.py`
+    - Moved to `methyldl/deconvolution/deep_deconvolvers/dmr_attention_deconvolver.py`
   - `DiagonalAwareDeconvolver` (class) — Multi-pathway deconvolver with separate encoders for diagonal, off-diagonal confusion, and rejection features
-    - Moved to `methyldl/deconvolution/diagonal_aware_deconvolver.py`
+    - Moved to `methyldl/deconvolution/deep_deconvolvers/diagonal_aware_deconvolver.py`
   - `CNNDeconvolver` (class) — Treats the DMR×class matrix as a 2D image and applies CNN convolutions for deconvolution
-    - Moved to `methyldl/deconvolution/cnn_deconvolver.py`
-- **Deconvolution models training** → `methyldl/deconvolution/training.py`
+    - Moved to `methyldl/deconvolution/deep_deconvolvers/cnn_deconvolver.py`
+- **Deconvolution models training** → `methyldl/deconvolution/deep_deconvolvers_training.py`
   - `DeconvolverOutput` (class) — Dataclass holding deconvolver outputs: proportions, per-pathway features, logits
   - `train_matrix_deconvolver` — Full training loop for matrix-based deconvolvers: handles batching, optimization, validation, and early stopping
   - `TrainingHistory` (class) — Dataclass storing per-epoch training metrics (loss, MAE, MSE, KL, cosine sim, etc.)
   - `EarlyStopping` (class) — Early stopping handler with configurable patience, min_delta, and min/max mode
-- **Deconvolution models evaluation** → `methyldl/inference/evaluation.py`
+- **Deconvolution models evaluation** → `methyldl/deconvolution/evaluation.py`
   - `compute_deconvolution_metrics` — Computes MAE, MSE, KL divergence, max error, and cosine similarity between predicted and true proportions
   - `print_deconvolution_metrics_summary` — Pretty-prints a dictionary of deconvolution metrics (MAE, cosine sim, etc.)
-- **Visualization of deconvolver results** → in `methyldl/visualization/deconvolver_visualizer.py`
-  - `DeconvolverVisualizer` (class) — Comprehensive visualization toolkit for DiagonalAwareDeconvolver interpretability (ablation, feature space, pathway contributions)
-- **Bland-Altman analysis and visualization** → in `methyldl/visualization/bland_altman_analysis.py`
-  - `bland_altman_plot` — Creates a Bland-Altman agreement plot with limits of agreement, regression, and confidence intervals
-  - `bland_altman_grid` — Creates a grid of per-cell-type or per-complexity Bland-Altman subplots with shared axes
-  - `bland_altman_comparison` — Compares Bland-Altman statistics across groups (complexity levels or cell type groups) as bar charts
-  - `print_bland_altman_stats` — Pretty-prints formatted Bland-Altman statistics (bias, LoA, proportional bias check)
-- **KDE plotting** → in `methyldl/visualization/kde_plotting.py`
-  - `plot_filled_kde` — Plots overlapping filled KDE curves for two groups with Cohen's d annotation
-  - `cohen_d` — Computes Cohen's d effect size between two distributions using pooled standard deviation
-- **Methylation plotting** → in `methyldl/visualization/methylation_plotting.py`
-  - `create_methylation_violinplots` — Creates violin plots of methylation level distribution by prediction outcome
-  - `create_methylation_boxplots` — Creates grouped boxplots of methylation levels by prediction outcome (correct/incorrect/rejected)
-  - `plot_methylation_with_predictions` — Plots methylation encoding along a read with prediction label overlay
-  - `plot_methylation_with_predictions_grouped` — Grouped version of methylation-with-predictions plot for multiple reads
-  - `plot_methylation_vs_prediction_scatter` — Scatter plot of methylation level vs prediction confidence
-- **Prediction aggregation** → `methyldl/inference/prediction_aggregation.py`
+- **Prediction aggregation** → `methyldl/modelling/prediction_aggregation.py`
   - `aggregate_predictions_by_dmr` — Aggregates read-level prediction probabilities to DMR level using simple and weighted averages
   - `aggregate_predictions_by_dmr_optimized` — Faster vectorized version of DMR-level prediction aggregation (used in pseudo-bulk generation)
   - `get_final_prediction` — Computes final class prediction (argmax) and confidence from aggregated probability columns
-- **Predictions plotting** → in `methyldl/visualization/predictions_plotting.py`
-  - `plot_predictions_by_celltype` — Plots predicted vs true proportions as scatter/bar per cell type across samples
-  - `plot_predictions_by_mixture_complexity` — Plots deconvolution accuracy stratified by number of cell types in the mixture
-  - `plot_deconvolution_results` — Multi-panel summary plot of deconvolution performance (scatter, error bars, heatmap)
-  - `plot_confusion_matrix_for_target_confidence` — Plots a confusion matrix filtered to a specific confidence threshold
 
-### Functions moved from genome.py
+### Modules moved from modelling into a subfolder `classifiers`
 
-- `pretrain_data_preprocess` moved to `methyldl/data/preprocessing.py`
+- **Actual classifier models** → `methyldl/modelling/classifiers/`
+  - minirnns (folder)
+  - `dismir.py`
+  - `methylbert.py`
+  - `dnabert2.py`

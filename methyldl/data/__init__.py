@@ -1,4 +1,4 @@
-CELL_TYPE_MATCH_DICT = {
+LOYFER_CELL_TYPE_MATCH_DICT = {
     "Adipocytes": "Adipocytes",
     "Bladder-Epithelium": "Bladder-Ep",
     "Bladder-Epithelial": "Bladder-Ep",

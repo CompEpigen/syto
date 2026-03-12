@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from parameterized import parameterized
 
-from methyldl.data.preprocessing import pretrain_data_preprocess
+from methyldl.data.sequencing.genome import pretrain_data_preprocess
 
 
 class TestPretrainDataPreprocess(unittest.TestCase):

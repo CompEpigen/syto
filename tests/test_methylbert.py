@@ -3,7 +3,7 @@ import tempfile
 import torch
 import os
 from parameterized import parameterized
-from methyldl.modelling.methylbert import (
+from methyldl.modelling.classifiers.methylbert import (
     MethylBert,
     MethylVocab,
     MethylBertFinetuneDataset,

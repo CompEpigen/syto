@@ -12,7 +12,7 @@ from methyldl.deconvolution.uxm import (
     rearange_uxm_deconvolution_results,
     uxm_deconvolution,
 )
-from methyldl.inference.prediction_aggregation import (
+from methyldl.modelling.prediction_aggregation import (
     aggregate_predictions_by_dmr,
     aggregate_predictions_by_dmr_optimized,
 )

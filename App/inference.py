@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from copy import deepcopy
 
-from methyldl.modelling.methylbert import (
+from methyldl.modelling.classifiers.methylbert import (
     MethylBert,
     MethylVocab,
     MethylBertFinetuneDataset,
@@ -33,14 +33,16 @@ from methyldl.modelling.methylbert import (
     default_methylbert_config,
 )
 
-from methyldl.data import CELL_TYPE_MATCH_DICT
-from methyldl.data.bam_processing import process_bam_with_chunking
-from methyldl.data.preprocessing import prepare_methylbert_list_inference
-from methyldl.inference.prediction_aggregation import (
+from methyldl.data import LOYFER_CELL_TYPE_MATCH_DICT
+from methyldl.data.sequencing.bam_processing import process_bam_with_chunking
+from methyldl.modelling.data_preprocessing_for_inference import (
+    prepare_methylbert_list_inference,
+)
+from methyldl.modelling.prediction_aggregation import (
     aggregate_predictions_by_dmr,
     aggregate_chuncked_predictions_weighted,
 )
-from methyldl.data.genome import generate_kmer_str_with_overlap
+from methyldl.data.sequencing.genome import generate_kmer_str_with_overlap
 
 from methyldl.deconvolution.uxm import (
     prepare_reads_for_uxm,
@@ -105,7 +107,7 @@ class InferencePipeline:
         #     )
         #     # Identity mapping – atlas target names already match labels_dict
         #     self.cell_type_match_dict = {}
-        self.cell_type_match_dict = CELL_TYPE_MATCH_DICT
+        self.cell_type_match_dict = LOYFER_CELL_TYPE_MATCH_DICT
 
         # ── Load atlas ──────────────────────────────────────────────────
         atlas_path = config["atlas_path"]

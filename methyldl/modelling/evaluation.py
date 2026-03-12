@@ -1,11 +1,11 @@
+"""
+Manually calculate the accuracy, f1, matthews_correlation, precision, recall with sklearn.
+"""
+
 import numpy as np
 import sklearn
 import torch
 from typing import Union, Tuple, Any
-
-"""
-Manually calculate the accuracy, f1, matthews_correlation, precision, recall with sklearn.
-"""
 
 
 def calculate_metric_with_sklearn(predictions: np.ndarray, labels: np.ndarray):

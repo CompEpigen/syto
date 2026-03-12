@@ -9,7 +9,7 @@ from parameterized import parameterized
 import shutil
 from methyldl.data.dataset import generate_example_data
 
-from methyldl.modelling.dismir import (
+from methyldl.modelling.classifiers.dismir import (
     Dismir,
     DISMIRNet,
     VariableLengthDataset,

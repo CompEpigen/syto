@@ -20,7 +20,7 @@ from methyldl.modelling.experiment_wrappers import (
     EpigenBERT2MLflowExperiment,
     MethylBertMLflowExperiment,
 )
-from methyldl.modelling.dnabert2 import (
+from methyldl.modelling.classifiers.dnabert2 import (
     TrainingArguments,
 )  # TODO - must be different for MethylBERT
 

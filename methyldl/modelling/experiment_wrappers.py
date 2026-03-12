@@ -21,16 +21,19 @@ from sklearn.metrics import (
 import warnings
 
 warnings.filterwarnings("ignore")
-from methyldl.modelling.dismir import Dismir
+from methyldl.modelling.classifiers.dismir import Dismir
 from transformers import EarlyStoppingCallback
 from tqdm import tqdm
 import gc
-from methyldl.modelling.dnabert2 import EpigenDnabert2, TrainingArguments
+from methyldl.modelling.classifiers.dnabert2 import EpigenDnabert2, TrainingArguments
 from methyldl.data.dataset import SupervisedDataset
 from typing import List, Dict
-from methyldl.data.genome import generate_kmer_str_with_overlap
-from methyldl.modelling.methylbert import MethylVocab, MethylBertFinetuneDataset
-from methyldl.modelling.methylbert import MethylBert
+from methyldl.data.sequencing.genome import generate_kmer_str_with_overlap
+from methyldl.modelling.classifiers.methylbert import (
+    MethylVocab,
+    MethylBertFinetuneDataset,
+)
+from methyldl.modelling.classifiers.methylbert import MethylBert
 import random
 import time
 from methyldl.data.utils import split_long_reads

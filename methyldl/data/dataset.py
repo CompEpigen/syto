@@ -10,7 +10,7 @@ import os
 
 from scipy.stats import entropy
 
-from methyldl.data.genome import collapse_methylation
+from methyldl.data.sequencing.genome import collapse_methylation
 from tqdm import tqdm
 
 

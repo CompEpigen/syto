@@ -32,7 +32,7 @@ from methyldl.modelling.experiment_wrappers import (
     RestartOnPoorPerformanceCallback,
 )
 from methyldl.data.dataset import generate_example_data
-from methyldl.modelling.methylbert import default_methylbert_config
+from methyldl.modelling.classifiers.methylbert import default_methylbert_config
 
 
 def is_singularity_container():

@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
-from methyldl.modelling.minirnns.minRNNs import BiMinGRU
+from methyldl.modelling.classifiers.minirnns.minRNNs import BiMinGRU
 from collections import defaultdict
 import time
 from methyldl.modelling.common import DMRAttentionClassifier

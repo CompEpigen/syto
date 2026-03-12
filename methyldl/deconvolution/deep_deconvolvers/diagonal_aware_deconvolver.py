@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 from typing import Dict, Optional, Tuple
 
-from .training import DeconvolverOutput
+from .deep_deconvolvers_training import DeconvolverOutput
 
 
 class DiagonalAwareDeconvolver(nn.Module):

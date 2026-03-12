@@ -4,7 +4,7 @@ import os
 import torch
 
 from methyldl.data.dataset import SupervisedDataset, generate_example_data
-from methyldl.modelling.dnabert2 import EpigenDnabert2, TrainingArguments
+from methyldl.modelling.classifiers.dnabert2 import EpigenDnabert2, TrainingArguments
 from unittest.mock import patch, MagicMock
 import tempfile
 from parameterized import parameterized

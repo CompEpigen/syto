@@ -1,6 +1,6 @@
 import unittest
 from parameterized import parameterized
-from methyldl.data.genome import (
+from methyldl.data.sequencing.genome import (
     generate_kmer_str_with_overlap,
     get_alter_of_dna_sequence,
     collapse_methylation,
