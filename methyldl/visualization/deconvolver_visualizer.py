@@ -1,4 +1,3 @@
-
 from typing import Dict, List, Optional, Tuple
 
 import matplotlib.pyplot as plt
@@ -9,8 +8,6 @@ from matplotlib.gridspec import GridSpec
 
 from methyldl.deconvolution.diagonal_aware_deconvolver import DiagonalAwareDeconvolver
 from methyldl.deconvolution.training import DeconvolverOutput
-
-
 
 
 class DeconvolverVisualizer:
@@ -681,4 +678,3 @@ class DeconvolverVisualizer:
                 )
 
         return figures
-

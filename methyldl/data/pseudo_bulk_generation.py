@@ -1,4 +1,3 @@
-
 import multiprocessing as mp
 import pickle
 import random
@@ -20,6 +19,7 @@ from methyldl.inference.prediction_aggregation import (
 
 # Global variables for worker processes (initialized once per worker)
 _worker_data = {}
+
 
 # TODO: make sure that reference cells are matching labels --> probably need to be reordered
 def generate_pseudo_bulk(
@@ -144,9 +144,6 @@ def generate_pseudo_bulk(
     if return_reads:
         return labels, proportions_full, subs, uxm_data, reads
     return labels, proportions_full, subs, uxm_data
-
-
-
 
 
 def init_worker(
@@ -421,7 +418,6 @@ def run_ios_generation_parallel(
     return all_ios, all_exceptions
 
 
-
 def random_select_with_weights(elements, n):
     """
     Randomly selects up to n elements from a list and generates
@@ -446,4 +442,3 @@ def random_select_with_weights(elements, n):
     weights = [w / total for w in weights]
 
     return selected, weights
-

@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 
+
 class CNNDeconvolver(nn.Module):
     """
     Treat 39×40 matrix as a single-channel image.

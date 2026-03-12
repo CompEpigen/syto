@@ -1,6 +1,5 @@
-"""
+""" """
 
-"""
 import re
 
 import numba as nb
@@ -10,7 +9,6 @@ import pysam
 import numpy as np
 
 from .read_merging import merge_paired_reads
-
 
 # Constants for numba
 CG_ASCII = np.array([ord("C"), ord("G")], dtype=np.uint8)
@@ -45,6 +43,7 @@ def detect_bam_data_type(bam_path, sample_size=1000):
             return "ont"
         else:
             return "wgbs"
+
 
 def parse_mm_tag(mm_tag):
     """
@@ -121,9 +120,6 @@ def parse_mm_tag(mm_tag):
     }
 
 
-
-
-
 @nb.njit(fastmath=True, cache=True)
 def cpg_scan(seq_bytes, ml_values, tr=122):
     """Return CpG offsets (0-based) and methylation states for one read (ONT)."""
@@ -194,6 +190,7 @@ def cpg_scan_wgbs_reverse(ref_bytes, read_bytes):
 
     return pos_buf, state_buf
 
+
 def extract_cpg_ml_values(ml_array, mm_info):
     """
     Extract only the ML probability values corresponding to C+m modifications.
@@ -222,6 +219,7 @@ def extract_cpg_ml_values(ml_array, mm_info):
     else:
         # Handle edge case where ML array is shorter than expected
         return np.array(ml_array[offset:])
+
 
 def process_single_read(
     read,
@@ -404,6 +402,7 @@ def process_single_read(
 
     return [read_data]
 
+
 def process_tabular_chunk(args):
     """
     Process chunk with support for both ONT and WGBS data.
@@ -466,6 +465,7 @@ def process_tabular_chunk(args):
         ref_fasta.close()
 
     return tabular_data
+
 
 def process_bam_with_chunking(
     bam_path,
@@ -608,6 +608,7 @@ def process_bam_with_chunking(
         #     df = add_reference_cpg_counts(df, reference_path, verbose=True)
 
     return df
+
 
 def clean_cigar_sequence(read):
     """
