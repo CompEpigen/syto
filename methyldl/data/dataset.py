@@ -1,17 +1,18 @@
-from torch.utils.data import Dataset
-import torch
-import transformers
+import os
 import csv
-import numpy as np
+import random
 from typing import Dict, Sequence, Union, Tuple, List
 from dataclasses import dataclass
-import pandas as pd
-import os
 
+import torch
+from torch.utils.data import Dataset
+import transformers
+import numpy as np
+import pandas as pd
 from scipy.stats import entropy
+from tqdm import tqdm
 
 from methyldl.data.sequencing.genome import collapse_methylation
-from tqdm import tqdm
 
 
 class SupervisedDataset(Dataset):
@@ -242,18 +243,14 @@ class DataCollatorForSupervisedDataset:
         return batch
 
 
-import random
-from typing import List, Dict, Union
-
-
 def generate_example_data(
     sequence_length: int = 150,
     include_cpg_methylation: bool = False,
     include_m6a_methylation: bool = False,
     include_labels: bool = False,
     num_samples: int = 1,
-    cpg_proportion: Dict[int, float] = {2: 1, 1: 1, 0: 1},
-    m6a_proportion: Dict[int, float] = {2: 1, 1: 1, 0: 1},
+    cpg_proportion: Dict[int, float] = None,
+    m6a_proportion: Dict[int, float] = None,
 ) -> List[List[Union[str, int]]]:
     """
     Generate example data for testing a model.
@@ -271,6 +268,11 @@ def generate_example_data(
         List[List[Union[str, int]]]: A list of rows where the first row is the header,
                                      and subsequent rows are synthetic data.
     """
+    if cpg_proportion is None:
+        cpg_proportion = {2: 1, 1: 1, 0: 1}
+    if m6a_proportion is None:
+        m6a_proportion = {2: 1, 1: 1, 0: 1}
+
     # Validate inputs
     if num_samples < 1:
         raise ValueError("The number of samples (num_samples) must be at least 1.")
@@ -342,17 +344,21 @@ def generate_example_data(
 
 def generate_example_data_for_methylbert(
     sequence_length: int = 150,
-    include_cpg_methylation: bool = False,
+    include_cpg_methylation: bool = True,
     include_m6a_methylation: bool = False,
-    include_labels: bool = False,
+    include_labels: bool = True,
     num_samples: int = 1,
-    cpg_proportion: Dict[int, float] = {2: 1, 1: 1, 0: 1},
-    m6a_proportion: Dict[int, float] = {2: 1, 1: 1, 0: 1},
+    cpg_proportion: Dict[int, float] = None,
+    m6a_proportion: Dict[int, float] = None,
 ) -> List[List[Union[str, int]]]:
     """
     Wrapper for generate example data method that does some transformation specific for methylbert
 
     """
+    if cpg_proportion is None:
+        cpg_proportion = {2: 1, 1: 1, 0: 1}
+    if m6a_proportion is None:
+        m6a_proportion = {2: 1, 1: 1, 0: 1}
 
     if sequence_length > 512:
         samples_coeff = sequence_length // 512 + int(bool(sequence_length % 512))
@@ -361,10 +367,12 @@ def generate_example_data_for_methylbert(
 
     synthetic_data = generate_example_data(
         sequence_length=sequence_length + 3,
-        include_cpg_methylation=True,
-        include_m6a_methylation=False,
-        include_labels=True,
+        include_cpg_methylation=include_cpg_methylation,
+        include_m6a_methylation=include_m6a_methylation,
+        include_labels=include_labels,
         num_samples=num_samples,  # Single sample per repeat
+        cpg_proportion=cpg_proportion,
+        m6a_proportion=m6a_proportion,
     )
 
     synthetic_data[0][0] = "dna_seq"
@@ -483,8 +491,16 @@ def select_optimal_subsequence(
         best_end_idx = best_start_idx + target_read_length
         selected_dna = input_ids[best_start_idx:best_end_idx]
         selected_methylation = methylation_ids[best_start_idx:best_end_idx]
-    else:
-        selected_dna, selected_methylation = input_ids, methylation_ids
+    else:  # delegates to vectorized version if sequence is shorter than target
+        return select_optimal_subsequence_vectorized(
+            input_ids,
+            methylation_ids,
+            target_read_length,
+            selection_criteria,
+            min_labeled_cpgs,
+            stride,
+            entropy_weight_factor,
+        )
 
     return selected_dna, selected_methylation, best_stats[0], best_stats[1]
 
@@ -682,7 +698,7 @@ def select_optimal_subsequence_vectorized(
 
         if labeled_count >= min_labeled_cpgs:
             numeric_labels = np.array([int(pos) for pos in labeled_positions])
-            unique, counts = np.unique(numeric_labels, return_counts=True)
+            _, counts = np.unique(numeric_labels, return_counts=True)
             probabilities = counts / len(numeric_labels)
             entropy_score = entropy(probabilities, base=2)
         else:
@@ -745,106 +761,6 @@ def select_optimal_subsequence_vectorized(
             best_stats = (labeled_count, entropy_score)
 
     # Extract the best subsequence
-    best_end_idx = best_start_idx + target_read_length
-    selected_dna = input_ids[best_start_idx:best_end_idx]
-    selected_methylation = methylation_ids[best_start_idx:best_end_idx]
-
-    return selected_dna, selected_methylation, best_stats[0], best_stats[1]
-
-
-def select_optimal_subsequence_rolling_window(
-    input_ids: str,
-    methylation_ids: str,
-    target_read_length: int,
-    selection_criteria: str = "counts",
-    min_labeled_cpgs: int = 5,
-    stride: int = 50,
-    entropy_weight_factor: float = 0.1,
-) -> Tuple[str, str, int, float]:
-    """
-    Ultra-optimized version using rolling window statistics for maximum efficiency.
-    Best for very long sequences with small strides.
-    """
-
-    if len(input_ids) != len(methylation_ids):
-        raise ValueError("DNA sequence and methylation sequence must have equal length")
-
-    if selection_criteria not in ["counts", "entropy"]:
-        raise ValueError("Selection criteria must be either 'counts' or 'entropy'")
-
-    read_length = len(input_ids)
-
-    if read_length <= target_read_length:
-        return select_optimal_subsequence_vectorized(
-            input_ids,
-            methylation_ids,
-            target_read_length,
-            selection_criteria,
-            min_labeled_cpgs,
-            stride,
-            entropy_weight_factor,
-        )
-
-    # Convert to numpy arrays
-    meth_array = np.array(list(methylation_ids))
-
-    # Create binary masks for efficient counting
-    is_labeled = meth_array != "2"
-    is_methylated = meth_array == "1"
-    is_unmethylated = meth_array == "0"
-
-    best_score = float("-inf") if selection_criteria == "counts" else float("inf")
-    best_start_idx = 0
-    best_stats = (0, float("inf"))
-
-    # Use stride-based sampling for efficiency
-    for start_idx in range(0, read_length - target_read_length + 1, stride):
-        end_idx = start_idx + target_read_length
-
-        # Fast counting using pre-computed masks
-        window_labeled = is_labeled[start_idx:end_idx]
-        labeled_count = np.sum(window_labeled)
-
-        if labeled_count == 0:
-            continue
-
-        # Calculate entropy efficiently
-        if labeled_count >= min_labeled_cpgs:
-            window_methylated = is_methylated[start_idx:end_idx]
-            window_unmethylated = is_unmethylated[start_idx:end_idx]
-
-            meth_count = np.sum(window_methylated)
-            unmeth_count = np.sum(window_unmethylated)
-
-            # Fast entropy calculation for binary case
-            if meth_count > 0 and unmeth_count > 0:
-                p_meth = meth_count / labeled_count
-                p_unmeth = unmeth_count / labeled_count
-                entropy_score = -(
-                    p_meth * np.log2(p_meth) + p_unmeth * np.log2(p_unmeth)
-                )
-            else:
-                entropy_score = 0.0  # All same class = no entropy
-        else:
-            entropy_score = float("inf")
-
-        # Score calculation
-        if selection_criteria == "counts":
-            score = labeled_count
-            is_better = score > best_score
-        else:
-            if labeled_count < min_labeled_cpgs:
-                score = float("inf")
-            else:
-                score = entropy_score + entropy_weight_factor * (1.0 / labeled_count)
-            is_better = score < best_score
-
-        if is_better:
-            best_score = score
-            best_start_idx = start_idx
-            best_stats = (labeled_count, entropy_score)
-
-    # Extract best subsequence
     best_end_idx = best_start_idx + target_read_length
     selected_dna = input_ids[best_start_idx:best_end_idx]
     selected_methylation = methylation_ids[best_start_idx:best_end_idx]

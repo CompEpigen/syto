@@ -198,3 +198,7 @@ class TestPretrainDataPreprocess(unittest.TestCase):
             os.unlink(input_file)
             if os.path.exists(output_file):
                 os.unlink(output_file)
+
+
+if __name__ == "__main__":
+    unittest.main()
