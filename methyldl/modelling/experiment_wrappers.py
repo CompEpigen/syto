@@ -459,6 +459,8 @@ class AbstractMLFlowExperiment:
     def _aggregate_predictions(self, data_chunked, predictions, num_classes=2):
         """
         Aggregate chunk-level predictions to read-level predictions.
+        The aggregation is done by calculating a weighted average of the chunk probabilities,
+        where the weights are the number of CpGs in each chunk.
 
         Args:
             data_chunked: DataFrame with chunked data
@@ -1097,6 +1099,7 @@ class EpigenBERT2MLflowExperiment(TransformersMLFLowExperiment):
         self, checkpoint_path, split_name, dataset_name
     ):
         """Make predictions and calculate metrics for a given split."""
+
         try:
             path = self.data_dirs[dataset_name] / f"{split_name}.parquet"
             if split_name not in ["train", "valid"]:
@@ -1119,8 +1122,6 @@ class EpigenBERT2MLflowExperiment(TransformersMLFLowExperiment):
                 num_classes = predictions.shape[1]
                 # Apply softmax if needed
                 if predictions.max() > 1.0 or predictions.min() < 0.0:
-                    from scipy.special import softmax
-
                     predictions = softmax(predictions, axis=1)
 
                 predictions_binary = np.argmax(predictions, axis=1)
@@ -1512,7 +1513,7 @@ class MethylBertMLflowExperiment(TransformersMLFLowExperiment):
         )
 
         if max_sequence_length > 510:
-            return ValueError(
+            raise ValueError(
                 "max_sequence_length for MethylBert cannot be bigger than 510 bp"
             )
         self.foundation_model_huggingface = foundation_model_huggingface
@@ -1559,9 +1560,8 @@ class MethylBertMLflowExperiment(TransformersMLFLowExperiment):
 
         if split_to_chunks:
             data = split_long_reads(data, self.max_sequence_length)
-            data.reset_index(
-                drop=True, inplace=True
-            )  # drop=True to avoid keeping old index
+            # drop=True to avoid keeping old index
+            data.reset_index(drop=True, inplace=True)
 
         data_list = [["dna_seq", "methyl_seq", "dmr_ctype", "dmr_label", "ctype"]]
         valid_indices = []  # Track indices of valid rows
@@ -1626,8 +1626,6 @@ class MethylBertMLflowExperiment(TransformersMLFLowExperiment):
             # Handle predictions based on number of classes
             if num_classes > 2:
                 # Multi-class: predictions are logits [batch, num_classes]
-                from scipy.special import softmax
-
                 if predictions.max() > 1.0 or predictions.min() < 0.0:
                     predictions = softmax(predictions, axis=1)
 
