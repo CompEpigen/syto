@@ -7,7 +7,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
 
-from methyldl.inference.evaluation import compute_deconvolution_metrics
+from methyldl.deconvolution.evaluation import compute_deconvolution_metrics
 
 
 @dataclass
