@@ -160,9 +160,8 @@ class XGBoostDeconvolver:
         n_samples = X.shape[0]
 
         # Extract diagonal: x[i, i] for i in 0..n_dmr-1
-        diagonal = np.array(
-            [np.diag(X[i, :, : self.n_dmr]) for i in range(n_samples)]
-        )  # (n_samples, 39)
+        # (n_samples, 39)
+        diagonal = np.array([np.diag(X[i, :, : self.n_dmr]) for i in range(n_samples)])
 
         # Extract rejection column (last column)
         if self.with_reject_features:
