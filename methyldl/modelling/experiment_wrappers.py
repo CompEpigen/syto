@@ -1,43 +1,44 @@
-import mlflow
-import mlflow.pytorch
-import os
-import pandas as pd
-import numpy as np
-import torch
-from pathlib import Path
-import json
-import pickle
-from datetime import datetime
-from sklearn.metrics import (
-    accuracy_score,
-    precision_score,
-    recall_score,
-    f1_score,
-    roc_auc_score,
-    confusion_matrix,
-    roc_curve,
-    matthews_corrcoef,
-)
-import warnings
-
-warnings.filterwarnings("ignore")
-from methyldl.modelling.classifiers.dismir import Dismir
-from transformers import EarlyStoppingCallback
-from tqdm import tqdm
 import gc
-from methyldl.modelling.classifiers.dnabert2 import EpigenDnabert2, TrainingArguments
-from methyldl.data.dataset import SupervisedDataset
-from typing import List, Dict
-from methyldl.data.sequencing.genome import generate_kmer_str_with_overlap
-from methyldl.modelling.classifiers.methylbert import (
-    MethylVocab,
-    MethylBertFinetuneDataset,
-)
-from methyldl.modelling.classifiers.methylbert import MethylBert
+import json
+import os
+import pickle
 import random
 import time
+from pathlib import Path
+
+import mlflow
+import mlflow.pytorch
+import numpy as np
+import pandas as pd
+import torch
+from scipy.special import softmax
+from sklearn.metrics import (
+    accuracy_score,
+    confusion_matrix,
+    f1_score,
+    matthews_corrcoef,
+    precision_score,
+    recall_score,
+    roc_auc_score,
+)
+from tqdm import tqdm
+from transformers import (
+    EarlyStoppingCallback,
+    TrainerCallback,
+    TrainerControl,
+    TrainerState,
+)
+
+from methyldl.data.dataset import SupervisedDataset
+from methyldl.data.sequencing.genome import generate_kmer_str_with_overlap
 from methyldl.data.utils import split_long_reads
-from transformers import TrainerCallback, TrainerControl, TrainerState
+from methyldl.modelling.classifiers.dismir import Dismir
+from methyldl.modelling.classifiers.dnabert2 import EpigenDnabert2, TrainingArguments
+from methyldl.modelling.classifiers.methylbert import (
+    MethylBert,
+    MethylBertFinetuneDataset,
+    MethylVocab,
+)
 
 
 class RestartOnPoorPerformanceCallback(TrainerCallback):
@@ -105,7 +106,7 @@ class RestartOnPoorPerformanceCallback(TrainerCallback):
                         )
                 else:
                     print(
-                        f"Good performance! Continuing training without further checks."
+                        "Good performance! Continuing training without further checks."
                     )
 
         return control
@@ -243,15 +244,13 @@ class AbstractMLFlowExperiment:
 
             # Handle multi-class vs binary
             if num_classes > 2 or (
-                y_pred_proba.ndim == 2 and y_pred_proba.shape[1] > 1
+                y_pred_proba.ndim == 2 and y_pred_proba.shape[1] > 2
             ):
                 # Multi-class classification
                 is_multiclass = True
 
                 # If predictions are logits, apply softmax
                 if y_pred_proba.max() > 1.0 or y_pred_proba.min() < 0.0:
-                    from scipy.special import softmax
-
                     y_pred_proba = softmax(y_pred_proba, axis=1)
 
                 # Get predicted classes
@@ -267,8 +266,16 @@ class AbstractMLFlowExperiment:
                 is_multiclass = False
 
                 # Ensure 1D for binary
-                if y_pred_proba.ndim > 1:
-                    y_pred_proba = y_pred_proba.squeeze()
+                if y_pred_proba.ndim == 2:
+                    if y_pred_proba.shape[1] == 1:
+                        y_pred_proba = y_pred_proba.squeeze()
+                    elif y_pred_proba.shape[1] == 2:
+                        # If we have two columns, take the probability of the positive class
+                        y_pred_proba = y_pred_proba[:, 1]
+                    else:
+                        raise ValueError(
+                            f"Invalid shape for y_pred_proba: {y_pred_proba.shape}."
+                        )
 
                 if y_pred_binary is None:
                     y_pred_binary = (y_pred_proba >= best_threshold).astype(int)
@@ -290,7 +297,6 @@ class AbstractMLFlowExperiment:
 
             num_total = len(y_true)
             num_nans_proba = np.sum(nan_mask_proba)
-            num_nans_any = np.sum(nan_mask_any)
 
             # Filter out NaN values
             valid_mask = ~nan_mask_any
@@ -421,7 +427,7 @@ class AbstractMLFlowExperiment:
                         metrics[f"f1_class_{i}"] = float(per_class_f1[i])
             else:
                 # No valid samples
-                print(f"Warning: No valid samples found after removing NaNs")
+                print("Warning: No valid samples found after removing NaNs")
                 metrics.update(
                     {
                         "accuracy": 0.0,
@@ -450,24 +456,6 @@ class AbstractMLFlowExperiment:
                 "num_total_samples": len(y_true) if "y_true" in locals() else 0,
             }
 
-    # def _aggregate_predictions(self, data_chunked, predictions):
-    #     data_chunked["predictions_proba"] = predictions
-    #     data_chunked["predictions_weighted"] = data_chunked["predictions_proba"] * data_chunked["num_cpgs"]
-    #     data_chunked_agg = data_chunked.groupby("read_name").agg(
-    #                 predictions_weighted=pd.NamedAgg(column="predictions_weighted", aggfunc="sum"),
-    #                 num_cpgs=pd.NamedAgg(column="num_cpgs", aggfunc="sum"),
-    #                 label=pd.NamedAgg(column="label", aggfunc="min"),
-    #                 )
-    #     data_chunked_agg["predictions_weighted"] = data_chunked_agg["predictions_weighted"]/data_chunked_agg["num_cpgs"]
-    #     # Setting best threshold to 0.5 instead of tunning for the best opeating point is a more realistic strategy
-    #     # fpr, tpr, thresholds = roc_curve(data_chunked_agg["label"], data_chunked_agg["predictions_weighted"])
-    #     # best_treshold = thresholds[np.argmax(tpr-fpr)]
-    #     best_treshold = 0.5
-    #     data_chunked_agg["predictions"] = data_chunked_agg["predictions_weighted"]>best_treshold
-    #     data_chunked_agg = data_chunked_agg.loc[data_chunked_agg["num_cpgs"]>0,]
-    #     labels, predictions_binary, predictions = data_chunked_agg["label"], data_chunked_agg["predictions"], data_chunked_agg["predictions_weighted"]
-    #     return data_chunked, labels, predictions_binary, predictions,best_treshold
-
     def _aggregate_predictions(self, data_chunked, predictions, num_classes=2):
         """
         Aggregate chunk-level predictions to read-level predictions.
@@ -480,12 +468,11 @@ class AbstractMLFlowExperiment:
         predictions = np.array(predictions)
 
         # Determine if multi-class
-        if num_classes > 2 or (predictions.ndim == 2 and predictions.shape[1] > 1):
+        if num_classes > 2 or (predictions.ndim == 2 and predictions.shape[1] > 2):
             is_multiclass = True
 
             # Apply softmax if needed
             if predictions.max() > 1.0 or predictions.min() < 0.0:
-                from scipy.special import softmax
 
                 predictions = softmax(predictions, axis=1)
 
@@ -500,8 +487,16 @@ class AbstractMLFlowExperiment:
         else:
             is_multiclass = False
             # Binary classification
-            if predictions.ndim > 1:
-                predictions = predictions.squeeze()
+            if predictions.ndim == 2:
+                if predictions.shape[1] == 1:
+                    predictions = predictions.squeeze()
+                elif predictions.shape[1] == 2:
+                    # If we have two columns, take the probability of the positive class
+                    predictions = predictions[:, 1]
+                else:
+                    raise ValueError(
+                        f"Invalid shape for predictions: {predictions.shape}. Expected 1D for binary or 2D for multi-class."
+                    )
 
             data_chunked["predictions_proba"] = predictions
             data_chunked["predictions_weighted"] = (
@@ -722,15 +717,6 @@ class DismirMLflowExperiment(AbstractMLFlowExperiment):
             else:
                 best_threshold = 0.5 if num_classes == 2 else None
 
-            # Calculate metrics
-            metrics = self._calculate_metrics(
-                labels,
-                predictions,
-                predictions_binary,
-                best_threshold=best_threshold if best_threshold else 0.5,
-                num_classes=num_classes,
-            )
-
             # Create predictions dataframe
             if num_classes > 2:
                 pred_dict = {
@@ -745,17 +731,30 @@ class DismirMLflowExperiment(AbstractMLFlowExperiment):
                         ]
                 predictions_df = pd.DataFrame(pred_dict)
             else:
+                # number of classes is 2, so we should have a single probability column
+                if predictions.ndim > 1:
+                    if predictions.shape[1] == 1:
+                        predictions = predictions.squeeze()
+                    else:
+                        predictions = predictions[
+                            :, 1
+                        ]  # Take probability of positive class if we have two columns
                 predictions_df = pd.DataFrame(
                     {
                         "true_label": labels,
-                        "predicted_probability": (
-                            predictions
-                            if predictions.ndim == 1
-                            else predictions.squeeze()
-                        ),
+                        "predicted_probability": predictions,
                         "predicted_label": predictions_binary,
                     }
                 )
+
+            # Calculate metrics
+            metrics = self._calculate_metrics(
+                labels,
+                predictions,
+                predictions_binary,
+                best_threshold=best_threshold if best_threshold else 0.5,
+                num_classes=num_classes,
+            )
 
             return metrics, predictions_df
 
@@ -1113,8 +1112,10 @@ class EpigenBERT2MLflowExperiment(TransformersMLFLowExperiment):
                 data_df, checkpoint_path, split_name
             )
 
+            assert predictions.ndim in [1, 2]
+
             # Determine number of classes from predictions shape
-            if predictions.ndim == 2 and predictions.shape[1] > 1:
+            if predictions.ndim == 2 and predictions.shape[1] > 2:
                 num_classes = predictions.shape[1]
                 # Apply softmax if needed
                 if predictions.max() > 1.0 or predictions.min() < 0.0:
@@ -1129,8 +1130,17 @@ class EpigenBERT2MLflowExperiment(TransformersMLFLowExperiment):
                     predictions = np.max(predictions, axis=1)
             else:
                 num_classes = 2
-                if predictions.ndim > 1:
-                    predictions = predictions.squeeze()
+                if predictions.ndim == 2:
+                    if predictions.shape[1] == 1:
+                        predictions = predictions.squeeze()
+                    elif predictions.shape[1] == 2:
+                        # Take probability of positive class if we have two columns
+                        predictions = predictions[:, 1]
+                    else:
+                        raise ValueError(
+                            f"Invalid shape for predictions: {predictions.shape}. Expected 1D for binary or 2D for multi-class."
+                        )
+
                 predictions_binary = (predictions > 0.5).astype(int)
 
             # Calculate metrics
@@ -1633,7 +1643,15 @@ class MethylBertMLflowExperiment(TransformersMLFLowExperiment):
             else:
                 # Binary classification
                 if predictions.ndim > 1:
-                    predictions = predictions.squeeze()
+                    if predictions.shape[1] == 1:
+                        predictions = predictions.squeeze()
+                    elif predictions.shape[1] == 2:
+                        # Take probability of positive class if we have two columns
+                        predictions = predictions[:, 1]
+                    else:
+                        raise ValueError(
+                            f"Invalid shape for predictions: {predictions.shape}. Expected 1D for binary or 2D for multi-class."
+                        )
 
                 if split_name not in ["train", "valid", "test"]:
                     df, labels, predictions_binary, predictions, best_threshold = (

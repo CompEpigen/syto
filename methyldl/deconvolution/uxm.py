@@ -99,7 +99,7 @@ def decon_single_samp(samp, atlas, counts, verbose, debug=False):
         eprint("ERROR: merge went wrong. Validate your atlas")
         return None, None
     if verbose:
-        eprint("{}: {} \ {} markers".format(name, data.shape[0], atlas.shape[0]))
+        eprint(f"{name}: {data.shape[0]} \\ {atlas.shape[0]} markers")
     del data["name"], data["direction"]
 
     samp = data.iloc[:, 0]
