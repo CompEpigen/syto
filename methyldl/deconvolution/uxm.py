@@ -118,7 +118,7 @@ def decon_single_samp(samp, atlas, counts, verbose, debug=False):
 
 
 def uxm_deconvolution(
-    atlas, ref_cells, sf, counts, sample_names=["pseudo_balk_sample"]
+    atlas, ref_cells, sf, counts, sample_names=["pseudo_bulk_sample"]
 ):
     params = [
         (

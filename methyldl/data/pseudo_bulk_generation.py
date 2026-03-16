@@ -34,12 +34,57 @@ def generate_pseudo_bulk(
     labels_dict_reversed,
     return_reads=False,
 ):
-    ref_pos = np.array(
-        [
-            labels_dict_reversed[cell] if cell in labels_dict_reversed.keys() else -1
-            for cell in ref_cells
-        ]
-    )
+    """Generate pseudo-bulk mixtures for the train, validation, and test splits.
+
+    The function samples read-level predictions according to the requested cell-type
+    proportions, distributing each selected cell type's reads uniformly across the
+    39 DMR cell-type groups. For each input split, it returns both an aggregated
+    DMR-level pseudo-bulk representation and the UXM deconvolution inputs/results
+    computed from the sampled reads.
+
+    Parameters
+    ----------
+    total_samples : int
+        Total number of reads to sample before distributing them across the
+        requested cell types.
+    labels : list[int]
+        Cell-type labels to include in the pseudo-bulk mixture.
+    proportions : list[float]
+        Mixture proportions associated with ``labels``. They must sum to 1.
+    train_data : pd.DataFrame
+        Read-level prediction dataframe for the training split.
+    valid_data : pd.DataFrame
+        Read-level prediction dataframe for the validation split.
+    test_data : pd.DataFrame
+        Read-level prediction dataframe for the test split.
+    atlas : pd.DataFrame
+        UXM atlas used to deconvolve the pseudo-bulk sample.
+    ref_cells : list[str]
+        Reference cell names expected by the UXM atlas and deconvolution routine.
+    labels_dict_reversed : dict[str, int]
+        Mapping from reference cell names to label ids used to align the UXM output.
+    return_reads : bool, default=False
+        If True, also return the sampled read-level pseudo-bulk dataframes.
+
+    Returns
+    -------
+    tuple
+        If ``return_reads`` is False, returns ``(labels, proportions_full, subs,
+        uxm_data)``. If ``return_reads`` is True, returns ``(labels,
+        proportions_full, subs, uxm_data, reads)``.
+
+        ``proportions_full`` is a dense length-39 proportion vector aligned to all
+        labels, ``subs`` contains one aggregated pseudo-bulk dataframe per split,
+        and ``uxm_data`` contains one tuple per split with the UXM inputs and
+        deconvolution outputs.
+
+    Notes
+    -----
+    This function assumes that every requested ``(original_label,
+    dmr_ctype_label)`` group exists in each split. It also uses ``int(n / 39)``
+    samples per DMR group, so small rounding losses are expected when distributing
+    reads across DMR types.
+    """
     assert np.round(np.sum(proportions), 4) == 1, "Proportions must sum up to one"
     n_samples_list = [int(total_samples * x) for x in proportions]
     target_columns = [
@@ -94,12 +139,19 @@ def generate_pseudo_bulk(
     subs = []
     uxm_data = []
     reads = []
-    sample_name = "pseudo_balk_sample"
-    for df in [train_data, valid_data, test_data]:
+    sample_name = "pseudo_bulk_sample"
+
+    for df in [
+        train_data,
+        valid_data,
+        test_data,
+    ]:  # for each dataset (with predictions)
         df["total_marked_cpgs"] = df["NCPGS"]
         df["methylation_level"] = df["M_rate"]
         df.rename(columns={"chr": "chromosome"}, inplace=True)
         df["direction"] = "U"
+
+        # sample from each ctype according to the proportions, sampling equally from each DMR type within each ctype
         grouped = df.groupby(["original_label", "dmr_ctype_label"], sort=False)
         sub = []
         for n, label in zip(n_samples_list, labels):
@@ -107,11 +159,15 @@ def generate_pseudo_bulk(
                 group = grouped.get_group((label, dmr_ctype_label))
                 sub.append(group.sample(int(n / 39), replace=True))
         sub = pd.concat(sub)
+
+        # aggregate predictions by DMR type and chromosome
         sub_aggregated = aggregate_predictions_by_dmr(
             sub, group_cols=["dmr_ctype_label", "dmr_ctype"]
         )
         sub_aggregated = sub_aggregated[target_columns]
         subs.append(sub_aggregated)
+
+        # compute UXM deconvolution inputs before aggregation
         results = sub
         results_agg = (
             results.groupby(["name", "direction"])
@@ -132,17 +188,21 @@ def generate_pseudo_bulk(
         uxm_deconv_results = {
             x: np.round(y, 4) for (x, y) in zip(ref_cells, uxm_proportions)
         }
+
         uxm_deconv_results_alligned = rearange_uxm_deconvolution_results(
             labels_dict_reversed, uxm_proportions, ref_cells
         )
         uxm_data.append((sf, counts, uxm_deconv_results, uxm_deconv_results_alligned))
+
         if return_reads:
             reads.append(sub)
 
+    # ensure that we have a proportion for each of the 39 labels, filling in 0 for any missing ones
     proportions_dict = {x: y for x, y in zip(labels, proportions)}
     proportions_full = [proportions_dict.get(x, 0) for x in range(39)]
     if return_reads:
         return labels, proportions_full, subs, uxm_data, reads
+
     return labels, proportions_full, subs, uxm_data
 
 
@@ -156,9 +216,7 @@ def init_worker(
     # Set unique random seed per process
 
     seed = mp.current_process().pid
-
     random.seed(seed)
-
     np.random.seed(seed)
 
     for df in [train_data, valid_data, test_data]:
@@ -244,7 +302,7 @@ def worker_task(batch_indices):
     results = []
     exceptions = []
 
-    for idx in batch_indices:
+    for _ in batch_indices:
         # try:
         labels, proportions = random_select_with_weights(
             _worker_data["allowed_labels"], _worker_data["n_cells_max"]
@@ -281,7 +339,7 @@ def generate_pseudo_bulk_optimized(
     assert np.round(np.sum(proportions), 4) == 1, "Proportions must sum up to one"
 
     n_samples_list = [int(total_samples * x) for x in proportions]
-    sample_name = "pseudo_balk_sample"
+    sample_name = "pseudo_bulk_sample"
 
     subs = []
     uxm_data = []
@@ -366,6 +424,7 @@ def run_ios_generation_parallel(
 
     # Create batches of indices
     all_indices = list(range(n_io_examples))
+    # the indices themselves are not used in the worker task, they just determine how many times the task is run, so we can use a simple range of integers here
     batches = [
         all_indices[i : i + batch_size] for i in range(0, len(all_indices), batch_size)
     ]
@@ -375,7 +434,6 @@ def run_ios_generation_parallel(
 
     checkpoint_idx = start_checkpoint_idx
     # Use ProcessPoolExecutor with initializer
-
     with ProcessPoolExecutor(
         max_workers=n_workers,
         initializer=init_worker,
@@ -405,15 +463,14 @@ def run_ios_generation_parallel(
                 pbar.update(len(results) + len(exceptions))
 
                 # Checkpoint
-                if len(all_ios) % checkpoint_interval < batch_size:
-                    checkpoint_idx += checkpoint_interval
+                if len(all_ios) >= checkpoint_interval:
+                    checkpoint_idx += len(all_ios)
                     with open(
                         file_name.replace(".pkl", f"_{checkpoint_idx}.pkl"), "wb"
                     ) as f:
                         pickle.dump(all_ios, f)
-                    all_ios = (
-                        []
-                    )  # Initialize from the beggining so the object is not growing in memory
+                    # Initialize from the beginning so the object is not growing in memory
+                    all_ios = []
 
     return all_ios, all_exceptions
 
@@ -430,8 +487,13 @@ def random_select_with_weights(elements, n):
     Returns:
         tuple: (selected_elements, weights) where weights sum to 1
     """
-    # Determine how many elements to select (up to n, but not more than available)
-    k = random.randint(1, n)
+    if not elements or n <= 0:
+        return [], []
+
+    # Determine how many elements to select (up to n, but not more than available).
+    max_selectable = min(n, len(elements))
+    k = random.randint(1, max_selectable)
+    k = min(k, max_selectable)
 
     # Randomly select k elements without replacement
     selected = random.sample(elements, k)
