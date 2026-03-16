@@ -412,7 +412,7 @@ class InferencePipeline:
     def _aggregate_to_dmr(self) -> pd.DataFrame:
         """
         Aggregate read-level predictions to DMR level using
-        ``aggregate_predictions_by_dmr`` from ``methyldl.inference.prediction_aggregation``.
+        ``aggregate_predictions_by_dmr`` from ``methyldl.modelling.prediction_aggregation``.
         """
         self.logger.info("Aggregating predictions by DMR ...")
 

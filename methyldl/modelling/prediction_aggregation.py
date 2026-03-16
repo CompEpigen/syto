@@ -69,7 +69,9 @@ def aggregate_predictions_by_dmr(
             )
 
     # Handle case where weights might be 0 (avoid division by zero)
-    df["_weight"] = df[weight_col].clip(lower=1e-10)
+    # (the explicit conversion to float is necessary to avoid silent downcasting to int
+    # after clipping which would make the weights 0 again)
+    df["_weight"] = df[weight_col].astype(float).clip(lower=1e-10)
 
     # Simple average aggregation
     simple_avg = df.groupby(group_cols)[prediction_cols].mean()
@@ -105,20 +107,28 @@ def aggregate_predictions_by_dmr(
     if metadata_cols:
         metadata = df.groupby(group_cols)[metadata_cols].first()
         result = result.join(metadata)
+    result.reset_index(inplace=True)
+
     if fill_in_missing_labels:
         labels_dict_pd = pd.DataFrame(labels_dict, index=["dmr_ctype"]).T.reset_index()
         labels_dict_pd.columns = ["dmr_ctype_label", "dmr_ctype"]
-        if not set(x["dmr_ctype_label"]).difference(
-            set(labels_dict_pd["dmr_ctype_label"])
+        if set(labels_dict_pd["dmr_ctype_label"]).difference(
+            set(result["dmr_ctype_label"])
         ):
             result = pd.merge(
-                result, labels_dict_pd, on=["dmr_ctype_label", "dmr_ctype"], how="outer"
+                result,
+                labels_dict_pd,
+                on=["dmr_ctype_label", "dmr_ctype"],
+                how="outer",
+                indicator=True,
             )
+            synthetic_rows = result["_merge"] == "right_only"
+            result.drop(columns=["_merge"], inplace=True)
             result[result.isna()] = 0
-            result["label"] = -1
+            result.loc[synthetic_rows, "label"] = -1
             result["total_weight"] = result["total_weight"].apply(lambda x: max(x, 1))
 
-    return result.reset_index()
+    return result
 
 
 def aggregate_predictions_by_dmr_optimized(df, group_cols):
@@ -141,7 +151,9 @@ def aggregate_predictions_by_dmr_optimized(df, group_cols):
             raise ValueError(f"Weight column '{weight_col}' not found")
 
     # Clip weights to avoid division by zero
-    df["_weight"] = df[weight_col].clip(lower=1e-10)
+    # (the explicit conversion to float is necessary to avoid silent downcasting to int
+    # after clipping which would make the weights 0 again)
+    df["_weight"] = df[weight_col].astype(float).clip(lower=1e-10)
     # Pre-compute weighted values for each prediction column
     for col in prediction_cols:
         df[f"_weighted_{col}"] = df[col] * df["_weight"]
