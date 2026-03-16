@@ -1,6 +1,7 @@
 """ """
 
 import re
+from multiprocessing import Pool
 
 import numba as nb
 import pandas as pd
@@ -8,7 +9,6 @@ import pandas as pd
 import pysam
 import numpy as np
 
-from .read_merging import merge_paired_reads
 
 # Constants for numba
 CG_ASCII = np.array([ord("C"), ord("G")], dtype=np.uint8)
@@ -334,7 +334,7 @@ def process_single_read(
 
         # Get reference sequence for this region
         try:
-            # We are parsing +1 one charachter from ref_seq in case it ends with CG.
+            # We are parsing +1 one character from ref_seq in case it ends with CG.
             ref_seq = ref_fasta.fetch(chrom, r_beg, r_end + 1).upper()
             # We are checking if string ends with CG and only keeping last character if it does
             if ref_seq[-2:] != "CG":
@@ -533,7 +533,6 @@ def process_bam_with_chunking(
         - unknown_cpgs: CpGs in span but not called (in insert region between mates)
         These match wgbs_tools' behavior for counting CpGs.
     """
-    from multiprocessing import Pool
 
     # Auto-detect data type if not specified
     if data_type is None:
@@ -652,9 +651,6 @@ def clean_cigar_sequence(read):
             seq_pos += length
 
     return "".join(result)
-
-
-import pandas as pd
 
 
 def merge_paired_reads(df, verbose=True):
@@ -895,23 +891,22 @@ def _merge_methylation_encodings(
     merged_seq = ["N"] * frag_length
 
     # Fill in mate1 data
-    for i in range(len(seq1)):
+    for i, base1 in enumerate(seq1):
         if i >= len(enc1):
             break
         pos = (start1 - frag_start) + i
         if 0 <= pos < frag_length:
-            merged_seq[pos] = seq1[i]
+            merged_seq[pos] = base1
             merged_enc[pos] = enc1[i]
 
     # Fill in mate2 data with consensus logic matching wgbstools
-    for i in range(len(seq2)):
+    for i, base2 in enumerate(seq2):
         if i >= len(enc2):
             break
         pos = (start2 - frag_start) + i
         if 0 <= pos < frag_length:
             existing = merged_enc[pos]
-            merged_seq[pos] = seq2[i]
-
+            merged_seq[pos] = base2
             meth = enc2[i]
 
             if existing == "2":
