@@ -24,7 +24,9 @@ def chunk_tokens(tokens, window_size, stride):
     # If the last sliding window didn't exactly align with the end,
     # we yield one final chunk containing the *last* window_size elements.
     # This creates a variable overlap for the last segment, but ensures full context.
-    if total_len % stride != 0:
+    last_window_start = ((total_len - window_size) // stride) * stride
+    tail_window_start = total_len - window_size
+    if last_window_start != tail_window_start:
         yield tokens[-window_size:]
 
 
@@ -44,7 +46,7 @@ def generate_valid_tokens(read_data, k=3):
         if "N" in kmer:
             continue
 
-        center_idx = i + 1
+        center_idx = i + k // 2
         methylation_code = pattern[center_idx]
 
         # Yield the clean k-mer and its specific methylation label
@@ -85,13 +87,10 @@ def prepare_methylbert_list_inference(
         for chunk in chunk_tokens(
             processed_read_full, window_size=seq_length, stride=stride
         ):
-
             dna = " ".join([x[0] for x in chunk])
             methyl = "".join([x[1] for x in chunk])
             ncpgs_marked = methyl.count("0") + methyl.count("1")
-            # Metadata propagation
-            # Note: You might want to track which chunk this is (e.g., read_id_0, read_id_1)
-            # but for bulk inference, this format works.
+
             label = 39
             o_label = 39
             dmr_label = row[dmr_label_column]
@@ -154,15 +153,15 @@ def chunk_read_data(
         chunk_meth_enc = methylation_encoding[chunk_start_offset:chunk_end_offset]
 
         # Collect CpGs for this chunk
-        chunk_cpgs = []
+        chunk_cpgs_pos = []
         chunk_cpg_states = []
         for cpg_pos, cpg_state in zip(cpg_positions, meth_states):
             if chunk_gen_start <= cpg_pos < chunk_gen_end:
-                chunk_cpgs.append(cpg_pos)
+                chunk_cpgs_pos.append(cpg_pos)
                 chunk_cpg_states.append(cpg_state)
 
         # Original chunk CpG stats
-        total_cpgs = len(chunk_cpgs)
+        total_cpgs = len(chunk_cpgs_pos)
         methylated_cpgs = sum(1 for s in chunk_cpg_states if s == 1)
         unmethylated_cpgs = sum(1 for s in chunk_cpg_states if s == 0)
         methylation_rate = (methylated_cpgs / total_cpgs) if total_cpgs > 0 else 0.0
@@ -193,7 +192,7 @@ def chunk_read_data(
             clipped_methylated = 0
             clipped_unmethylated = 0
             clipped_total = 0
-            for cpg_pos, cpg_state in zip(chunk_cpgs, chunk_cpg_states):
+            for cpg_pos, cpg_state in zip(chunk_cpgs_pos, chunk_cpg_states):
                 if clip_gen_start <= cpg_pos < clip_gen_end:
                     clipped_total += 1
                     if cpg_state == 1:
