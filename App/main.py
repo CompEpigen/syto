@@ -22,17 +22,24 @@ from methyldl.modelling.experiment_wrappers import (
 )
 from methyldl.modelling.dnabert2 import TrainingArguments #TODO - must be different for MethylBERT 
 
-def setup_logging(verbose: bool = False):
+
+def setup_logging(verbose: bool = False, log_file: Optional[str] = None):
     """Configure logging for the application."""
     level = logging.DEBUG if verbose else logging.INFO
+    
+    handlers = [logging.StreamHandler()]
+    
+    # Only add FileHandler if a path is provided
+    if log_file:
+        # Create directory if it doesn't exist to prevent FileNotFoundError
+        os.makedirs(os.path.dirname(os.path.abspath(log_file)), exist_ok=True)
+        handlers.append(logging.FileHandler(log_file))
+        
     logging.basicConfig(
         level=level,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         force=True,
-        handlers=[
-            logging.StreamHandler(),
-            logging.FileHandler('test_container_tmp/App.log')
-        ]
+        handlers=handlers
     )
     return logging.getLogger(__name__)
 
@@ -178,27 +185,29 @@ def run_inference(config: Dict[str, Any], logger: logging.Logger) -> None:
     pipeline = InferencePipeline(config=config, logger=logger)
     results = pipeline.run()
 
-    # Log summary
-    logger.info("=" * 60)
-    logger.info("INFERENCE RESULTS SUMMARY")
-    logger.info("=" * 60)
-    for method_name, proportions in results.items():
-        # Flatten the proportions array if it is 2D (e.g., shape (1, 39))
-        flat_props = proportions.flatten() 
-        # 1. Pair the labels with their values
-        # pipeline.labels_dict is {int: str}, so we match by index
-        cell_contributions = []
-        for idx, name in pipeline.labels_dict.items():
-            if idx < len(flat_props):
-                cell_contributions.append((name, flat_props[idx]))
-        # 2. Sort by proportion (the second element of the tuple) in descending order
-        cell_contributions.sort(key=lambda x: x[1], reverse=True)
-        # 3. Take the top 5
-        top_5 = cell_contributions[:5]
-        # 4. Format and log
-        top5_str = ", ".join([f"{name}: {val:.4f}" for name, val in top_5])
-        logger.info(f"  {method_name} Top 5: {top5_str}")
+    if results is not None:
+
+        # Log summary
         logger.info("=" * 60)
+        logger.info("INFERENCE RESULTS SUMMARY")
+        logger.info("=" * 60)
+        for method_name, proportions in results.items():
+            # Flatten the proportions array if it is 2D (e.g., shape (1, 39))
+            flat_props = proportions.flatten() 
+            # 1. Pair the labels with their values
+            # pipeline.labels_dict is {int: str}, so we match by index
+            cell_contributions = []
+            for idx, name in pipeline.labels_dict.items():
+                if idx < len(flat_props):
+                    cell_contributions.append((name, flat_props[idx]))
+            # 2. Sort by proportion (the second element of the tuple) in descending order
+            cell_contributions.sort(key=lambda x: x[1], reverse=True)
+            # 3. Take the top 5
+            top_5 = cell_contributions[:5]
+            # 4. Format and log
+            top5_str = ", ".join([f"{name}: {val:.4f}" for name, val in top_5])
+            logger.info(f"  {method_name} Top 5: {top5_str}")
+            logger.info("=" * 60)
 
 def run_pretraining(config: Dict[str, Any], logger: logging.Logger) -> None:
     """Run pretraining based on configuration."""
@@ -280,10 +289,14 @@ Examples:
                        action='store_true',
                        help='Validate configuration without running')
     
+    parser.add_argument('--log-file', 
+                        type=str,
+                        help='Path to output log file (optional)')
+    
     args = parser.parse_args()
     
     # Setup logging
-    logger = setup_logging(args.verbose)
+    logger = setup_logging(args.verbose,args.log_file)
     logger.info(f"Starting MethylDL application - Task: {args.task}")
     
     try:
