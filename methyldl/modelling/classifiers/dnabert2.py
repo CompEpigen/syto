@@ -442,7 +442,7 @@ class EpigenDnabert2:
             foundation_model_huggingface
         )
         config = BertConfig(**config.to_dict(), use_triton=use_triton)
-        # Does not load weights just yet, because if we have a checkpoint, the weights will be retrived from it
+        # Does not load weights just yet, because if we have a checkpoint, the weights will be retrieved from it
         # base_model = transformers.AutoModelForSequenceClassification.from_config(trust_remote_code=trust_remote_code, config = config)
         base_model = transformers.AutoModelForSequenceClassification.from_pretrained(
             foundation_model_huggingface,
@@ -606,6 +606,7 @@ class EpigenDnabert2:
                     skip_memory_metrics=True,
                     auto_find_batch_size=False,
                     per_device_eval_batch_size=64 * 6,
+                    output_dir=self.training_args.output_dir,
                 )
             elif self.max_sequence_length <= 2000:
                 training_args = TrainingArguments(
