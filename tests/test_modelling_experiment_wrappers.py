@@ -500,6 +500,29 @@ class TestAbstractMLFlowExperiment(ExperimentTestBase):
         )
         self.assertIn("nan_percentage", metrics_nan)
         self.assertIn("num_nans_predictions_proba", metrics_nan)
+    
+    def test_calculate_metrics_binary_classification_preds_shaped_N2(self):
+        """Test metric calculation when binary predictions are shaped (N, 2) instead of (N,)."""
+        experiment = AbstractMLFlowExperiment(
+            data_path=self.data_path,
+            experiment_name="test_experiment",
+            tracking_uri=self.mlflow_manager.tracking_uri,
+        )
+
+        y_true = np.array([0, 1, 0, 1, 1])
+        y_pred_proba = np.array([[0.9, 0.1], [0.1, 0.9], [0.8, 0.2], [0.2, 0.8], [0.3, 0.7]])
+        y_pred_binary = None
+
+        metrics = experiment._calculate_metrics(y_true, y_pred_proba, y_pred_binary)
+
+        expected_accuracy = 1.0
+        self.assertIn("accuracy", metrics)
+        self.assertAlmostEqual(metrics["accuracy"], expected_accuracy, places=10)
+        self.assertIn("precision", metrics)
+        self.assertIn("recall", metrics)
+        self.assertIn("f1_score", metrics)
+        self.assertIn("roc_auc", metrics)
+        self.assertIn("mcc", metrics)
 
     def test_calculate_metrics_multiclass_classification(self):
         """Test metric calculation for multi-class classification branch."""
