@@ -121,6 +121,9 @@ class InferencePipeline:
         self.dmr_aggregated: Optional[pd.DataFrame] = None
         self.deconvolution_results: Dict[str, Any] = {}
 
+        # By default the algorithm assumes that we have at least some data for each DMR group. 
+        self.fill_in_missing_labels = self.config.get("fill_in_missing_labels",False)
+
     # ═══════════════════════════════════════════════════════════════════
     #  Public API
     # ═══════════════════════════════════════════════════════════════════
@@ -149,39 +152,40 @@ class InferencePipeline:
                 f"Unknown input type: {input_cfg['type']}. "
                 "Must be 'bam' or 'processed_reads'."
             )
-        if not self.skip_classification:
+        if not self.processed_reads is None:
+            if not self.skip_classification:
+                self.logger.info(
+                    f"Stage 1 complete: {len(self.processed_reads)} processed reads"
+                )
+
+                # ── Stage 2: overlap reads with atlas regions ───────────────────
+                self.prepared_reads, self.prepared_reads_chuncked = self._prepare_reads()
+                self.logger.info(
+                    f"Stage 2 complete: {len(self.prepared_reads)} atlas-overlapped reads"
+                )
+
+                # ── Stage 3: MethylBERT predictions ─────────────────────────────
+                self.predictions_df = self._predict_methylbert()
+                self.logger.info(
+                    f"Stage 3 complete: predictions for {len(self.predictions_df)} reads"
+                )
+
+            # ── Stage 4: aggregate to DMR level ────────────────────────────
+            self.dmr_aggregated = self._aggregate_to_dmr()
             self.logger.info(
-                f"Stage 1 complete: {len(self.processed_reads)} processed reads"
+                f"Stage 4 complete: {len(self.dmr_aggregated)} DMR-level aggregations"
             )
 
-            # ── Stage 2: overlap reads with atlas regions ───────────────────
-            self.prepared_reads, self.prepared_reads_chuncked = self._prepare_reads()
+            # ── Stage 5: deconvolution ─────────────────────────────────────
+            self.deconvolution_results = self._run_deconvolution()
             self.logger.info(
-                f"Stage 2 complete: {len(self.prepared_reads)} atlas-overlapped reads"
+                f"Stage 5 complete: ran {len(self.deconvolution_results)} deconvolution methods"
             )
 
-            # ── Stage 3: MethylBERT predictions ─────────────────────────────
-            self.predictions_df = self._predict_methylbert()
-            self.logger.info(
-                f"Stage 3 complete: predictions for {len(self.predictions_df)} reads"
-            )
+            # ── Save results ────────────────────────────────────────────────
+            self._save_results()
 
-        # ── Stage 4: aggregate to DMR level ────────────────────────────
-        self.dmr_aggregated = self._aggregate_to_dmr()
-        self.logger.info(
-            f"Stage 4 complete: {len(self.dmr_aggregated)} DMR-level aggregations"
-        )
-
-        # ── Stage 5: deconvolution ─────────────────────────────────────
-        self.deconvolution_results = self._run_deconvolution()
-        self.logger.info(
-            f"Stage 5 complete: ran {len(self.deconvolution_results)} deconvolution methods"
-        )
-
-        # ── Save results ────────────────────────────────────────────────
-        self._save_results()
-
-        return self.deconvolution_results
+            return self.deconvolution_results
 
     # ═══════════════════════════════════════════════════════════════════
     #  Stage 1: BAM processing / loading pre-processed reads
@@ -229,6 +233,25 @@ class InferencePipeline:
             min_cpgs=bam_cfg.get("min_cpgs", 1),
             merge_pairs=bam_cfg.get("merge_pairs", True),
         )
+        if not len(df):
+            self.logger.warning("The dataset has 0 reads after applying all samtools filters. The attempt will be made to reparse .bam without applying flag filters")
+            df = process_bam_with_chunking(
+                bam_path=bam_path,
+                chromosomes=chromosomes,
+                methyl_tr=bam_cfg.get("ont_methyl_tr", 122),
+                n_jobs=bam_cfg.get("n_jobs", 4),
+                reference_path=reference_path,
+                data_type=data_type,
+                min_mapq=bam_cfg.get("min_mapq", 10),
+                require_flags=None,
+                exclude_flags=None,
+                min_cpgs=bam_cfg.get("min_cpgs", 1),
+                merge_pairs=bam_cfg.get("merge_pairs", True),
+            )
+        if not len(df):
+            self.logger.warning("Setting exclude_flags=None and require_flags=None didn't help. The processing of this file will be terminated.")
+            return None
+
         return df
 
     def _load_parsed_reads(self) -> pd.DataFrame:
@@ -412,6 +435,8 @@ class InferencePipeline:
             group_cols=["dmr_ctype_label","dmr_ctype"],
             weight_col="NCPGS",
             create_weight_from_cpgs=False,
+            fill_in_missing_labels = self.fill_in_missing_labels,
+            labels_dict=self.labels_dict
         )
 
         return aggregated
