@@ -2,6 +2,7 @@ import numpy as np
 import sklearn
 import torch
 from typing import Union, Tuple, Any
+from scipy.special import softmax
 
 
 """
@@ -77,6 +78,9 @@ Compute metrics used for huggingface trainer.
 """ 
 def compute_metrics(eval_pred):
     logits, labels = eval_pred
+    # Handle soft labels: convert [B, C] probabilities to [B] hard indices
+    if labels.ndim >= 2:
+        labels = np.argmax(labels, axis=-1)
     num_classes = logits.shape[-1]
     if num_classes == 1:
         # Binary with single output
@@ -89,3 +93,51 @@ def compute_metrics(eval_pred):
         predictions = np.argmax(logits, axis=-1)
 
     return calculate_metric_with_sklearn(predictions, labels)
+
+"""
+Compute metrics soft labels.
+""" 
+def compute_metrics_soft_labels(eval_pred, threshold_func=lambda n: 0.5):
+    """
+    Computes metrics for soft labels by dynamically assigning a "Rejection" class 
+    if the maximum probability of a read falls below a certain threshold.
+    """
+    logits, soft_labels = eval_pred
+    num_classes = logits.shape[-1]
+    
+    # 1. Calculate the threshold (e.g., 1/sqrt(39) ≈ 0.16)
+    threshold = threshold_func(num_classes)
+    
+    # The rejection class will be assigned the index N (e.g., 39, if classes are 0-38)
+    rejection_class_id = num_classes 
+    
+    # ==========================================
+    # PROCESS PREDICTIONS
+    # ==========================================
+    # Convert logits to probabilities
+    probs = softmax(logits, axis=-1)
+    max_probs = np.max(probs, axis=-1)
+    pred_indices = np.argmax(probs, axis=-1)
+    
+    # If the highest probability is below the threshold, assign it to the Rejection class
+    predictions = np.where(max_probs < threshold, rejection_class_id, pred_indices)
+    
+    # ==========================================
+    # PROCESS GROUND TRUTH
+    # ==========================================
+    if soft_labels.ndim >= 2:
+        max_labels = np.max(soft_labels, axis=-1)
+        label_indices = np.argmax(soft_labels, axis=-1)
+        
+        # Apply the same threshold logic to the ground truth
+        hard_labels = np.where(max_labels < threshold, rejection_class_id, label_indices)
+        
+        # Handle HuggingFace Padding (-100)
+        # If the soft labels were padded, the row sum will be negative instead of 1.0
+        row_sums = np.sum(soft_labels, axis=-1)
+        hard_labels = np.where(row_sums < 0, -100, hard_labels)
+    else:
+        # Fallback just in case hard labels were passed somehow
+        hard_labels = soft_labels
+
+    return calculate_metric_with_sklearn(predictions, hard_labels)
