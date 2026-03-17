@@ -25,7 +25,7 @@ import re
 from matplotlib.gridspec import GridSpec
 import os
 from sklearn.metrics import confusion_matrix
-
+from methyldl.deconvolution.uxm import uxm_deconvolution, rearange_uxm_deconvolution_results
 
 cell_type_match_dict = {
 "Adipocytes": "Adipocytes",
@@ -528,10 +528,12 @@ def aggregate_predictions_by_dmr(
     if metadata_cols:
         metadata = df.groupby(group_cols)[metadata_cols].first()
         result = result.join(metadata)
+    result.reset_index(inplace=True)
+
     if fill_in_missing_labels:
         labels_dict_pd = pd.DataFrame(labels_dict, index=["dmr_ctype"]).T.reset_index()
         labels_dict_pd.columns = ["dmr_ctype_label", "dmr_ctype"]
-        if not set(x["dmr_ctype_label"]).difference(set(labels_dict_pd["dmr_ctype_label"])):
+        if set(labels_dict_pd["dmr_ctype_label"]).difference(set(result["dmr_ctype_label"])):
             result = pd.merge(result, labels_dict_pd, on =["dmr_ctype_label", "dmr_ctype"], how="outer")
             result[result.isna()] = 0
             result["label"] = -1
@@ -3562,12 +3564,14 @@ def process_single_read(read, data_type, methyl_tr=122, ref_fasta=None,
     
     # Quality filters matching SAMtools -f 3 -F 1796 -q 10
     # Check if ALL require_flags are set (SAMtools -f)
-    if require_flags and (read.flag & require_flags) != require_flags:
-        return []
+    if require_flags is not None:
+        if require_flags and (read.flag & require_flags) != require_flags:
+            return []
     
     # Check if ANY of the exclude_flags are set (SAMtools -F)
-    if exclude_flags and (read.flag & exclude_flags):
-        return []
+    if exclude_flags is not None:
+        if exclude_flags and (read.flag & exclude_flags):
+            return []
     
     # Skip reads below minimum mapping quality (SAMtools -q)
     if read.mapping_quality < min_mapq:
