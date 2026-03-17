@@ -59,10 +59,25 @@ Stage0 += copy(src='./poetry.lock', dest='/workspace/methyldl/poetry.lock')
 # Set working directory
 Stage0 += workdir(directory='/workspace/methyldl')
 
+# # Install dependencies first (better caching)
+# Stage0 += shell(commands=[
+#     'cd /workspace/methyldl',
+#     'poetry install --no-root --no-interaction --no-ansi',
+#     'poetry cache clear pypi --all -n'
+# ])
+
 # Install dependencies first (better caching)
+# Install dependencies
 Stage0 += shell(commands=[
     'cd /workspace/methyldl',
+    # 1. Let Poetry install everything (including the WRONG torch version)
     'poetry install --no-root --no-interaction --no-ansi',
+    
+    # 2. FORCE OVERWRITE torch with the P100-compatible version (CUDA 11.8)
+    # We use the pip inside the .venv directly to bypass Poetry's checks
+    './.venv/bin/pip install --force-reinstall torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118',
+    
+    # 3. Clean up
     'poetry cache clear pypi --all -n'
 ])
 
