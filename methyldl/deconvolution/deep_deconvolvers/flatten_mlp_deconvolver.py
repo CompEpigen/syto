@@ -4,7 +4,7 @@ import torch.nn as nn
 
 class FlattenMLPDeconvolver(nn.Module):
     """
-    Flatten 39×40 → 1560 features, then MLP.
+    Flatten 39x40 → 1560 features, then MLP.
     Simple but ignores spatial structure.
     """
 

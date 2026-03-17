@@ -4,7 +4,7 @@ import torch.nn as nn
 
 class CNNDeconvolver(nn.Module):
     """
-    Treat 39×40 matrix as a single-channel image.
+    Treat 39x40 matrix as a single-channel image.
     """
 
     def __init__(self, n_dmr_groups=39, n_pred_classes=40, n_cell_types=39):
@@ -35,6 +35,12 @@ class CNNDeconvolver(nn.Module):
         )
 
     def forward(self, x):
+        assert (
+            x.dim() == 3
+        ), "Expected input shape (batch, n_dmr_groups, n_pred_classes)"
+        assert (
+            x.shape[1] == 39 and x.shape[2] == 40
+        ), "Expected input shape (batch, 39, 40)"
         # x: (batch, 39, 40)
         x = x.unsqueeze(1)  # (batch, 1, 39, 40)
         x = self.conv_layers(x)
