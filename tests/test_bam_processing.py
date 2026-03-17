@@ -558,8 +558,6 @@ class TestProcessBamWithChunking(unittest.TestCase):
         self.assertEqual(result["read_name"].tolist(), ["r1", "r2"])
 
 
-# TO VERIDY FROM HERE
-
 class TestCleanCigarSequence(unittest.TestCase):
     """Test CIGAR-driven read-to-reference sequence normalization."""
 
@@ -848,5 +846,4 @@ class TestMergeMethylationEncodings(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    """Allow direct execution of the bam_processing test module."""
     unittest.main()

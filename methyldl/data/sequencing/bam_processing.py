@@ -9,7 +9,6 @@ import pandas as pd
 import pysam
 import numpy as np
 
-
 # Constants for numba
 CG_ASCII = np.array([ord("C"), ord("G")], dtype=np.uint8)
 

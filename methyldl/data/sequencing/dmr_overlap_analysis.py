@@ -1,7 +1,7 @@
 """"""
 
 
-def _get_overlapping_dmrs(read_start, read_end, chrom, dmr_trees, strict=False):
+def get_overlapping_dmrs(read_start, read_end, chrom, dmr_trees, strict=False):
     """
     Get list of overlapping DMRs with individual info (not aggregated).
     Returns one dict per overlapping DMR for iteration.
@@ -124,7 +124,7 @@ def _empty_overlap_result():
         "dmr_types": "",
         "overlap_bps": "",
         "overlap_pcts": "",
-        "dmr_mean_meth_target": None,
-        "dmr_mean_meth_background": None,
-        "dmr_mean_diff": None,
+        # "dmr_mean_meth_target": None,
+        # "dmr_mean_meth_background": None,
+        # "dmr_mean_diff": None,
     }

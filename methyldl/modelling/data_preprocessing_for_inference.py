@@ -1,6 +1,6 @@
 """"""
 
-from methyldl.data.sequencing.dmr_overlap_analysis import _get_overlapping_dmrs
+from methyldl.data.sequencing.dmr_overlap_analysis import get_overlapping_dmrs
 
 
 def chunk_tokens(tokens, window_size, stride):
@@ -167,7 +167,7 @@ def chunk_read_data(
         methylation_rate = (methylated_cpgs / total_cpgs) if total_cpgs > 0 else 0.0
 
         # Get list of overlapping DMRs (not aggregated)
-        overlapping_dmrs = _get_overlapping_dmrs(
+        overlapping_dmrs = get_overlapping_dmrs(
             chunk_gen_start, chunk_gen_end, chrom, dmr_trees, strict
         )
 

@@ -197,7 +197,7 @@ class TestChunkReadData(unittest.TestCase):
         dmr_trees = {"chr1": object()}
 
         with patch(
-            "methyldl.modelling.data_preprocessing_for_inference._get_overlapping_dmrs",
+            "methyldl.modelling.data_preprocessing_for_inference.get_overlapping_dmrs",
             return_value=[],
         ) as mock_get_overlaps:
             chunks = chunk_read_data(
@@ -230,7 +230,7 @@ class TestChunkReadData(unittest.TestCase):
         ]
 
         with patch(
-            "methyldl.modelling.data_preprocessing_for_inference._get_overlapping_dmrs",
+            "methyldl.modelling.data_preprocessing_for_inference.get_overlapping_dmrs",
             return_value=overlap,
         ):
             chunks = chunk_read_data(
@@ -296,7 +296,7 @@ class TestChunkReadData(unittest.TestCase):
         ]
 
         with patch(
-            "methyldl.modelling.data_preprocessing_for_inference._get_overlapping_dmrs",
+            "methyldl.modelling.data_preprocessing_for_inference.get_overlapping_dmrs",
             return_value=overlaps,
         ):
             chunks = chunk_read_data(
@@ -346,7 +346,7 @@ class TestChunkReadData(unittest.TestCase):
             return []
 
         with patch(
-            "methyldl.modelling.data_preprocessing_for_inference._get_overlapping_dmrs",
+            "methyldl.modelling.data_preprocessing_for_inference.get_overlapping_dmrs",
             side_effect=overlap_side_effect,
         ):
             chunks = chunk_read_data(
