@@ -2,16 +2,14 @@ import os
 import json
 import gc
 from dataclasses import dataclass, field
-from typing import  Optional, Dict, Tuple, List, Union
+from typing import Optional, Dict, Tuple, List, Union
 from transformers.models.bert.modeling_bert import BertPreTrainedModel
-from transformers.modeling_outputs import (SequenceClassifierOutput)
+from transformers.modeling_outputs import SequenceClassifierOutput
 
 from transformers.modeling_utils import PreTrainedModel
 from transformers.training_args import TrainingArguments
 from transformers.data.data_collator import DataCollator
-from transformers.trainer_callback import (
-    TrainerCallback
-)
+from transformers.trainer_callback import TrainerCallback
 import torch
 import torch.nn as nn
 from typing import Optional, Callable
@@ -20,7 +18,11 @@ import torch
 import transformers
 from torch.utils.data import Dataset
 
-from methyldl.modelling.evaluation import compute_metrics,preprocess_logits_for_prediction,keep_logits_only
+from methyldl.modelling.evaluation import (
+    compute_metrics,
+    preprocess_logits_for_prediction,
+    keep_logits_only,
+)
 from methyldl.modelling.utils import calculate_batch_size
 from methyldl.data.dataset import *
 from safetensors.torch import load_file
@@ -57,10 +59,11 @@ class BertEmbeddings(nn.Module):
         # self.n_labels = n_labels
 
         # Register token type IDs for cases where token_type_ids are not passed
-        self.register_buffer('token_type_ids',
-                             torch.zeros(model.config.max_position_embeddings,
-                                         dtype=torch.long),
-                             persistent=False)
+        self.register_buffer(
+            "token_type_ids",
+            torch.zeros(model.config.max_position_embeddings, dtype=torch.long),
+            persistent=False,
+        )
 
     def forward(
         self,
@@ -70,11 +73,11 @@ class BertEmbeddings(nn.Module):
         cpg_methylation: Optional[torch.LongTensor] = None,
         m6a_methylation: Optional[torch.LongTensor] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
-        past_key_values_length: int = 0
+        past_key_values_length: int = 0,
     ) -> torch.Tensor:
         if (input_ids is not None) == (inputs_embeds is not None):
-            raise ValueError('Must specify either input_ids or inputs_embeds!')
-        
+            raise ValueError("Must specify either input_ids or inputs_embeds!")
+
         # Determine input shape based on the input provided
         if input_ids is not None:
             input_shape = input_ids.size()
@@ -89,11 +92,15 @@ class BertEmbeddings(nn.Module):
 
         # Handle token_type_ids by using the registered buffer if not provided
         if token_type_ids is None:
-            if hasattr(self, 'token_type_ids'):
+            if hasattr(self, "token_type_ids"):
                 buffered_token_type_ids = self.token_type_ids[:, :seq_length]
-                token_type_ids = buffered_token_type_ids.expand(input_shape[0], seq_length)
+                token_type_ids = buffered_token_type_ids.expand(
+                    input_shape[0], seq_length
+                )
             else:
-                token_type_ids = torch.zeros(input_shape, dtype=torch.long, device=self.word_embeddings.device)
+                token_type_ids = torch.zeros(
+                    input_shape, dtype=torch.long, device=self.word_embeddings.device
+                )
 
         # Compute the embeddings for the main input
         if inputs_embeds is None:
@@ -103,20 +110,24 @@ class BertEmbeddings(nn.Module):
         embeddings = inputs_embeds + token_type_embeddings
         # Compute methylation embeddings if cpg_methylation are provided
         if self.use_cpg_methylation and cpg_methylation is not None:
-            cpg_methylation_embeddings = self.cpg_methylation_embeddings(cpg_methylation)
+            cpg_methylation_embeddings = self.cpg_methylation_embeddings(
+                cpg_methylation
+            )
             embeddings += cpg_methylation_embeddings
 
         if self.use_m6a_methylation and m6a_methylation is not None:
-            m6a_methylation_embeddings = self.m6a_methylation_embeddings(m6a_methylation)
+            m6a_methylation_embeddings = self.m6a_methylation_embeddings(
+                m6a_methylation
+            )
             embeddings += m6a_methylation_embeddings
-
 
         # Apply layer normalization and dropout
         embeddings = self.LayerNorm(embeddings)
         embeddings = self.dropout(embeddings)
-        
+
         return embeddings
-    
+
+
 class BertModel(BertPreTrainedModel):
     """Overall BERT model.
     Args:
@@ -161,8 +172,8 @@ class BertModel(BertPreTrainedModel):
         self.embeddings = pretrained_model.embeddings
         self.encoder = pretrained_model.encoder
         self.pooler = pretrained_model.pooler
-        
-        # self.post_init() #TODO Figure out if it is needed. 
+
+        # self.post_init() #TODO Figure out if it is needed.
 
     def get_input_embeddings(self):
         return self.embeddings.word_embeddings
@@ -180,15 +191,16 @@ class BertModel(BertPreTrainedModel):
         m6a_methylation: Optional[torch.LongTensor] = None,
         output_all_encoded_layers: Optional[bool] = False,
         masked_tokens_mask: Optional[torch.Tensor] = None,
-        **kwargs
+        **kwargs,
     ) -> Tuple[Union[List[torch.Tensor], torch.Tensor], Optional[torch.Tensor]]:
         if attention_mask is None:
             attention_mask = torch.ones_like(input_ids)
         if token_type_ids is None:
             token_type_ids = torch.zeros_like(input_ids)
 
-        embedding_output = self.embeddings(input_ids, token_type_ids,
-                                           position_ids,cpg_methylation, m6a_methylation) #TODO remove position ids as not needed 
+        embedding_output = self.embeddings(
+            input_ids, token_type_ids, position_ids, cpg_methylation, m6a_methylation
+        )  # TODO remove position ids as not needed
 
         subset_mask = []
         first_col_mask = []
@@ -204,21 +216,25 @@ class BertModel(BertPreTrainedModel):
             embedding_output,
             attention_mask,
             output_all_encoded_layers=output_all_encoded_layers,
-            subset_mask=subset_mask)
+            subset_mask=subset_mask,
+        )
 
         if masked_tokens_mask is None:
             sequence_output = encoder_outputs[-1]
-            pooled_output = self.pooler(
-                sequence_output) if self.pooler is not None else None
+            pooled_output = (
+                self.pooler(sequence_output) if self.pooler is not None else None
+            )
         else:
             # TD [2022-03-01]: the indexing here is very tricky.
             attention_mask_bool = attention_mask.bool()
             subset_idx = subset_mask[attention_mask_bool]  # type: ignore
             sequence_output = encoder_outputs[-1][
-                masked_tokens_mask[attention_mask_bool][subset_idx]]
+                masked_tokens_mask[attention_mask_bool][subset_idx]
+            ]
             if self.pooler is not None:
                 pool_input = encoder_outputs[-1][
-                    first_col_mask[attention_mask_bool][subset_idx]]
+                    first_col_mask[attention_mask_bool][subset_idx]
+                ]
                 pooled_output = self.pooler(pool_input, pool=False)
             else:
                 pooled_output = None
@@ -230,7 +246,8 @@ class BertModel(BertPreTrainedModel):
             return encoder_outputs, pooled_output
 
         return encoder_outputs, None
-    
+
+
 class BertForSequenceClassification(BertPreTrainedModel):
     """Bert Model transformer with a sequence classification/regression head.
     This head is just a linear layer on top of the pooled output. Used for,
@@ -249,18 +266,17 @@ class BertForSequenceClassification(BertPreTrainedModel):
             self.num_labels = prertained_model.config.num_labels
         self.config = prertained_model.config
 
-        self.bert = BertModel(prertained_model.bert) # Reconstructing original model 
+        self.bert = BertModel(prertained_model.bert)  # Reconstructing original model
         self.dropout = prertained_model.dropout
         self.num_dmr_labels = num_dmr_labels
         if num_dmr_labels is None:
             self.classifier = prertained_model.classifier
         else:
-            self.config.num_dmr_labels=num_dmr_labels
-            self.config.num_labels=num_labels
+            self.config.num_dmr_labels = num_dmr_labels
+            self.config.num_labels = num_labels
             self.classifier = DMRAttentionClassifier(self.config)
         # Initialize weights and apply final processing
-        self.post_init() 
-
+        self.post_init()
 
     def forward(
         self,
@@ -276,7 +292,7 @@ class BertForSequenceClassification(BertPreTrainedModel):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
-        dmr_ids: Optional[torch.Tensor] =None  # DMR labels
+        dmr_ids: Optional[torch.Tensor] = None,  # DMR labels
     ) -> Union[Tuple[torch.Tensor], SequenceClassifierOutput]:
         # labels (`torch.LongTensor` of shape `(batch_size,)`, *optional*):
         # Labels for computing the sequence classification/regression loss.
@@ -285,15 +301,17 @@ class BertForSequenceClassification(BertPreTrainedModel):
         # (mean-square loss). If `config.num_labels > 1` a classification loss
         # is computed (cross-entropy).
 
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        return_dict = (
+            return_dict if return_dict is not None else self.config.use_return_dict
+        )
 
         outputs = self.bert(
             input_ids,
             attention_mask=attention_mask,
             token_type_ids=token_type_ids,
             position_ids=position_ids,
-            cpg_methylation = cpg_methylation,
-            m6a_methylation = m6a_methylation,
+            cpg_methylation=cpg_methylation,
+            m6a_methylation=m6a_methylation,
             head_mask=head_mask,
             inputs_embeds=inputs_embeds,
             output_attentions=output_attentions,
@@ -308,33 +326,31 @@ class BertForSequenceClassification(BertPreTrainedModel):
         else:
             sequence_output = outputs[0]
             sequence_output = self.dropout(sequence_output)
-            logits,_ = self.classifier(
-                sequence_output, dmr_ids, attention_mask
-            )
+            logits, _ = self.classifier(sequence_output, dmr_ids, attention_mask)
 
         loss = None
         if labels is not None:
             # Compute loss
             if self.config.problem_type is None:
                 if self.num_labels == 1:
-                    self.config.problem_type = 'regression'
-                elif self.num_labels > 1 and (labels.dtype == torch.long or
-                                              labels.dtype == torch.int):
-                    self.config.problem_type = 'single_label_classification'
+                    self.config.problem_type = "regression"
+                elif self.num_labels > 1 and (
+                    labels.dtype == torch.long or labels.dtype == torch.int
+                ):
+                    self.config.problem_type = "single_label_classification"
                 else:
-                    self.config.problem_type = 'multi_label_classification'
+                    self.config.problem_type = "multi_label_classification"
 
-            if self.config.problem_type == 'regression':
+            if self.config.problem_type == "regression":
                 loss_fct = nn.MSELoss()
                 if self.num_labels == 1:
                     loss = loss_fct(logits.squeeze(), labels.squeeze())
                 else:
                     loss = loss_fct(logits, labels)
-            elif self.config.problem_type == 'single_label_classification':
+            elif self.config.problem_type == "single_label_classification":
                 loss_fct = nn.CrossEntropyLoss()
-                loss = loss_fct(logits.view(-1, self.num_labels),
-                                labels.view(-1))
-            elif self.config.problem_type == 'multi_label_classification':
+                loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
+            elif self.config.problem_type == "multi_label_classification":
                 loss_fct = nn.BCEWithLogitsLoss()
                 loss = loss_fct(logits, labels)
 
@@ -349,12 +365,15 @@ class BertForSequenceClassification(BertPreTrainedModel):
             attentions=None,
         )
 
+
 @dataclass
 class TrainingArguments(transformers.TrainingArguments):
     cache_dir: Optional[str] = field(default=None)
     run_name: str = field(default="run")
     optim: str = field(default="adamw_torch")
-    model_max_length: int = field(default=512, metadata={"help": "Maximum sequence length."})
+    model_max_length: int = field(
+        default=512, metadata={"help": "Maximum sequence length."}
+    )
     gradient_accumulation_steps: int = field(default=1)
     per_device_train_batch_size: int = field(default=1)
     per_device_eval_batch_size: int = field(default=1)
@@ -363,7 +382,7 @@ class TrainingArguments(transformers.TrainingArguments):
     logging_steps: int = field(default=100)
     save_steps: int = field(default=100)
     eval_steps: int = field(default=100)
-    eval_strategy: str = field(default="steps"),
+    eval_strategy: str = (field(default="steps"),)
     warmup_steps: int = field(default=50)
     weight_decay: float = field(default=0.01)
     learning_rate: float = field(default=1e-4)
@@ -385,94 +404,128 @@ class TrainingArguments(transformers.TrainingArguments):
     skip_memory_metrics: bool = field(default=True)
     auto_find_batch_size: bool = field(default=False)
 
-def initialize_model_with_custom_embeddings(base_model, use_cpg, use_m6a, num_labels=None,num_dmr_labels=None):
+
+def initialize_model_with_custom_embeddings(
+    base_model, use_cpg, use_m6a, num_labels=None, num_dmr_labels=None
+):
     base_model.bert.embeddings = BertEmbeddings(base_model.bert, use_cpg, use_m6a)
-    model = BertForSequenceClassification(base_model, num_labels=num_labels,num_dmr_labels=num_dmr_labels)
+    model = BertForSequenceClassification(
+        base_model, num_labels=num_labels, num_dmr_labels=num_dmr_labels
+    )
     if num_dmr_labels is None:
-        model.classifier = nn.Linear(768,out_features=num_labels,bias=True)
+        model.classifier = nn.Linear(768, out_features=num_labels, bias=True)
     return model
 
-class EpigenDnabert2():
-    def __init__(self, 
-                  foundation_model_huggingface:str = "zhihan1996/DNABERT-2-117M", 
-                  load_weights = True,
-                  fine_tuned_model_path: Optional[str] = None,
-                  max_sequence_length: int = 150,
-                  num_labels:int =2,
-                  use_cpg_methylation=True, 
-                  use_m6a_methylation=False,
-                  trust_remote_code=True,
-                  use_triton=True,
-                  training_args=None,
-                  num_dmr_labels=None):
-        
-        assert len(foundation_model_huggingface), "Must specify foundation model path hosted on Hugging Face"
+
+class EpigenDnabert2:
+    def __init__(
+        self,
+        foundation_model_huggingface: str = "zhihan1996/DNABERT-2-117M",
+        load_weights=True,
+        fine_tuned_model_path: Optional[str] = None,
+        max_sequence_length: int = 150,
+        num_labels: int = 2,
+        use_cpg_methylation=True,
+        use_m6a_methylation=False,
+        trust_remote_code=True,
+        use_triton=True,
+        training_args=None,
+        num_dmr_labels=None,
+    ):
+
+        assert len(
+            foundation_model_huggingface
+        ), "Must specify foundation model path hosted on Hugging Face"
         self.num_dmr_labels = num_dmr_labels
 
-        config = BertForSequenceClassification.config_class.from_pretrained(foundation_model_huggingface)
-        config = BertConfig(**config.to_dict(),use_triton=use_triton)
-        # Does not load weights just yet, because if we have a checkpoint, the weights will be retrived from it 
+        config = BertForSequenceClassification.config_class.from_pretrained(
+            foundation_model_huggingface
+        )
+        config = BertConfig(**config.to_dict(), use_triton=use_triton)
+        # Does not load weights just yet, because if we have a checkpoint, the weights will be retrieved from it
         # base_model = transformers.AutoModelForSequenceClassification.from_config(trust_remote_code=trust_remote_code, config = config)
         base_model = transformers.AutoModelForSequenceClassification.from_pretrained(
-                foundation_model_huggingface,
-                trust_remote_code=trust_remote_code,
-                config = config,
-                local_files_only=True,  
-                cache_dir=None)  
-        model = initialize_model_with_custom_embeddings(base_model, use_cpg_methylation, use_m6a_methylation,num_labels=num_labels,num_dmr_labels=num_dmr_labels)
+            foundation_model_huggingface,
+            trust_remote_code=trust_remote_code,
+            config=config,
+            local_files_only=True,
+            cache_dir=None,
+        )
+        model = initialize_model_with_custom_embeddings(
+            base_model,
+            use_cpg_methylation,
+            use_m6a_methylation,
+            num_labels=num_labels,
+            num_dmr_labels=num_dmr_labels,
+        )
 
-        self.num_labels=num_labels
+        self.num_labels = num_labels
         model.num_labels = num_labels
         if fine_tuned_model_path is not None:
             checkpoint = load_file(fine_tuned_model_path)
             # TODO: Remove this part after proper checkpoint is generated:
-            old_cpg_methylation_key = 'bert.embeddings.methylation_embeddings.weight'
+            old_cpg_methylation_key = "bert.embeddings.methylation_embeddings.weight"
             if old_cpg_methylation_key in checkpoint.keys():
-                checkpoint['bert.embeddings.cpg_methylation_embeddings.weight'] = checkpoint.pop(old_cpg_methylation_key)
-            
+                checkpoint["bert.embeddings.cpg_methylation_embeddings.weight"] = (
+                    checkpoint.pop(old_cpg_methylation_key)
+                )
+
             model.load_state_dict(checkpoint)
 
             model.eval()
         elif load_weights:
-            base_model = transformers.AutoModelForSequenceClassification.from_pretrained(
-                foundation_model_huggingface,
-                trust_remote_code=trust_remote_code,
-                config = config)
-            model = initialize_model_with_custom_embeddings(base_model, use_cpg_methylation, use_m6a_methylation,num_labels=num_labels,num_dmr_labels=num_dmr_labels)
+            base_model = (
+                transformers.AutoModelForSequenceClassification.from_pretrained(
+                    foundation_model_huggingface,
+                    trust_remote_code=trust_remote_code,
+                    config=config,
+                )
+            )
+            model = initialize_model_with_custom_embeddings(
+                base_model,
+                use_cpg_methylation,
+                use_m6a_methylation,
+                num_labels=num_labels,
+                num_dmr_labels=num_dmr_labels,
+            )
         self.model = model
         self.num_labels = num_labels
         self.config = config
-        model_max_length = round(max_sequence_length//4+1) # BPE encoding reduces sequence length approximately by a factor of 4
+        model_max_length = round(
+            max_sequence_length // 4 + 1
+        )  # BPE encoding reduces sequence length approximately by a factor of 4
 
-        recomended_batch_size = calculate_batch_size(gb_per_seq = 0.029, cpu_batch_size=300)
+        recomended_batch_size = calculate_batch_size(
+            gb_per_seq=0.029, cpu_batch_size=300
+        )
 
-        default_training_args =  TrainingArguments(
-            run_name = "dnabert2_default",
-            per_device_train_batch_size = recomended_batch_size,
-            per_device_eval_batch_size = int(recomended_batch_size/2),
-            gradient_accumulation_steps = 1,
-            learning_rate = 3e-5,
-            fp16 = True,
-            save_steps = 10,
-            output_dir ="output/dnabert2_default",
-            eval_strategy = "steps",
-            eval_steps = 10, 
-            warmup_steps = 100, 
-            logging_steps = 100, 
-            num_train_epochs = 250, 
-            overwrite_output_dir = True, 
-            log_level = "info",
-            find_unused_parameters = False,
-            batch_eval_metrics = False,
-            eval_and_save_results = True,
+        default_training_args = TrainingArguments(
+            run_name="dnabert2_default",
+            per_device_train_batch_size=recomended_batch_size,
+            per_device_eval_batch_size=int(recomended_batch_size / 2),
+            gradient_accumulation_steps=1,
+            learning_rate=3e-5,
+            fp16=True,
+            save_steps=10,
+            output_dir="output/dnabert2_default",
+            eval_strategy="steps",
+            eval_steps=10,
+            warmup_steps=100,
+            logging_steps=100,
+            num_train_epochs=250,
+            overwrite_output_dir=True,
+            log_level="info",
+            find_unused_parameters=False,
+            batch_eval_metrics=False,
+            eval_and_save_results=True,
             remove_unused_columns=False,
-            eval_accumulation_steps = 8,
-            torch_empty_cache_steps = 10,
+            eval_accumulation_steps=8,
+            torch_empty_cache_steps=10,
             prediction_loss_only=False,
             gradient_checkpointing=False,
             skip_memory_metrics=True,
             auto_find_batch_size=False,
-            )
+        )
         if training_args == None:
             self.training_args = default_training_args
         else:
@@ -488,123 +541,131 @@ class EpigenDnabert2():
         )
         self.data_collator = DataCollatorForSupervisedDataset(tokenizer=self.tokenizer)
         self.trainer = None
-    
+
     def __str__(self):
-        str(self.model.__str__())
-    
-    def _init_trainer(self,
+        return str(self.model)
+
+    def _init_trainer(
+        self,
         args: TrainingArguments = None,
         train_dataset: Optional[Dataset] = None,
         eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
         model_init: Optional[Callable[[], PreTrainedModel]] = None,
         callbacks: Optional[List[TrainerCallback]] = None,
-        optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None)):
-        if self.num_labels==2:
-            return transformers.Trainer(model=self.model,
-                                args = args,
-                                data_collator=self.data_collator,
-                                train_dataset = train_dataset,
-                                eval_dataset = eval_dataset,
-                                model_init = model_init,
-                                callbacks = callbacks,
-                                optimizers = optimizers,
-                                tokenizer=self.tokenizer,
-                                preprocess_logits_for_metrics=preprocess_logits_for_prediction,
-                                compute_metrics=compute_metrics)
-        elif self.num_labels>2:
-            return transformers.Trainer(model=self.model,
-                                args = args,
-                                data_collator=self.data_collator,
-                                train_dataset = train_dataset,
-                                eval_dataset = eval_dataset,
-                                model_init = model_init,
-                                callbacks = callbacks,
-                                optimizers = optimizers,
-                                tokenizer=self.tokenizer)
+        optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (
+            None,
+            None,
+        ),
+    ):
+        if self.num_labels == 2:
+            return transformers.Trainer(
+                model=self.model,
+                args=args,
+                data_collator=self.data_collator,
+                train_dataset=train_dataset,
+                eval_dataset=eval_dataset,
+                model_init=model_init,
+                callbacks=callbacks,
+                optimizers=optimizers,
+                tokenizer=self.tokenizer,
+                preprocess_logits_for_metrics=preprocess_logits_for_prediction,
+                compute_metrics=compute_metrics,
+            )
+        elif self.num_labels > 2:
+            return transformers.Trainer(
+                model=self.model,
+                args=args,
+                data_collator=self.data_collator,
+                train_dataset=train_dataset,
+                eval_dataset=eval_dataset,
+                model_init=model_init,
+                callbacks=callbacks,
+                optimizers=optimizers,
+                tokenizer=self.tokenizer,
+            )
 
-    def predict(self, test_dataset,batch_size = None, clear_cache=True):
+    def predict(self, test_dataset, batch_size=None, clear_cache=True):
         if batch_size is not None:
             training_args = TrainingArguments(
-                    eval_strategy = "no",
-                    save_strategy = "no",
-                    gradient_checkpointing=False,
-                    skip_memory_metrics=True,
-                    auto_find_batch_size=False,
-                    per_device_eval_batch_size = batch_size,
-                    output_dir=self.training_args.output_dir
-                    )
+                eval_strategy="no",
+                save_strategy="no",
+                gradient_checkpointing=False,
+                skip_memory_metrics=True,
+                auto_find_batch_size=False,
+                per_device_eval_batch_size=batch_size,
+                output_dir=self.training_args.output_dir,
+            )
         else:
             # TODO Must be a better way
             # Also, when using Flash Attention, we are forced to have batch size as multiples of 64 to avoid race conditions.
             if self.max_sequence_length <= 1000:
                 training_args = TrainingArguments(
-                        eval_strategy = "no",
-                        save_strategy = "no",
-                        gradient_checkpointing=False,
-                        skip_memory_metrics=True,
-                        auto_find_batch_size=False,
-                        per_device_eval_batch_size = 64*6
-                        )
+                    eval_strategy="no",
+                    save_strategy="no",
+                    gradient_checkpointing=False,
+                    skip_memory_metrics=True,
+                    auto_find_batch_size=False,
+                    per_device_eval_batch_size=64 * 6,
+                    output_dir=self.training_args.output_dir,
+                )
             elif self.max_sequence_length <= 2000:
                 training_args = TrainingArguments(
-                        eval_strategy = "no",
-                        save_strategy = "no",
-                        gradient_checkpointing=False,
-                        skip_memory_metrics=True,
-                        auto_find_batch_size=False,
-                        per_device_eval_batch_size = 64*3,
-                        output_dir=self.training_args.output_dir
-                        )
+                    eval_strategy="no",
+                    save_strategy="no",
+                    gradient_checkpointing=False,
+                    skip_memory_metrics=True,
+                    auto_find_batch_size=False,
+                    per_device_eval_batch_size=64 * 3,
+                    output_dir=self.training_args.output_dir,
+                )
             elif self.max_sequence_length <= 3000:
                 training_args = TrainingArguments(
-                        eval_strategy = "no",
-                        save_strategy = "no",
-                        gradient_checkpointing=False,
-                        skip_memory_metrics=True,
-                        auto_find_batch_size=False,
-                        per_device_eval_batch_size = 64,
-                        output_dir=self.training_args.output_dir
-                        )
+                    eval_strategy="no",
+                    save_strategy="no",
+                    gradient_checkpointing=False,
+                    skip_memory_metrics=True,
+                    auto_find_batch_size=False,
+                    per_device_eval_batch_size=64,
+                    output_dir=self.training_args.output_dir,
+                )
             else:
                 training_args = TrainingArguments(
-                        eval_strategy = "no",
-                        save_strategy = "no",
-                        gradient_checkpointing=False,
-                        skip_memory_metrics=True,
-                        auto_find_batch_size=True,
-                        output_dir=self.training_args.output_dir
-                        )
-        if self.num_labels==2:
+                    eval_strategy="no",
+                    save_strategy="no",
+                    gradient_checkpointing=False,
+                    skip_memory_metrics=True,
+                    auto_find_batch_size=True,
+                    output_dir=self.training_args.output_dir,
+                )
+        if self.num_labels == 2:
             prediction_trainer = transformers.Trainer(
                 model=self.model,
                 args=training_args,
                 data_collator=self.data_collator,
                 tokenizer=self.tokenizer,
                 preprocess_logits_for_metrics=preprocess_logits_for_prediction,
-                compute_metrics=None
+                compute_metrics=None,
             )
 
-        
-        elif self.num_labels>2:
+        elif self.num_labels > 2:
             prediction_trainer = transformers.Trainer(
                 model=self.model,
                 args=training_args,
                 data_collator=self.data_collator,
                 tokenizer=self.tokenizer,
                 compute_metrics=None,
-                preprocess_logits_for_metrics =  keep_logits_only
+                preprocess_logits_for_metrics=keep_logits_only,
             )
-        
-    
+
         prediction = prediction_trainer.predict(test_dataset)
         if clear_cache:
             gc.collect()
-            torch.cuda.empty_cache() 
+            torch.cuda.empty_cache()
         # prediction = self.trainer.predict(test_dataset)
         # gc.collect()
-        # torch.cuda.empty_cache() 
+        # torch.cuda.empty_cache()
         return prediction
-    
+
     def safe_save_model_for_hf_trainer(self, output_dir: str):
         """Collects the state dict and dump to disk."""
         state_dict = self.trainer.model.state_dict()
@@ -613,40 +674,50 @@ class EpigenDnabert2():
             del state_dict
             self.trainer._save(output_dir, state_dict=cpu_state_dict)  # noqa
 
-    def fine_tune(self,
-                  data_path: Optional[str] = None,
-                  training_args: Union[TrainingArguments, None] = None,
-                  train_dataset: Optional[SupervisedDataset] = None,
-                  val_dataset: Optional[SupervisedDataset] = None,
-                  test_dataset: Optional[SupervisedDataset] = None,
-                  callbacks: Optional[List[TrainerCallback]] = None,
-                  data_interface: str = "csv",
-                  resume_from_checkpoint: Optional[Union[bool, str]] = None):
-        
+    def fine_tune(
+        self,
+        data_path: Optional[str] = None,
+        training_args: Union[TrainingArguments, None] = None,
+        train_dataset: Optional[SupervisedDataset] = None,
+        val_dataset: Optional[SupervisedDataset] = None,
+        test_dataset: Optional[SupervisedDataset] = None,
+        callbacks: Optional[List[TrainerCallback]] = None,
+        data_interface: str = "csv",
+        resume_from_checkpoint: Optional[Union[bool, str]] = None,
+    ):
+
         # Ensure that either data_path is provided or all datasets are provided
-        assert data_path or (train_dataset and val_dataset and test_dataset), (
-            "Either 'data_path' must be provided or all of 'train_dataset', 'val_dataset', and 'test_dataset' must not be None."
-        )
+        assert data_path or (
+            train_dataset and val_dataset and test_dataset
+        ), "Either 'data_path' must be provided or all of 'train_dataset', 'val_dataset', and 'test_dataset' must not be None."
 
         # TODO Adding LoRA
         print("Starting to initialize datasets")
-        train_dataset = train_dataset or SupervisedDataset(tokenizer=self.tokenizer, 
-                                        data_path_or_list=os.path.join(data_path, "train"), 
-                                        kmer=-1,data_interface=data_interface)
+        train_dataset = train_dataset or SupervisedDataset(
+            tokenizer=self.tokenizer,
+            data_path_or_list=os.path.join(data_path, "train"),
+            kmer=-1,
+            data_interface=data_interface,
+        )
         print("Train is initialized")
-        val_dataset = val_dataset or SupervisedDataset(tokenizer=self.tokenizer, 
-                                        data_path_or_list=os.path.join(data_path, "valid"), 
-                                        kmer=-1,data_interface=data_interface)
+        val_dataset = val_dataset or SupervisedDataset(
+            tokenizer=self.tokenizer,
+            data_path_or_list=os.path.join(data_path, "valid"),
+            kmer=-1,
+            data_interface=data_interface,
+        )
         print("Val is initialized")
-        
-        if training_args is not None:
-            self.training_args = training_args # overwritting default training args
 
-        self.trainer = self._init_trainer(train_dataset=train_dataset,
-                                     eval_dataset = val_dataset,
-                                     args=self.training_args,
-                                     callbacks=callbacks)
-        
+        if training_args is not None:
+            self.training_args = training_args  # overwritting default training args
+
+        self.trainer = self._init_trainer(
+            train_dataset=train_dataset,
+            eval_dataset=val_dataset,
+            args=self.training_args,
+            callbacks=callbacks,
+        )
+
         print("All datasets are successfully initiated")
         # Determine checkpoint resumption strategy
         checkpoint_path = None
@@ -657,7 +728,7 @@ class EpigenDnabert2():
             elif isinstance(resume_from_checkpoint, str):
                 # Resume from specific checkpoint path
                 checkpoint_path = resume_from_checkpoint
-        elif hasattr(self, 'resume_from_checkpoint') and self.resume_from_checkpoint:
+        elif hasattr(self, "resume_from_checkpoint") and self.resume_from_checkpoint:
             # Use checkpoint path from initialization if provided
             checkpoint_path = self.resume_from_checkpoint
 
