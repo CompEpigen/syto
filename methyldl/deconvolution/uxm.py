@@ -4,6 +4,7 @@ The focus is on creating a minimum setup sufficient to run deconvolution in pyth
 Some of the methods are directly copied while other are specific to this repo.
 """
 
+import sys
 import pandas as pd
 import numpy as np
 import os
@@ -24,14 +25,14 @@ def validate_ref_tissues(df, tissue_list):
     for col in tissue_list:
         if col not in df.columns:
             eprint("Invalid cell type (not in atlas):", col)
-            exit()
+            sys.exit(1)
 
 
 def validate_file(fpath):
     """Validate that the provided file path exists and is a file"""
     if not op.isfile(fpath):
         eprint("Invalid file", fpath)
-        exit()
+        sys.exit(1)
     return fpath
 
 
@@ -45,11 +46,11 @@ def load_atlas(atlas_path, ignore=None, include=None):
     df = pd.read_csv(atlas_path, sep="\t", nrows=2)
     if df.shape[1] < 8:
         eprint(f"Invalid atlas: {atlas_path}")
-        exit(1)
+        sys.exit(1)
     df = pd.read_csv(atlas_path, sep="\t")
     if not all(df["name"].str.startswith("chr")):
         eprint(f'Invalid atlas: {atlas_path}. "name" column must all start with "chr"')
-        exit(1)
+        sys.exit(1)
 
     if ignore is not None:
         validate_ref_tissues(df, ignore)
