@@ -611,26 +611,13 @@ def random_select_with_weights(elements, n):
     return selected, weights
 
 # TODO: make sure that reference cellss are matching labels --> probably need to be reordered
-def generate_pseudo_bulk(total_samples, labels, proportions, train_data, valid_data, test_data,atlas,ref_cells,labels_dict_reversed, return_reads = False):
+def generate_pseudo_bulk(total_samples, labels, proportions, train_data, valid_data, test_data,atlas,ref_cells,labels_dict_reversed, return_reads = False, n_labels=39):
     ref_pos =np.array([labels_dict_reversed[cell] if cell in labels_dict_reversed.keys() else -1 for cell in ref_cells])
     assert np.round(np.sum(proportions),4) == 1, "Proportions must sum up to one"
     n_samples_list = [int(total_samples*x) for x in proportions]
-    target_columns = ['dmr_ctype_label', 'dmr_ctype', 
-       'prediction_0_wavg', 'prediction_1_wavg', 'prediction_2_wavg',
-       'prediction_3_wavg', 'prediction_4_wavg', 'prediction_5_wavg',
-       'prediction_6_wavg', 'prediction_7_wavg', 'prediction_8_wavg',
-       'prediction_9_wavg', 'prediction_10_wavg', 'prediction_11_wavg',
-       'prediction_12_wavg', 'prediction_13_wavg', 'prediction_14_wavg',
-       'prediction_15_wavg', 'prediction_16_wavg', 'prediction_17_wavg',
-       'prediction_18_wavg', 'prediction_19_wavg', 'prediction_20_wavg',
-       'prediction_21_wavg', 'prediction_22_wavg', 'prediction_23_wavg',
-       'prediction_24_wavg', 'prediction_25_wavg', 'prediction_26_wavg',
-       'prediction_27_wavg', 'prediction_28_wavg', 'prediction_29_wavg',
-       'prediction_30_wavg', 'prediction_31_wavg', 'prediction_32_wavg',
-       'prediction_33_wavg', 'prediction_34_wavg', 'prediction_35_wavg',
-       'prediction_36_wavg', 'prediction_37_wavg', 'prediction_38_wavg',
-       'prediction_39_wavg', 'methylation_level_wavg', 'total_weight',
-       'n_reads', 'chromosome', 'label']
+    target_columns = ['dmr_ctype_label', 'dmr_ctype']
+    target_columns.extend([f"prediction_{i}_wavg" for i in range(n_labels)])
+    target_columns.extend(['methylation_level_wavg', 'total_weight','n_reads', 'chromosome', 'label'])
     subs = []
     uxm_data = []
     reads = []
@@ -674,7 +661,7 @@ def generate_pseudo_bulk(total_samples, labels, proportions, train_data, valid_d
 # Global variables for worker processes (initialized once per worker)
 _worker_data = {}
 
-def init_worker(train_data, valid_data, test_data, allowed_labels, n_cells_max, n_read_per_split):
+def init_worker(train_data, valid_data, test_data, allowed_labels, n_cells_max, n_read_per_split,n_labels):
 
     """Initialize worker process with shared data and pre-computed groups."""
 
@@ -710,42 +697,10 @@ def init_worker(train_data, valid_data, test_data, allowed_labels, n_cells_max, 
 
     _worker_data['n_read_per_split'] = n_read_per_split
 
-    _worker_data['target_columns'] = [
-
-        'dmr_ctype_label', 'dmr_ctype', 
-
-        'prediction_0_wavg', 'prediction_1_wavg', 'prediction_2_wavg',
-
-        'prediction_3_wavg', 'prediction_4_wavg', 'prediction_5_wavg',
-
-        'prediction_6_wavg', 'prediction_7_wavg', 'prediction_8_wavg',
-
-        'prediction_9_wavg', 'prediction_10_wavg', 'prediction_11_wavg',
-
-        'prediction_12_wavg', 'prediction_13_wavg', 'prediction_14_wavg',
-
-        'prediction_15_wavg', 'prediction_16_wavg', 'prediction_17_wavg',
-
-        'prediction_18_wavg', 'prediction_19_wavg', 'prediction_20_wavg',
-
-        'prediction_21_wavg', 'prediction_22_wavg', 'prediction_23_wavg',
-
-        'prediction_24_wavg', 'prediction_25_wavg', 'prediction_26_wavg',
-
-        'prediction_27_wavg', 'prediction_28_wavg', 'prediction_29_wavg',
-
-        'prediction_30_wavg', 'prediction_31_wavg', 'prediction_32_wavg',
-
-        'prediction_33_wavg', 'prediction_34_wavg', 'prediction_35_wavg',
-
-        'prediction_36_wavg', 'prediction_37_wavg', 'prediction_38_wavg',
-
-        'prediction_39_wavg', 'methylation_level_wavg', 'total_weight',
-
-        'n_reads', 'chromosome', 'label'
-
-    ]
-
+    _worker_data['target_columns'] = ['dmr_ctype_label', 'dmr_ctype']
+    _worker_data['target_columns'].extend([f"prediction_{i}_wavg" for i in range(n_labels)])
+    _worker_data['target_columns'].extend(['n_reads', 'chromosome', 'label'])
+    _worker_data["n_labels"] = n_labels
 
 
 
@@ -771,7 +726,9 @@ def worker_task(batch_indices):
                 _worker_data['grouped_train'],
                 _worker_data['grouped_valid'],
                 _worker_data['grouped_test'],
-                _worker_data['target_columns']
+                _worker_data['target_columns'],
+                _worker_data["n_labels"]
+
             )
 
             results.append((proportions, subs,uxm_data))
@@ -790,7 +747,7 @@ def worker_task(batch_indices):
 
 def generate_pseudo_bulk_optimized(total_samples, labels, proportions, 
                                     grouped_train, grouped_valid, grouped_test,
-                                    target_columns):
+                                    target_columns, n_labels):
     """Optimized version using pre-computed groups with UXM deconvolution."""
     assert np.round(np.sum(proportions), 4) == 1, "Proportions must sum up to one"
     
@@ -802,11 +759,11 @@ def generate_pseudo_bulk_optimized(total_samples, labels, proportions,
     
     for grouped in [grouped_train, grouped_valid, grouped_test]:
         sub_parts = []
-        samples_per_dmr = {label: int(n / 39) for label, n in zip(labels, n_samples_list)}
+        samples_per_dmr = {label: int(n / n_labels) for label, n in zip(labels, n_samples_list)}
         
         for label in labels:
             n_per_dmr = samples_per_dmr[label]
-            for dmr_ctype_label in range(39):
+            for dmr_ctype_label in range(n_labels):
                 try:
                     group = grouped.get_group((label, dmr_ctype_label))
                     sub_parts.append(group.sample(n_per_dmr, replace=True))
@@ -845,7 +802,7 @@ def generate_pseudo_bulk_optimized(total_samples, labels, proportions,
             subs.append(sub)
     
     proportions_dict = dict(zip(labels, proportions))
-    proportions_full = [proportions_dict.get(x, 0) for x in range(39)]
+    proportions_full = [proportions_dict.get(x, 0) for x in range(n_labels)]
     
     return labels, proportions_full, subs, uxm_data
 
@@ -926,7 +883,7 @@ def random_select_with_weights(elements, n):
 
 
 def run_ios_generation_parallel(train_data, valid_data, test_data, file_name, n_io_examples=30000, 
-                 n_workers=None, batch_size=100, checkpoint_interval=1000,start_checkpoint_idx=0):
+                 n_workers=None, batch_size=100, checkpoint_interval=1000,start_checkpoint_idx=0,n_labels=39):
 
     """Main function to run parallel processing."""
 
@@ -934,7 +891,7 @@ def run_ios_generation_parallel(train_data, valid_data, test_data, file_name, n_
         n_workers = max(1, mp.cpu_count() - 1)
 
 
-    allowed_labels = list(range(39))
+    allowed_labels = list(range(n_labels))
     n_cells_max = 10
     n_read_per_split = int(4.75 * 1e5)
 
@@ -954,7 +911,7 @@ def run_ios_generation_parallel(train_data, valid_data, test_data, file_name, n_
     with ProcessPoolExecutor(
         max_workers=n_workers,
         initializer=init_worker,
-        initargs=(train_data, valid_data, test_data, allowed_labels, n_cells_max, n_read_per_split)
+        initargs=(train_data, valid_data, test_data, allowed_labels, n_cells_max, n_read_per_split, n_labels)
     ) as executor:
 
         
@@ -5293,8 +5250,8 @@ def prepare_methylbert_list_inference(results_df, dmr_label_column, seq_length=1
             # Metadata propagation
             # Note: You might want to track which chunk this is (e.g., read_id_0, read_id_1)
             # but for bulk inference, this format works.
-            label = 39 
-            o_label = 39 
+            label = 0 
+            o_label = 0 
             dmr_label = row[dmr_label_column]
             dmr_ctype = row["dmr_ctype_label"]
             
