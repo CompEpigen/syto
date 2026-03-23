@@ -120,6 +120,7 @@ class InferencePipeline:
         self.predictions_df: Optional[pd.DataFrame] = None
         self.dmr_aggregated: Optional[pd.DataFrame] = None
         self.deconvolution_results: Dict[str, Any] = {}
+        self.features_mask = np.load(config["features_mask_path"])["features_mask"]
 
         # By default the algorithm assumes that we have at least some data for each DMR group. 
         self.fill_in_missing_labels = self.config.get("fill_in_missing_labels",False)
@@ -357,7 +358,9 @@ class InferencePipeline:
 
         # ── Load MethylBERT model ──────────────────────────────────────
         self.logger.info(f"Loading MethylBERT from checkpoint: {checkpoint_path}")
-        num_labels = len(self.labels_dict)+1 #Rejected label
+        # num_labels = len(self.labels_dict)+1 #Rejected label
+        #TODO Make it a parameter
+        num_labels = len(self.labels_dict) 
         num_dmr_labels = dataset.num_dmrs()
 
         rrms_config = OrderedDict([
@@ -388,7 +391,6 @@ class InferencePipeline:
             ),
             seq_len=seq_len,
             custom_config=rrms_config.copy(),
-            load_weights=True,
             fine_tuned_model_path=checkpoint_path,
             num_labels=num_labels,
             num_dmr_labels=num_dmr_labels,
@@ -397,24 +399,25 @@ class InferencePipeline:
             ),
             classifier_implementation="dmr_attention_based",
             batch_size=batch_size,
-            lazy_tokenization=True,
         )
 
         # ── Run predictions ────────────────────────────────────────────
         self.logger.info("Running MethylBERT predictions ...")
         predictions = model_instance.predict(
             dataset,
-            data_collator=methylbert_finetune_collator,
             batch_size=batch_size,
         )
-        predictions_pd = pd.DataFrame(predictions[0], columns=["prediction_"+str(x) for x in range(40)])
-        predictions_pd["read_name"] = [x[-2] for x in  self.prepared_reads_chuncked[1:]]
-        predictions_pd["ncpgs_marked"] = [x[-1] for x in  self.prepared_reads_chuncked[1:]]
+        predictions_pd = pd.DataFrame(predictions[0], columns=["prediction_"+str(x) for x in range(num_labels)])
+        predictions_pd["read_name"] = [x[-3] for x in  self.prepared_reads_chuncked[1:]]
+        predictions_pd["ncpgs_marked"] = [x[-2] for x in  self.prepared_reads_chuncked[1:]]
 
         predictions_pd = aggregate_chuncked_predictions_weighted(predictions_pd)
-        result_df = pd.merge(self.prepared_reads, predictions_pd, on="read_name").dropna()
+
+        result_df = pd.merge(self.prepared_reads, predictions_pd, on="read_name")
+        result_df = result_df.dropna(subset=result_df.columns.difference(['soft_label']))
         result_df.rename(columns={
                            "M_rate":"methylation_level"}, inplace=True)
+        
 
         return result_df
 
@@ -500,9 +503,12 @@ class InferencePipeline:
         deconvolver = XGBoostDeconvolver.load(checkpoint_path)
 
         # Build the prediction matrix from DMR-aggregated data
-        prediction_matrix = self._build_prediction_matrix()
-
-        proportions = np.round(deconvolver.predict(prediction_matrix),4)
+        # prediction_matrix = self._build_prediction_matrix()
+        X = self._extract_features_by_mask(np.array(self.dmr_aggregated[[f"prediction_{i}_wavg" for i in range(39)]]),self.features_mask)
+        deconv_preds = deconvolver._predict_raw(X)
+        deconv_preds = deconvolver._transform_output(deconv_preds)[0]
+        # proportions = np.round(deconvolver.predict(prediction_matrix),4)
+        proportions = np.round(deconv_preds,4)
         self.logger.debug(f"XGBoost proportions: {proportions}")
 
         return proportions
@@ -521,25 +527,45 @@ class InferencePipeline:
         self.logger.info(f"Loading {architecture} from {checkpoint_path}")
 
         if architecture == "Shallow_Wide_Network":
-            deconvolver  = nn.Sequential(
-            nn.Linear(78, 1024),
-            nn.GELU(),
-            nn.Dropout(0.2),
-            nn.Linear(1024, 39),
-            nn.Softmax(dim=-1)
-        )
-        elif architecture == "3Layer_MLP":
+        #     deconvolver  = nn.Sequential(
+        #     nn.Linear(78, 1024),
+        #     nn.GELU(),
+        #     nn.Dropout(0.2),
+        #     nn.Linear(1024, 39),
+        #     nn.Softmax(dim=-1)
+        # )
             deconvolver = nn.Sequential(
-                nn.Linear(78, 128),
+                nn.Linear(152, 1024),
                 nn.GELU(),
                 nn.Dropout(0.2),
-                nn.Linear(128, 128),
+                nn.Linear(1024, 39),
+                nn.Softmax(dim=-1)
+            )
+        elif architecture == "3Layer_MLP":
+            # deconvolver = nn.Sequential(
+            #     nn.Linear(78, 128),
+            #     nn.GELU(),
+            #     nn.Dropout(0.2),
+            #     nn.Linear(128, 128),
+            #     nn.GELU(),
+            #     nn.Dropout(0.2),
+            #     nn.Linear(128, 64),
+            #     nn.GELU(),
+            #     nn.Dropout(0.2),
+            #     nn.Linear(64, 39),
+            #     nn.Softmax(dim=-1)
+            # )
+            deconvolver = nn.Sequential(
+                nn.Linear(152, 512),
                 nn.GELU(),
                 nn.Dropout(0.2),
-                nn.Linear(128, 64),
+                nn.Linear(512, 256),
                 nn.GELU(),
                 nn.Dropout(0.2),
-                nn.Linear(64, 39),
+                nn.Linear(256, 152),
+                nn.GELU(),
+                nn.Dropout(0.1),
+                nn.Linear(152, 39),
                 nn.Softmax(dim=-1)
             )
         else:
@@ -548,9 +574,9 @@ class InferencePipeline:
         deconvolver.to(device)
         deconvolver.load_state_dict(torch.load(checkpoint_path, weights_only=True))
         deconvolver.eval()
-        X = torch.FloatTensor(np.array(self.dmr_aggregated[[f"prediction_{i}_wavg" for i in range(40)]])).to("cuda")
-        X = torch.unsqueeze(X,0)
-        X = torch.concat([torch.diagonal(X[:, :, :39], dim1=1, dim2=2),X[:, :, -1]], dim=1)
+        X = torch.FloatTensor(self._extract_features_by_mask(np.array(self.dmr_aggregated[[f"prediction_{i}_wavg" for i in range(39)]]),self.features_mask)).to("cuda")
+        # X = torch.unsqueeze(X,0)
+        # X = torch.concat([torch.diagonal(X[:, :, :39], dim1=1, dim2=2),X[:, :, -1]], dim=1)
         deconv_preds = deconvolver(X)
         proportions = np.round(deconv_preds.to("cpu").detach().numpy(),4)
         self.logger.debug(f"{architecture} proportions: {proportions}")
@@ -592,6 +618,10 @@ class InferencePipeline:
     @staticmethod
     def _extract_diag_and_rej(matrix):
         return np.reshape(np.concat([np.diag(matrix), matrix[:, -1]], axis=0), (1,78))
+    
+    @staticmethod
+    def _extract_features_by_mask(matrix, target_mask):
+        return np.expand_dims(np.ma.masked_array(matrix, ~np.array(target_mask, dtype=np.bool)).compressed(),0)
 
     def _build_prediction_matrix(self) -> np.ndarray:
         """

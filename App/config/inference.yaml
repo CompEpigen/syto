@@ -7,11 +7,14 @@ model:
   foundation_model: foundationalModels/methylbert_hg19_12l
 
 # Path to fine-tuned MethylBERT classifier checkpoint
-checkpoint_path: Tutorials/methylBertLoyferWithReject_attentionClassifier_DMRs_stratified_hg38_dmr_ctype_label_mincpg_4_minlen_10/checkpoint-1650
+checkpoint_path: Tutorials/methylBertLoyferWithReject_attentionClassifier_DMRs_stratified_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels/checkpoint-1200
 
 # Labels dictionary: JSON file mapping int label -> cell type name
 # e.g. {"0": "B-cells", "1": "T-cells", ...}
 labels_dict_path: App/labels_dict.json
+
+# Features mask in npz format - used to select features from the aggregated dmr matrix to be used with deconvolution models
+features_mask_path: App/features_mask_1.1_cutoff.npz
 
 # Optional cell type name matching dict (atlas target name -> labels_dict name)
 # If atlas uses different naming than labels_dict, this maps between them.
@@ -27,7 +30,7 @@ input:
   #type: predicted_reads
   type: bam
   # Path to input BAM file (used when type: bam)
-  bam_path: /home/luna.kuleuven.be/u0169940/Repos/methyldl/ENCFF336CKG_subset_U25.l4.hg38.bam
+  bam_path: /data/dmytro/dimelo_antonella/BSBolt/WGBS/AS-136075.rmdup.bam
   # Path to pre-processed reads pickle (used when type: processed_reads)
   # Must match output format of process_bam_with_chunking()
   parsed_reads_path: null
@@ -60,15 +63,15 @@ deconvolution:
   methods:
     - name: xgboost
       enabled: true
-      checkpoint_path: EDA/deconvolution_models/xgb_dpth15.pt
+      checkpoint_path: Tutorials/methylBertLoyferWithReject_attentionClassifier_DMRs_stratified_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels/xgb_dpth15.pt
     - name: uxm
       enabled: true
     - name: 3Layer_MLP
       enabled: true
-      checkpoint_path: Tutorials/methylBertLoyferWithReject_attentionClassifier_DMRs_stratified_hg38_dmr_ctype_label_mincpg_4_minlen_10/3LMLP_best_deconvolver.pt
+      checkpoint_path: Tutorials/methylBertLoyferWithReject_attentionClassifier_DMRs_stratified_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels/mlp_best_deconvolver.pt
     - name: Shallow_Wide_Network
       enabled: true
-      checkpoint_path: Tutorials/methylBertLoyferWithReject_attentionClassifier_DMRs_stratified_hg38_dmr_ctype_label_mincpg_4_minlen_10/swn_deconvolver.pt
+      checkpoint_path: Tutorials/methylBertLoyferWithReject_attentionClassifier_DMRs_stratified_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels/swn_mlp_best_deconvolver.pt
 
 # Output configuration
 output:
