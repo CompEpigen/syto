@@ -131,6 +131,8 @@ def prepare_reads_for_uxm(reads_data,atlas,labels_dict, cell_type_match_dict,
 
     n_records = len(reads_data)
 
+    is_soft_label_avaliable = "soft_label" in reads_data.columns
+
     # Build chromosome start index mapping
     chrom_start_idx = {}
     if n_records > 0:
@@ -189,6 +191,10 @@ def prepare_reads_for_uxm(reads_data,atlas,labels_dict, cell_type_match_dict,
                 
                 new_pattern = pattern[offset_start:offset_end]
                 new_seq = seq[offset_start:offset_end]
+                if is_soft_label_avaliable:
+                    soft_label = record["soft_label"]
+                else:
+                    soft_label = np.nan
 
                 if debug:
                     results.append((
@@ -196,13 +202,13 @@ def prepare_reads_for_uxm(reads_data,atlas,labels_dict, cell_type_match_dict,
                         trimmed_start, trimmed_end_inclusive,
                         offset_start, offset_end,
                         pattern, new_pattern, seq,new_seq,
-                        name, start, end, record["original_label"], record["label"]
+                        name, start, end, record["original_label"], record["label"],soft_label
                     ))
                 else:
                     results.append((
                         chromosome, record[read_name_column], trimmed_start, trimmed_end_inclusive,
                         new_pattern, new_seq,
-                        name, start, end, record["original_label"], record["label"]
+                        name, start, end, record["original_label"], record["label"],soft_label
                     ))
             
             scan_ptr += 1
@@ -211,10 +217,10 @@ def prepare_reads_for_uxm(reads_data,atlas,labels_dict, cell_type_match_dict,
     if debug:
         columns = ["chr", "read_name", "record_start", "record_end", "trimmed_start", "trimmed_end",
                 "offset_start", "offset_end", "original_pattern", "pattern", "original_seq", "seq",
-                "name", "region_start", "region_end", "original_label", "label"]
+                "name", "region_start", "region_end", "original_label", "label", "soft_label"]
     else:
         columns = ["chr", "read_name", "trimmed_start", "trimmed_end", "pattern","seq",
-                "name", "region_start", "region_end","original_label", "label"]
+                "name", "region_start", "region_end","original_label", "label", "soft_label"]
 
     results = pd.DataFrame(results, columns=columns)
 
