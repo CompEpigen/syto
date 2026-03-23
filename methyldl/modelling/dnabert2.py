@@ -26,6 +26,7 @@ from methyldl.data.dataset import *
 from safetensors.torch import load_file
 from transformers.models.bert.configuration_bert import BertConfig
 from methyldl.modelling.common import DMRAttentionClassifier
+from methyldl.modelling.loss import ConfidenceWeightedCrossEntropy
 
 
 class BertEmbeddings(nn.Module):
@@ -237,7 +238,7 @@ class BertForSequenceClassification(BertPreTrainedModel):
     e.g., GLUE tasks.
     """
 
-    def __init__(self, prertained_model, num_labels=None, num_dmr_labels=None):
+    def __init__(self, prertained_model, num_labels=None, num_dmr_labels=None,soft_labels=False):
         super().__init__(prertained_model.config)
         # Overwritting num_labels if those were provided during constructio since the foundational model features classifier with 2 labels
         # Sometimes, one need to overwrite it before fine-tunning for multi-label learning
@@ -252,6 +253,7 @@ class BertForSequenceClassification(BertPreTrainedModel):
         self.bert = BertModel(prertained_model.bert) # Reconstructing original model 
         self.dropout = prertained_model.dropout
         self.num_dmr_labels = num_dmr_labels
+        self.soft_labels = soft_labels
         if num_dmr_labels is None:
             self.classifier = prertained_model.classifier
         else:
@@ -319,7 +321,7 @@ class BertForSequenceClassification(BertPreTrainedModel):
                 if self.num_labels == 1:
                     self.config.problem_type = 'regression'
                 elif self.num_labels > 1 and (labels.dtype == torch.long or
-                                              labels.dtype == torch.int):
+                                              labels.dtype == torch.int or self.soft_labels):
                     self.config.problem_type = 'single_label_classification'
                 else:
                     self.config.problem_type = 'multi_label_classification'
@@ -331,9 +333,12 @@ class BertForSequenceClassification(BertPreTrainedModel):
                 else:
                     loss = loss_fct(logits, labels)
             elif self.config.problem_type == 'single_label_classification':
-                loss_fct = nn.CrossEntropyLoss()
+                if self.soft_labels:
+                    loss_fct = ConfidenceWeightedCrossEntropy(self.num_labels)
+                else:
+                    loss_fct = nn.CrossEntropyLoss()
                 loss = loss_fct(logits.view(-1, self.num_labels),
-                                labels.view(-1))
+                                labels)
             elif self.config.problem_type == 'multi_label_classification':
                 loss_fct = nn.BCEWithLogitsLoss()
                 loss = loss_fct(logits, labels)
@@ -385,9 +390,9 @@ class TrainingArguments(transformers.TrainingArguments):
     skip_memory_metrics: bool = field(default=True)
     auto_find_batch_size: bool = field(default=False)
 
-def initialize_model_with_custom_embeddings(base_model, use_cpg, use_m6a, num_labels=None,num_dmr_labels=None):
+def initialize_model_with_custom_embeddings(base_model, use_cpg, use_m6a, num_labels=None,num_dmr_labels=None,soft_labels=False):
     base_model.bert.embeddings = BertEmbeddings(base_model.bert, use_cpg, use_m6a)
-    model = BertForSequenceClassification(base_model, num_labels=num_labels,num_dmr_labels=num_dmr_labels)
+    model = BertForSequenceClassification(base_model, num_labels=num_labels,num_dmr_labels=num_dmr_labels,soft_labels=soft_labels)
     if num_dmr_labels is None:
         model.classifier = nn.Linear(768,out_features=num_labels,bias=True)
     return model
@@ -404,10 +409,12 @@ class EpigenDnabert2():
                   trust_remote_code=True,
                   use_triton=True,
                   training_args=None,
-                  num_dmr_labels=None):
+                  num_dmr_labels=None,
+                  soft_labels=False):
         
         assert len(foundation_model_huggingface), "Must specify foundation model path hosted on Hugging Face"
         self.num_dmr_labels = num_dmr_labels
+        self.soft_labels = soft_labels
 
         config = BertForSequenceClassification.config_class.from_pretrained(foundation_model_huggingface)
         config = BertConfig(**config.to_dict(),use_triton=use_triton)
@@ -419,7 +426,7 @@ class EpigenDnabert2():
                 config = config,
                 local_files_only=True,  
                 cache_dir=None)  
-        model = initialize_model_with_custom_embeddings(base_model, use_cpg_methylation, use_m6a_methylation,num_labels=num_labels,num_dmr_labels=num_dmr_labels)
+        model = initialize_model_with_custom_embeddings(base_model, use_cpg_methylation, use_m6a_methylation,num_labels=num_labels,num_dmr_labels=num_dmr_labels,soft_labels=soft_labels)
 
         self.num_labels=num_labels
         model.num_labels = num_labels
@@ -438,7 +445,7 @@ class EpigenDnabert2():
                 foundation_model_huggingface,
                 trust_remote_code=trust_remote_code,
                 config = config)
-            model = initialize_model_with_custom_embeddings(base_model, use_cpg_methylation, use_m6a_methylation,num_labels=num_labels,num_dmr_labels=num_dmr_labels)
+            model = initialize_model_with_custom_embeddings(base_model, use_cpg_methylation, use_m6a_methylation,num_labels=num_labels,num_dmr_labels=num_dmr_labels,soft_labels=soft_labels)
         self.model = model
         self.num_labels = num_labels
         self.config = config
@@ -486,7 +493,7 @@ class EpigenDnabert2():
             use_fast=True,
             trust_remote_code=trust_remote_code,
         )
-        self.data_collator = DataCollatorForSupervisedDataset(tokenizer=self.tokenizer)
+        self.data_collator = DataCollatorForSupervisedDataset(tokenizer=self.tokenizer, soft_labels=self.soft_labels)
         self.trainer = None
     
     def __str__(self):

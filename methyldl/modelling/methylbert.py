@@ -36,6 +36,7 @@ import multiprocessing as mp
 from functools import partial
 import pickle
 from methyldl.modelling.common import DMRAttentionClassifier
+from methyldl.modelling.loss import ConfidenceWeightedCrossEntropy, OnTargetSoftLoss
 
 
 default_methylbert_config = OrderedDict([
@@ -60,11 +61,6 @@ default_methylbert_config = OrderedDict([
     ("seed", 950410),
     
 ])
-
-
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
 
 class ConfidenceWeightedCrossEntropy(nn.Module):
     def __init__(self, num_classes=39):
