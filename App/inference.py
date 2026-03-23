@@ -30,7 +30,7 @@ from methyldl.modelling.methylbert import (
     MethylVocab,
     MethylBertFinetuneDataset,
     methylbert_finetune_collator,
-    default_methylbert_config
+    default_methylbert_config,
 )
 
 # edautils is in EDA/ relative to project root
@@ -38,8 +38,8 @@ from EDA.edautils import (
     process_bam_with_chunking,
     aggregate_predictions_by_dmr,
     prepare_methylbert_list_inference,
-    aggregate_chuncked_predictions_weighted,    
-    cell_type_match_dict
+    aggregate_chuncked_predictions_weighted,
+    cell_type_match_dict,
 )
 from methyldl.data.genome import generate_kmer_str_with_overlap
 
@@ -47,13 +47,14 @@ from methyldl.deconvolution.uxm import (
     prepare_reads_for_uxm,
     uxm_deconvolution,
     rearange_uxm_deconvolution_results,
-    load_atlas
+    load_atlas,
 )
 
 from methyldl.deconvolution.xgbdeconvolver import (
     XGBoostDeconvolver,
     XGBDeconvolverConfig,
 )
+
 
 class InferencePipeline:
     """
@@ -122,8 +123,8 @@ class InferencePipeline:
         self.deconvolution_results: Dict[str, Any] = {}
         self.features_mask = np.load(config["features_mask_path"])["features_mask"]
 
-        # By default the algorithm assumes that we have at least some data for each DMR group. 
-        self.fill_in_missing_labels = self.config.get("fill_in_missing_labels",False)
+        # By default the algorithm assumes that we have at least some data for each DMR group.
+        self.fill_in_missing_labels = self.config.get("fill_in_missing_labels", False)
 
     # ═══════════════════════════════════════════════════════════════════
     #  Public API
@@ -131,7 +132,6 @@ class InferencePipeline:
 
     def run(self) -> Dict[str, Any]:
         """Execute the full inference pipeline end-to-end."""
-
 
         self.skip_classification = False
         # ── Stage 1: obtain processed reads ─────────────────────────────
@@ -143,7 +143,7 @@ class InferencePipeline:
             self.processed_reads = self._load_parsed_reads()
         elif input_cfg["type"] == "predicted_reads":
             self.predictions_df = self._load_reads_with_predictions()
-            self.prepared_reads = self.predictions_df # For UXM to work
+            self.prepared_reads = self.predictions_df  # For UXM to work
             self.logger.info(
                 f"Classified reads were provided: {len(self.predictions_df)} processed reads. Proceeding with deconvolution."
             )
@@ -160,7 +160,9 @@ class InferencePipeline:
                 )
 
                 # ── Stage 2: overlap reads with atlas regions ───────────────────
-                self.prepared_reads, self.prepared_reads_chuncked = self._prepare_reads()
+                self.prepared_reads, self.prepared_reads_chuncked = (
+                    self._prepare_reads()
+                )
                 self.logger.info(
                     f"Stage 2 complete: {len(self.prepared_reads)} atlas-overlapped reads"
                 )
@@ -204,23 +206,24 @@ class InferencePipeline:
         # Resolve chromosomes
         chromosomes = input_cfg.get("chromosomes", "all")
         if chromosomes == "all":
-            chromosomes = [f"chr{i}" for i in range(1,23)]
+            chromosomes = [f"chr{i}" for i in range(1, 23)]
             chromosomes += ["chrX"]
             chromosomes += ["chrY"]
 
+        self.logger.info(f"Processing BAM: {bam_path} ({len(chromosomes)} chromosomes)")
 
-        self.logger.info(
-            f"Processing BAM: {bam_path} ({len(chromosomes)} chromosomes)"
-        )
-        
         if data_type == "wgbs":
             require_flags = bam_cfg.get("require_flags", 3)
         elif data_type == "ont":
-            self.logger.info(f"ont is selected as data_type. The exclude_flags will not be used and require_flags is ovveriden to 0.")
+            self.logger.info(
+                f"ont is selected as data_type. The exclude_flags will not be used and require_flags is ovveriden to 0."
+            )
             require_flags = 0
         else:
-            raise ValueError("The pipeline only supports BAMS originating from WGBS or ONT")
-        
+            raise ValueError(
+                "The pipeline only supports BAMS originating from WGBS or ONT"
+            )
+
         df = process_bam_with_chunking(
             bam_path=bam_path,
             chromosomes=chromosomes,
@@ -235,7 +238,9 @@ class InferencePipeline:
             merge_pairs=bam_cfg.get("merge_pairs", True),
         )
         if not len(df):
-            self.logger.warning("The dataset has 0 reads after applying all samtools filters. The attempt will be made to reparse .bam without applying flag filters")
+            self.logger.warning(
+                "The dataset has 0 reads after applying all samtools filters. The attempt will be made to reparse .bam without applying flag filters"
+            )
             df = process_bam_with_chunking(
                 bam_path=bam_path,
                 chromosomes=chromosomes,
@@ -250,7 +255,9 @@ class InferencePipeline:
                 merge_pairs=bam_cfg.get("merge_pairs", True),
             )
         if not len(df):
-            self.logger.warning("Setting exclude_flags=None and require_flags=None didn't help. The processing of this file will be terminated.")
+            self.logger.warning(
+                "Setting exclude_flags=None and require_flags=None didn't help. The processing of this file will be terminated."
+            )
             return None
 
         return df
@@ -262,10 +269,9 @@ class InferencePipeline:
         with open(path, "rb") as f:
             df = pickle.load(f)
         if not isinstance(df, pd.DataFrame):
-            raise TypeError(
-                f"Expected a pandas DataFrame in {path}, got {type(df)}"
-            )
+            raise TypeError(f"Expected a pandas DataFrame in {path}, got {type(df)}")
         return df
+
     def _load_reads_with_predictions(self) -> pd.DataFrame:
         """Load reads augmented with read-level predictions from a pickle file."""
         path = self.config["input"]["predicted_reads_path"]
@@ -273,11 +279,8 @@ class InferencePipeline:
         with open(path, "rb") as f:
             df = pickle.load(f)
         if not isinstance(df, pd.DataFrame):
-            raise TypeError(
-                f"Expected a pandas DataFrame in {path}, got {type(df)}"
-            )
+            raise TypeError(f"Expected a pandas DataFrame in {path}, got {type(df)}")
         return df
-
 
     # ═══════════════════════════════════════════════════════════════════
     #  Stage 2: overlap reads with atlas regions
@@ -320,10 +323,17 @@ class InferencePipeline:
                 "Check that chromosome naming is consistent between BAM and atlas."
             )
         seq_length = self.config.get("max_sequence_length", 150)
-        prepared_uxm.rename(columns={"seq": "input_ids", "pattern": "methylation_ids"}, inplace=True)
-        chunked_inputs = prepare_methylbert_list_inference(prepared_uxm, "dmr_ctype_label",seq_length=seq_length, stride =int(seq_length/2))
+        prepared_uxm.rename(
+            columns={"seq": "input_ids", "pattern": "methylation_ids"}, inplace=True
+        )
+        chunked_inputs = prepare_methylbert_list_inference(
+            prepared_uxm,
+            "dmr_ctype_label",
+            seq_length=seq_length,
+            stride=int(seq_length / 2),
+        )
 
-        return prepared_uxm,chunked_inputs
+        return prepared_uxm, chunked_inputs
 
     # ═══════════════════════════════════════════════════════════════════
     #  Stage 3: MethylBERT predictions
@@ -359,31 +369,33 @@ class InferencePipeline:
         # ── Load MethylBERT model ──────────────────────────────────────
         self.logger.info(f"Loading MethylBERT from checkpoint: {checkpoint_path}")
         # num_labels = len(self.labels_dict)+1 #Rejected label
-        #TODO Make it a parameter
-        num_labels = len(self.labels_dict) 
+        # TODO Make it a parameter
+        num_labels = len(self.labels_dict)
         num_dmr_labels = dataset.num_dmrs()
 
-        rrms_config = OrderedDict([
-            ("lr", 0.0004),
-            ("beta", (0.9, 0.98)),
-            ("weight_decay", 0.1),
-            ("warmup_step", 100),
-            ("eps", 1e-6),
-            ("with_cuda", True),
-            ("log_freq", 200),
-            ("eval_freq", 200),
-            ("n_hidden", None),
-            ("decrease_steps", 200),
-            ("eval", False),
-            ("amp", True),
-            ("gradient_accumulation_steps", 1),
-            ("max_grad_norm", 1.0),
-            ("save_freq", None),
-            ("loss", "ce"),
-            ("adam_beta1", 0.9),
-            ("adam_beta2", 0.98),
-            ("seed", 950410)
-        ])
+        rrms_config = OrderedDict(
+            [
+                ("lr", 0.0004),
+                ("beta", (0.9, 0.98)),
+                ("weight_decay", 0.1),
+                ("warmup_step", 100),
+                ("eps", 1e-6),
+                ("with_cuda", True),
+                ("log_freq", 200),
+                ("eval_freq", 200),
+                ("n_hidden", None),
+                ("decrease_steps", 200),
+                ("eval", False),
+                ("amp", True),
+                ("gradient_accumulation_steps", 1),
+                ("max_grad_norm", 1.0),
+                ("save_freq", None),
+                ("loss", "ce"),
+                ("adam_beta1", 0.9),
+                ("adam_beta2", 0.98),
+                ("seed", 950410),
+            ]
+        )
 
         model_instance = MethylBert(
             foundation_model_path=model_cfg.get(
@@ -394,9 +406,7 @@ class InferencePipeline:
             fine_tuned_model_path=checkpoint_path,
             num_labels=num_labels,
             num_dmr_labels=num_dmr_labels,
-            output_dir=os.path.join(
-                self.config["output"]["output_dir"], "tmp_trainer"
-            ),
+            output_dir=os.path.join(self.config["output"]["output_dir"], "tmp_trainer"),
             classifier_implementation="dmr_attention_based",
             batch_size=batch_size,
         )
@@ -407,20 +417,23 @@ class InferencePipeline:
             dataset,
             batch_size=batch_size,
         )
-        predictions_pd = pd.DataFrame(predictions[0], columns=["prediction_"+str(x) for x in range(num_labels)])
-        predictions_pd["read_name"] = [x[-3] for x in  self.prepared_reads_chuncked[1:]]
-        predictions_pd["ncpgs_marked"] = [x[-2] for x in  self.prepared_reads_chuncked[1:]]
+        predictions_pd = pd.DataFrame(
+            predictions[0], columns=["prediction_" + str(x) for x in range(num_labels)]
+        )
+        predictions_pd["read_name"] = [x[-3] for x in self.prepared_reads_chuncked[1:]]
+        predictions_pd["ncpgs_marked"] = [
+            x[-2] for x in self.prepared_reads_chuncked[1:]
+        ]
 
         predictions_pd = aggregate_chuncked_predictions_weighted(predictions_pd)
 
         result_df = pd.merge(self.prepared_reads, predictions_pd, on="read_name")
-        result_df = result_df.dropna(subset=result_df.columns.difference(['soft_label']))
-        result_df.rename(columns={
-                           "M_rate":"methylation_level"}, inplace=True)
-        
+        result_df = result_df.dropna(
+            subset=result_df.columns.difference(["soft_label"])
+        )
+        result_df.rename(columns={"M_rate": "methylation_level"}, inplace=True)
 
         return result_df
-
 
     # ═══════════════════════════════════════════════════════════════════
     #  Stage 4: aggregate predictions by DMR
@@ -435,11 +448,11 @@ class InferencePipeline:
 
         aggregated = aggregate_predictions_by_dmr(
             df=self.predictions_df,
-            group_cols=["dmr_ctype_label","dmr_ctype"],
+            group_cols=["dmr_ctype_label", "dmr_ctype"],
             weight_col="NCPGS",
             create_weight_from_cpgs=False,
-            fill_in_missing_labels = self.fill_in_missing_labels,
-            labels_dict=self.labels_dict
+            fill_in_missing_labels=self.fill_in_missing_labels,
+            labels_dict=self.labels_dict,
         )
 
         return aggregated
@@ -488,9 +501,7 @@ class InferencePipeline:
 
         return results
 
-    def _run_xgboost_deconvolution(
-        self, method_cfg: Dict[str, Any]
-    ) -> np.ndarray:
+    def _run_xgboost_deconvolution(self, method_cfg: Dict[str, Any]) -> np.ndarray:
         """
         Run XGBoost-based deconvolution.
 
@@ -504,18 +515,19 @@ class InferencePipeline:
 
         # Build the prediction matrix from DMR-aggregated data
         # prediction_matrix = self._build_prediction_matrix()
-        X = self._extract_features_by_mask(np.array(self.dmr_aggregated[[f"prediction_{i}_wavg" for i in range(39)]]),self.features_mask)
+        X = self._extract_features_by_mask(
+            np.array(self.dmr_aggregated[[f"prediction_{i}_wavg" for i in range(39)]]),
+            self.features_mask,
+        )
         deconv_preds = deconvolver._predict_raw(X)
         deconv_preds = deconvolver._transform_output(deconv_preds)[0]
         # proportions = np.round(deconvolver.predict(prediction_matrix),4)
-        proportions = np.round(deconv_preds,4)
+        proportions = np.round(deconv_preds, 4)
         self.logger.debug(f"XGBoost proportions: {proportions}")
 
         return proportions
-    
-    def _run_nn_deconvolution(
-        self, method_cfg: Dict[str, Any]
-    ) -> np.ndarray:
+
+    def _run_nn_deconvolution(self, method_cfg: Dict[str, Any]) -> np.ndarray:
         """
         Run torch-nn-based deconvolution.
 
@@ -527,19 +539,19 @@ class InferencePipeline:
         self.logger.info(f"Loading {architecture} from {checkpoint_path}")
 
         if architecture == "Shallow_Wide_Network":
-        #     deconvolver  = nn.Sequential(
-        #     nn.Linear(78, 1024),
-        #     nn.GELU(),
-        #     nn.Dropout(0.2),
-        #     nn.Linear(1024, 39),
-        #     nn.Softmax(dim=-1)
-        # )
+            #     deconvolver  = nn.Sequential(
+            #     nn.Linear(78, 1024),
+            #     nn.GELU(),
+            #     nn.Dropout(0.2),
+            #     nn.Linear(1024, 39),
+            #     nn.Softmax(dim=-1)
+            # )
             deconvolver = nn.Sequential(
                 nn.Linear(152, 1024),
                 nn.GELU(),
                 nn.Dropout(0.2),
                 nn.Linear(1024, 39),
-                nn.Softmax(dim=-1)
+                nn.Softmax(dim=-1),
             )
         elif architecture == "3Layer_MLP":
             # deconvolver = nn.Sequential(
@@ -566,23 +578,31 @@ class InferencePipeline:
                 nn.GELU(),
                 nn.Dropout(0.1),
                 nn.Linear(152, 39),
-                nn.Softmax(dim=-1)
+                nn.Softmax(dim=-1),
             )
         else:
-            raise ValueError("Architecture for NN method should be either Shallow_Wide_Network or 3Layer_MLP")
-        device='cuda'
+            raise ValueError(
+                "Architecture for NN method should be either Shallow_Wide_Network or 3Layer_MLP"
+            )
+        device = "cuda"
         deconvolver.to(device)
         deconvolver.load_state_dict(torch.load(checkpoint_path, weights_only=True))
         deconvolver.eval()
-        X = torch.FloatTensor(self._extract_features_by_mask(np.array(self.dmr_aggregated[[f"prediction_{i}_wavg" for i in range(39)]]),self.features_mask)).to("cuda")
+        X = torch.FloatTensor(
+            self._extract_features_by_mask(
+                np.array(
+                    self.dmr_aggregated[[f"prediction_{i}_wavg" for i in range(39)]]
+                ),
+                self.features_mask,
+            )
+        ).to("cuda")
         # X = torch.unsqueeze(X,0)
         # X = torch.concat([torch.diagonal(X[:, :, :39], dim1=1, dim2=2),X[:, :, -1]], dim=1)
         deconv_preds = deconvolver(X)
-        proportions = np.round(deconv_preds.to("cpu").detach().numpy(),4)
+        proportions = np.round(deconv_preds.to("cpu").detach().numpy(), 4)
         self.logger.debug(f"{architecture} proportions: {proportions}")
 
         return proportions
-    
 
     def _run_uxm_deconvolution(self, method_cfg: Dict[str, Any]) -> np.ndarray:
         """
@@ -605,23 +625,28 @@ class InferencePipeline:
         )[0]
 
         # Align proportions to match labels_dict order
-        ref_cells = [x for x in ref_cells if x!="Megakaryocytes"]
+        ref_cells = [x for x in ref_cells if x != "Megakaryocytes"]
 
         proportions_aligned = rearange_uxm_deconvolution_results(
             self.labels_dict_reversed, uxm_proportions, ref_cells
         )
-        proportions_aligned = np.round(np.array(proportions_aligned),4)
+        proportions_aligned = np.round(np.array(proportions_aligned), 4)
 
         self.logger.debug(f"UXM proportions: {proportions_aligned}")
         return proportions_aligned
-    
+
     @staticmethod
     def _extract_diag_and_rej(matrix):
-        return np.reshape(np.concat([np.diag(matrix), matrix[:, -1]], axis=0), (1,78))
-    
+        return np.reshape(np.concat([np.diag(matrix), matrix[:, -1]], axis=0), (1, 78))
+
     @staticmethod
     def _extract_features_by_mask(matrix, target_mask):
-        return np.expand_dims(np.ma.masked_array(matrix, ~np.array(target_mask, dtype=np.bool)).compressed(),0)
+        return np.expand_dims(
+            np.ma.masked_array(
+                matrix, ~np.array(target_mask, dtype=np.bool)
+            ).compressed(),
+            0,
+        )
 
     def _build_prediction_matrix(self) -> np.ndarray:
         """
@@ -651,7 +676,7 @@ class InferencePipeline:
             matrix = agg[available].values
 
         return self._extract_diag_and_rej(matrix)
-    
+
     def _build_uxm_input(
         self, uxm_atlas: pd.DataFrame, ref_cells: list
     ) -> Dict[str, Any]:
@@ -663,12 +688,19 @@ class InferencePipeline:
         """
         prepared = self.prepared_reads.copy()
 
-        results_agg = prepared[prepared["NCPGS"]>3].groupby("name").aggregate({'record_M' : 'sum','record_U' : 'sum','record_X': 'sum'}).reset_index()
-        results_agg["count"] = results_agg["record_M"] + results_agg["record_U"] + results_agg["record_X"] 
+        results_agg = (
+            prepared[prepared["NCPGS"] > 3]
+            .groupby("name")
+            .aggregate({"record_M": "sum", "record_U": "sum", "record_X": "sum"})
+            .reset_index()
+        )
+        results_agg["count"] = (
+            results_agg["record_M"] + results_agg["record_U"] + results_agg["record_X"]
+        )
         results_agg["sf"] = results_agg["record_U"] / results_agg["count"]
-        #TODO: Derrive direction from the source
+        # TODO: Derrive direction from the source
         results_agg["direction"] = "U"
-        sample_name = "sample" 
+        sample_name = "sample"
 
         sf = deepcopy(results_agg[["name", "direction"]])
         sf[sample_name] = results_agg["sf"]
@@ -691,7 +723,10 @@ class InferencePipeline:
         os.makedirs(output_dir, exist_ok=True)
 
         # ── Processed reads (pickle) ───────────────────────────────────
-        if output_cfg.get("save_processed_reads", True) and self.processed_reads is not None:
+        if (
+            output_cfg.get("save_processed_reads", True)
+            and self.processed_reads is not None
+        ):
             path = os.path.join(output_dir, "processed_reads.pkl")
             with open(path, "wb") as f:
                 pickle.dump(self.processed_reads, f)
@@ -710,7 +745,9 @@ class InferencePipeline:
                 path = os.path.join(output_dir, f"deconvolution_{method_name}.csv")
 
                 if isinstance(proportions, np.ndarray):
-                    prop_df = pd.DataFrame([list(self.labels_dict.values()),proportions.flatten()]).T
+                    prop_df = pd.DataFrame(
+                        [list(self.labels_dict.values()), proportions.flatten()]
+                    ).T
                     prop_df.columns = ["CellType", method_name]
                 elif isinstance(proportions, pd.DataFrame):
                     prop_df = proportions
