@@ -433,6 +433,11 @@ def train_xgb_deconvolver(
     X_val: np.ndarray,
     y_val: np.ndarray,
     config: Optional[XGBDeconvolverConfig] = None,
+    n_dmr_groups = 39,
+    n_pred_classes = 40,
+    n_cell_types = 39,
+    with_reject_features = True,
+    process_inputs = True,
     output_transform: Literal['none', 'clip_normalize', 'softmax'] = 'clip_normalize',
     loss_weights: Optional[Dict[str, float]] = None,
     early_stopping_metric: str = 'val_mae',
@@ -456,7 +461,12 @@ def train_xgb_deconvolver(
     
     model = XGBoostDeconvolver(
         config=config,
-        output_transform=output_transform
+        output_transform=output_transform,
+        n_dmr_groups = n_dmr_groups,
+        n_pred_classes = n_pred_classes,
+        n_cell_types = n_cell_types,
+        with_reject_features = with_reject_features,
+        process_inputs = process_inputs
     )
     
     model.fit(
