@@ -14,9 +14,8 @@ def calculate_batch_size(
         vram = torch.cuda.get_device_properties(0).total_memory / 1024**3
         recomended_batch_size = int((vram * utilization_coeff / gb_per_seq) // 10 * 10)
     else:
-        recomended_batch_size = (
-            cpu_batch_size  # assuming at least 16 gb of RAM if run on CPU
-        )
+        # assuming at least 16 gb of RAM if run on CPU
+        recomended_batch_size = cpu_batch_size
     return recomended_batch_size
 
 

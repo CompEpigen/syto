@@ -4,6 +4,7 @@ The focus is on creating a minimum setup sufficient to run deconvolution in pyth
 Some of the methods are directly copied while other are specific to this repo.
 """
 
+import sys
 import pandas as pd
 import numpy as np
 import os
@@ -15,24 +16,29 @@ import os.path as op
 
 
 def eprint(*args, **kargs):
+    """Print to stderr instead of stdout"""
     print(*args, file=sys.stderr, **kargs)
 
 
 def validate_ref_tissues(df, tissue_list):
+    """Validate that the provided tissue list is present in the atlas DataFrame columns"""
     for col in tissue_list:
         if col not in df.columns:
             eprint("Invalid cell type (not in atlas):", col)
-            exit()
+            sys.exit(1)
+
 
 
 def validate_file(fpath):
+    """Validate that the provided file path exists and is a file"""
     if not op.isfile(fpath):
         eprint("Invalid file", fpath)
-        exit()
+        sys.exit(1)
     return fpath
 
 
 def load_atlas(atlas_path, ignore=None, include=None):
+    """Load the reference atlas and optionally filter tissues"""
     if not op.isfile(atlas_path):
         eprint("Invalid reference atlas (--atlas flag)")
     validate_file(atlas_path)
@@ -41,11 +47,11 @@ def load_atlas(atlas_path, ignore=None, include=None):
     df = pd.read_csv(atlas_path, sep="\t", nrows=2)
     if df.shape[1] < 8:
         eprint(f"Invalid atlas: {atlas_path}")
-        exit(1)
+        sys.exit(1)
     df = pd.read_csv(atlas_path, sep="\t")
-    if df["name"].str.startswith("chr").sum() != df.shape[0]:
+    if not all(df["name"].str.startswith("chr")):
         eprint(f'Invalid atlas: {atlas_path}. "name" column must all start with "chr"')
-        exit(1)
+        sys.exit(1)
 
     if ignore is not None:
         validate_ref_tissues(df, ignore)
@@ -95,7 +101,7 @@ def decon_single_samp(samp, atlas, counts, verbose, debug=False):
         eprint("ERROR: merge went wrong. Validate your atlas")
         return None, None
     if verbose:
-        eprint("{}: {} \ {} markers".format(name, data.shape[0], atlas.shape[0]))
+        eprint(f"{name}: {data.shape[0]} \\ {atlas.shape[0]} markers")
     del data["name"], data["direction"]
 
     samp = data.iloc[:, 0]
@@ -114,7 +120,7 @@ def decon_single_samp(samp, atlas, counts, verbose, debug=False):
 
 
 def uxm_deconvolution(
-    atlas, ref_cells, sf, counts, sample_names=["pseudo_balk_sample"]
+    atlas, ref_cells, sf, counts, sample_names=["pseudo_bulk_sample"]
 ):
     params = [
         (
@@ -142,17 +148,12 @@ def rearange_uxm_deconvolution_results(
     """
     The function rearanges uxm deconvolution results to match target labels order encoded in the input dictionary
     """
-    ref_pos = np.array(
-        [
-            labels_dict_reversed[cell] if cell in labels_dict_reversed.keys() else -1
-            for cell in ref_cells
-        ]
-    )
-    uxm_proportions_alligned = [
+    ref_pos = np.array([labels_dict_reversed.get(cell, -1) for cell in ref_cells])
+    uxm_proportions_aligned = [
         uxm_proportions[i]
         for i in [int(np.where(ref_pos == i)[0][0]) for i in range(0, 39)]
     ]
-    return uxm_proportions_alligned
+    return uxm_proportions_aligned
 
 
 def prepare_reads_for_uxm(
@@ -337,14 +338,12 @@ def prepare_reads_for_uxm(
 
     results = pd.merge(results, atlas[["name", "target"]], on="name")
     results.rename(columns={"target": "dmr_ctype"}, inplace=True)
-    labels_dict_reversed = {y: x for (x, y) in labels_dict.items()}
+    labels_dict_reversed = {y: int(x) for (x, y) in labels_dict.items()}
     results["dmr_ctype_matched"] = results["dmr_ctype"].apply(
-        lambda x: cell_type_match_dict[x] if x in cell_type_match_dict.keys() else x
+        lambda x: cell_type_match_dict.get(x, x)
     )
     results["dmr_ctype_label"] = results["dmr_ctype_matched"].apply(
-        lambda x: (
-            int(labels_dict_reversed[x]) if x in labels_dict_reversed.keys() else None
-        )
+        lambda x: (labels_dict_reversed.get(x, None))
     )
     results.dropna(subset=["dmr_ctype_label"], inplace=True)
     results["dmr_ctype_label"] = results["dmr_ctype_label"].astype(int)

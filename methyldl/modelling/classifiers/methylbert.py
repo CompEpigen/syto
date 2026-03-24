@@ -23,7 +23,7 @@ import itertools
 from methyldl.modelling.evaluation import (
     compute_metrics,
     preprocess_logits_for_prediction,
-    compute_metrics_soft_labels,
+    compute_metrics_soft_labels
 )
 
 from torch.utils.data import Dataset
@@ -453,11 +453,9 @@ class MethylBertEmbeddedDMR(BertPreTrainedModel):
                     )
                 else:
                     loss = self.classification_loss_fct(ctype_logits, labels.float())
-            elif self.num_labels >= 2 and self.loss in ["bce", "focal_bce"]:
-                # Hard labels with BCE/focal: one-hot encode first
-                ctype_label_onehot = F.one_hot(
-                    labels, num_classes=self.num_labels
-                ).float()
+
+            elif self.num_labels == 2 and self.loss in ["bce", "focal_bce"]:
+                ctype_label_onehot = F.one_hot(labels, num_classes=2).float()
                 loss = self.classification_loss_fct(ctype_logits, ctype_label_onehot)
             else:
                 # Hard labels with CE
@@ -770,7 +768,13 @@ class MethylBert:
         #     self.trainer.save_model(self.trainer.args.output_dir)
         #     self.safe_save_model_for_hf_trainer(self.trainer.args.output_dir)
 
-    def predict(self, dataset, data_collator=None, batch_size=None, clear_cache=True):
+    def predict(
+        self,
+        dataset,
+        data_collator=methylbert_finetune_collator,
+        batch_size=None,
+        clear_cache=True,
+    ):
         """
         Use Hugging Face Trainer for prediction on a dataset.
         """

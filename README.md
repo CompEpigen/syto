@@ -1,5 +1,15 @@
 # methyldl
 
-![Coverage](coverage-badge.svg)
+![Coverage](coverage-badge.svg) ![Code-style](https://img.shields.io/badge/code%20style-black-black)
 
 Repository for sequence-based long-read combined DNA-methylome classification and deconvolution of cell types using Deep Learning models. 
+
+## Installation
+
+```shell
+git clone ...
+
+# you need to have the git LFS extension to pull the data
+git lfs install
+git lfs pull
+```

@@ -9,7 +9,7 @@ from parameterized import parameterized
 import shutil
 from methyldl.data.dataset import generate_example_data
 
-from methyldl.modelling.dismir import (
+from methyldl.modelling.classifiers.dismir import (
     Dismir,
     DISMIRNet,
     VariableLengthDataset,
@@ -300,6 +300,13 @@ class TestDismirTraining(DismirTestBase):
 
     def test_early_stopping(self):
         """Test that early stopping works correctly."""
+        # Flip validation labels so val_loss diverges as the model learns training data,
+        # guaranteeing the patience counter reaches the threshold before 100 epochs.
+        # (because the generation of training and validation data is identical)
+        valid_df = pd.read_parquet(self.valid_path)
+        valid_df["label"] = 1 - valid_df["label"]
+        valid_df.to_parquet(self.valid_path)
+
         model = Dismir(
             max_sequence_length=128,
             train_data_path=self.train_path,

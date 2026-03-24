@@ -2,8 +2,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
-from methyldl.modelling.minirnns.associative_scan import associative_scan_log
-from methyldl.modelling.minirnns.helpers import g, log_g
+from methyldl.modelling.classifiers.minirnns.associative_scan import (
+    associative_scan_log,
+)
+from methyldl.modelling.classifiers.minirnns.helpers import g, log_g
 from methyldl.modelling.utils import exists
 
 

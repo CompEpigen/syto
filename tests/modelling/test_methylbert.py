@@ -1,22 +1,30 @@
 import unittest
 import tempfile
-import torch
 import os
+from unittest.mock import MagicMock, patch
 from parameterized import parameterized
-from methyldl.modelling.methylbert import (
+
+from transformers import BertConfig, TrainingArguments
+import torch
+
+from methyldl.data.dataset import generate_example_data_for_methylbert
+import methyldl.modelling.classifiers.methylbert as methylbert_module
+from methyldl.modelling.classifiers.methylbert import (
     MethylBert,
     MethylVocab,
     MethylBertFinetuneDataset,
     MethylBertPretrainDataset,
+    MethylBertEmbeddedDMR,
+    VanillaClassifier,
     methylbert_finetune_collator,
     methylbert_pretrain_collator,
     default_methylbert_config,
     FocalLoss,
     sigmoid_focal_loss,
+    _line2tokens_finetune,
+    _line2tokens_pretrain,
 )
-from transformers import TrainingArguments
-from methyldl.data.dataset import generate_example_data_for_methylbert
-from methyldl.data.dataset import generate_example_data
+
 
 
 class TestMethylVocab(unittest.TestCase):
@@ -96,6 +104,42 @@ class TestMethylVocab(unittest.TestCase):
         result_without_pad = vocab.from_seq(seq, with_pad=False)
         self.assertIn("<sos>", result_without_pad)
         self.assertNotIn("<pad>", result_without_pad)
+
+    def test_line2tokens_pretrain_pads_and_truncates_sequences(self):
+        """Test that pretraining tokenization handles both padding and truncation."""
+        truncated = _line2tokens_pretrain("AAA TTT CCC", MethylVocab(k=3), max_len=2)
+        padded_vocab = MethylVocab(k=3)
+        padded = _line2tokens_pretrain("AAA TTT", padded_vocab, max_len=4)
+
+        self.assertEqual(len(truncated), 2)
+        self.assertEqual(len(padded), 4)
+        self.assertEqual(padded[-1], [padded_vocab.pad_index])
+
+    def test_line2tokens_finetune_rejects_invalid_inputs(self):
+        """Test that fine-tuning tokenization validates headers and field counts."""
+        vocab = MethylVocab(k=3)
+
+        with self.assertRaises(ValueError):
+            _line2tokens_finetune(
+                "AAA TTT\t01\t0\t1",
+                tokenizer=vocab,
+                max_len=5,
+                headers=["dna_seq", "methyl_seq", "ctype", "dmr_ctype"],
+            )
+
+        with self.assertRaises(ValueError):
+            _line2tokens_finetune(
+                "AAA TTT\t01\t0\t1",
+                tokenizer=vocab,
+                max_len=5,
+                headers=[
+                    "dna_seq",
+                    "methyl_seq",
+                    "ctype",
+                    "dmr_ctype",
+                    "dmr_label",
+                ],
+            )
 
 
 class TestFocalLoss(unittest.TestCase):
@@ -235,6 +279,63 @@ class TestMethylBertFinetuneDataset(unittest.TestCase):
         num_dmrs = dataset.num_dmrs()
         self.assertGreaterEqual(num_dmrs, 3)  # At least 3 unique DMR labels
 
+    def test_lazy_tokenization_caches_items_and_num_dmrs(self):
+        """Test lazy tokenization cache population and on-demand DMR counting."""
+        data = [
+            ["dna_seq", "methyl_seq", "ctype", "dmr_ctype", "dmr_label"],
+            ["AAA TTT CCC GGG", "0120", "0", "1", "0"],
+            ["GGG CCC AAA TTT", "1201", "1", "1", "2"],
+        ]
+
+        with tempfile.TemporaryDirectory() as cache_dir:
+            dataset = MethylBertFinetuneDataset(
+                data_source=data,
+                vocab=self.vocab,
+                seq_len=4,
+                n_cores=1,
+                lazy_tokenization=True,
+                cache_dir=cache_dir,
+            )
+
+            _ = dataset[0]  # Trigger tokenization and caching of first item
+
+            self.assertIn(0, dataset._cache)
+            self.assertEqual(dataset.num_dmrs(), 3)
+
+    def test_eager_mode_reuses_cache_file(self):
+        """Test that eager mode reloads tokenized content from cache."""
+        data = [
+            ["dna_seq", "methyl_seq", "ctype", "dmr_ctype", "dmr_label"],
+            ["AAA TTT CCC GGG", "0120", "0", "1", "0"],
+            ["GGG CCC AAA TTT", "1201", "1", "1", "2"],
+        ]
+
+        with tempfile.TemporaryDirectory() as cache_dir:
+            dataset = MethylBertFinetuneDataset(
+                data_source=data,
+                vocab=self.vocab,
+                seq_len=4,
+                n_cores=1,
+                cache_dir=cache_dir,
+            )
+
+            self.assertTrue(os.path.exists(dataset.cache_file))
+
+            with patch.object(
+                methylbert_module,
+                "_line2tokens_finetune",
+                side_effect=AssertionError("cache was not reused"),
+            ):
+                cached_dataset = MethylBertFinetuneDataset(
+                    data_source=data,
+                    vocab=self.vocab,
+                    seq_len=4,
+                    n_cores=1,
+                    cache_dir=cache_dir,
+                )
+
+            self.assertEqual(len(cached_dataset), 2)
+
 
 class TestMethylBertCollators(unittest.TestCase):
     """Test suite for data collators."""
@@ -304,6 +405,48 @@ class TestMethylBert(unittest.TestCase):
         self.foundation_model = "foundationalModels/methylbert_hg19_12l"
         self.seq_len = 150
         self.config = default_methylbert_config.copy()
+
+    def _build_small_hf_config(self, num_labels=2, num_dmr_labels=4, loss="bce"):
+        """Build a tiny BERT config so wrapper-level tests stay lightweight."""
+        config = BertConfig(
+            vocab_size=80,
+            hidden_size=12,
+            num_hidden_layers=1,
+            num_attention_heads=3,
+            intermediate_size=24,
+            max_position_embeddings=32,
+            type_vocab_size=3,
+        )
+        config.num_labels = num_labels
+        config.num_dmr_labels = num_dmr_labels
+        config.loss = loss
+        return config
+
+    def _create_small_model(self, **kwargs):
+        """Create a wrapper with a tiny Hugging Face config for unit-level branches."""
+        with patch(
+            "methyldl.modelling.classifiers.methylbert.BertConfig.from_pretrained",
+            return_value=self._build_small_hf_config(
+                num_labels=kwargs.get("num_labels", 2),
+                num_dmr_labels=kwargs.get("num_dmr_labels", 4),
+                loss=(kwargs.get("custom_config") or self.config).get("loss", "bce"),
+            ),
+        ), patch(
+            "methyldl.modelling.classifiers.methylbert.AutoTokenizer.from_pretrained",
+            return_value=None,
+        ):
+            return MethylBert(
+                foundation_model_path=self.foundation_model,
+                seq_len=kwargs.pop("seq_len", 5),
+                custom_config=kwargs.pop("custom_config", self.config.copy()),
+                load_weights=kwargs.pop("load_weights", False),
+                num_labels=kwargs.pop("num_labels", 2),
+                num_dmr_labels=kwargs.pop("num_dmr_labels", 4),
+                output_dir=kwargs.pop(
+                    "output_dir", "../test_container_tmp/tmp_trainer"
+                ),
+                **kwargs,
+            )
 
     def _create_model(
         self, num_labels=2, num_dmr_labels=10, load_weights=False, custom_config=None
@@ -390,6 +533,110 @@ class TestMethylBert(unittest.TestCase):
         self.assertIsNotNone(predictions)
         self.assertIsNotNone(predictions.predictions)
         self.assertEqual(len(predictions.predictions), 2)
+
+    def test_vanilla_classifier_forward_returns_expected_shapes(self):
+        """Test that the standalone vanilla classifier produces logits and augmented features."""
+        config = self._build_small_hf_config(num_labels=3)
+        classifier = VanillaClassifier(config, seq_len=5)
+        sequence_output = torch.randn(2, 6, 12)
+        dmr_ids = torch.tensor([1, 2], dtype=torch.long)
+
+        logits, sequence_output_with_dmr = classifier(sequence_output, dmr_ids)
+
+        self.assertEqual(logits.shape, (2, 3))
+        self.assertEqual(sequence_output_with_dmr.shape, (2, 6, 13))
+
+    def test_embedded_model_rejects_invalid_loss(self):
+        """Test that the embedded model validates unknown losses."""
+        config = self._build_small_hf_config(loss="not_a_loss")
+
+        with self.assertRaises(ValueError):
+            MethylBertEmbeddedDMR(config, seq_len=5)
+
+    def test_embedded_model_forward_attention_classifier_returns_attention_weights(
+        self,
+    ):
+        """Test the attention-based classifier forward path on a tiny configuration."""
+        config = self._build_small_hf_config(num_labels=3, loss="ce")
+        model = MethylBertEmbeddedDMR(
+            config,
+            seq_len=5,
+            classifier_implementation="dmr_attention_based",
+        )
+        input_ids = torch.randint(5, 20, (2, 6))
+        token_type_ids = torch.randint(0, 3, (2, 6))
+        attention_mask = torch.ones(2, 6, dtype=torch.long)
+        attention_mask[1, -1] = 0
+
+        # Masking one position forces the attention branch to use its mask logic.
+        output = model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            token_type_ids=token_type_ids,
+            labels=torch.tensor([1, 2], dtype=torch.long),
+            dmr_ids=torch.tensor([1, 2], dtype=torch.long),
+        )
+
+        self.assertIsNotNone(output.loss)
+        self.assertEqual(output.logits.shape, (2, 3))
+        self.assertEqual(output.attention_weights.shape, (2, 6))
+
+    def test_wrapper_rejects_invalid_classifier_implementation(self):
+        """Test that wrapper initialization validates classifier implementation names."""
+        with self.assertRaises(ValueError):
+            MethylBert(
+                foundation_model_path=self.foundation_model,
+                seq_len=5,
+                custom_config=self.config.copy(),
+                load_weights=False,
+                classifier_implementation="invalid-name",
+            )
+
+    def test_wrapper_loads_finetuned_checkpoint_path(self):
+        """Test that loading weights with a fine-tuned path uses that checkpoint."""
+        mocked_model = MagicMock()
+
+        with patch(
+            "methyldl.modelling.classifiers.methylbert.BertConfig.from_pretrained",
+            return_value=self._build_small_hf_config(),
+        ), patch(
+            "methyldl.modelling.classifiers.methylbert.MethylBertEmbeddedDMR.from_pretrained",
+            return_value=mocked_model,
+        ) as mocked_from_pretrained, patch(
+            "methyldl.modelling.classifiers.methylbert.AutoTokenizer.from_pretrained",
+            return_value=object(),
+        ):
+            model = MethylBert(
+                foundation_model_path=self.foundation_model,
+                seq_len=5,
+                custom_config=self.config.copy(),
+                load_weights=True,
+                fine_tuned_model_path="/tmp/fine_tuned_model",
+                num_labels=2,
+                num_dmr_labels=4,
+            )
+
+        self.assertIs(model.model, mocked_model)
+        self.assertEqual(
+            mocked_from_pretrained.call_args.kwargs["pretrained_model_name_or_path"],
+            "/tmp/fine_tuned_model",
+        )
+
+    def test_predict_reuses_existing_trainer_and_clears_cache(self):
+        """Test that prediction reuses the existing trainer and clears caches."""
+        model = self._create_small_model()
+        model.trainer = MagicMock()
+        sentinel_predictions = object()
+        model.trainer.predict.return_value = sentinel_predictions
+
+        with patch("gc.collect") as mocked_collect, patch(
+            "torch.cuda.empty_cache"
+        ) as mocked_empty_cache:
+            predictions = model.predict(dataset=[{"input_ids": torch.tensor([1])}])
+
+        self.assertIs(predictions, sentinel_predictions)
+        mocked_collect.assert_called_once()
+        mocked_empty_cache.assert_called_once()
 
 
 class TestMethylBertFineTune(unittest.TestCase):
@@ -602,6 +849,52 @@ class TestMethylBertPretrainDataset(unittest.TestCase):
 
                 finally:
                     os.unlink(temp_file)
+
+    def test_masking_adds_special_tokens_and_marks_masked_positions(self):
+        """Test the masking helper end-to-end on a dense, fully maskable sequence."""
+        dataset = object.__new__(MethylBertPretrainDataset)
+        dataset.vocab = self.vocab
+        dataset.seq_len = 6
+        dataset.mask_list = dataset._get_mask()
+        inputs = torch.tensor([5, 6, 7, 8, 9, 10], dtype=torch.int16)
+
+        masked_inputs, labels, masked_positions = dataset._masking(
+            inputs.clone(), threshold=1.0
+        )
+
+        # With threshold=1.0 every non-special token is selected, so the helper should
+        # prepend SOS and align labels and mask flags with the shifted sequence.
+        self.assertEqual(masked_inputs[0].item(), self.vocab.sos_index)
+        self.assertEqual(masked_inputs[-1].item(), self.vocab.eos_index)
+        self.assertEqual(labels[0].item(), -100)
+        self.assertFalse(masked_positions[0].item())
+        self.assertEqual(masked_inputs.shape[0], 7)
+
+    def test_random_length_branch_keeps_output_shape(self):
+        """Test that random-length truncation still returns padded tensors of the expected size."""
+        with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".txt") as f:
+            f.write("AAA TTT CCC GGG AAA TTT\n")
+            temp_file = f.name
+
+        try:
+            dataset = MethylBertPretrainDataset(
+                f_path=temp_file,
+                vocab=self.vocab,
+                seq_len=6,
+                random_len=True,
+                n_cores=1,
+            )
+
+            with patch("numpy.random.random", return_value=0.0), patch(
+                "random.randint", return_value=5
+            ):
+                item = dataset[0]
+
+            self.assertEqual(item["bert_input"].shape[0], 7)
+            self.assertEqual(item["bert_label"].shape[0], 7)
+            self.assertEqual(item["bert_mask"].shape[0], 7)
+        finally:
+            os.unlink(temp_file)
 
 
 if __name__ == "__main__":

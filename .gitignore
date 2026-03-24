@@ -1,3 +1,8 @@
+.vscode/*
+App/mlruns/*
+App/output/*
+
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -201,7 +206,7 @@ container/definitions/*.def
 # Cache directories
 cache/
 outputs/
-data/
+# data/
 
 # HPC logs
 *.out

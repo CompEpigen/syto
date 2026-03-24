@@ -566,7 +566,7 @@ class EpigenDnabert2:
         self.trainer = None
 
     def __str__(self):
-        str(self.model.__str__())
+        return str(self.model)
 
     def _init_trainer(
         self,
@@ -629,6 +629,7 @@ class EpigenDnabert2:
                     skip_memory_metrics=True,
                     auto_find_batch_size=False,
                     per_device_eval_batch_size=64 * 6,
+                    output_dir=self.training_args.output_dir,
                 )
             elif self.max_sequence_length <= 2000:
                 training_args = TrainingArguments(
