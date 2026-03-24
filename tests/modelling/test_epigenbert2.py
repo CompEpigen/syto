@@ -487,6 +487,7 @@ class TestBertForSequenceClassificationForward(unittest.TestCase):
         model.config = SimpleNamespace(problem_type=None, use_return_dict=True)
         model.bert = _FixedBackbone((sequence_output, pooled_output, extra_output))
         model.dropout = torch.nn.Identity()
+        model.soft_labels = False 
         model.classifier = _FixedClassifier(logits)
         return model
 
@@ -518,6 +519,77 @@ class TestBertForSequenceClassificationForward(unittest.TestCase):
         self.assertTrue(torch.equal(result[1], logits))
         # The final tuple element comes from outputs[2:], which verifies the non-dict return path.
         self.assertEqual(result[2], extra_output)
+
+
+class TestBertForSequenceClassificationSoftLabels(unittest.TestCase):
+    """Test soft-label forward path in BertForSequenceClassification."""
+
+    def _build_stub_model(self, logits, sequence_output, pooled_output, extra_output):
+        """Create a lightweight classifier wrapper with soft_labels=True."""
+        model = object.__new__(dnabert2_module.BertForSequenceClassification)
+        torch.nn.Module.__init__(model)
+        model.num_labels = logits.shape[-1]
+        model.num_dmr_labels = None
+        model.config = SimpleNamespace(problem_type=None, use_return_dict=True)
+        model.bert = _FixedBackbone((sequence_output, pooled_output, extra_output))
+        model.dropout = torch.nn.Identity()
+        model.soft_labels = True
+        model.classifier = _FixedClassifier(logits)
+        return model
+
+    def test_forward_soft_labels_uses_cwce_loss(self):
+        """When soft_labels=True and labels are float, ConfidenceWeightedCrossEntropy is used."""
+        num_classes = 3
+        logits = torch.tensor([[0.5, -0.3, 1.0]], dtype=torch.float32)
+        sequence_output = torch.randn(1, 3, 3)
+        pooled_output = torch.randn(1, 3)
+        extra_output = ()
+
+        model = self._build_stub_model(
+            logits=logits,
+            sequence_output=sequence_output,
+            pooled_output=pooled_output,
+            extra_output=extra_output,
+        )
+
+        # Soft labels (float, sums to 1)
+        soft_labels = torch.tensor([[0.8, 0.1, 0.1]], dtype=torch.float32)
+
+        result = model(
+            input_ids=torch.tensor([[1, 2, 3]], dtype=torch.long),
+            labels=soft_labels,
+        )
+
+        # Should have detected single_label_classification via soft_labels flag
+        self.assertEqual(model.config.problem_type, "single_label_classification")
+        self.assertIsNotNone(result.loss)
+        self.assertFalse(torch.isnan(result.loss))
+        self.assertEqual(result.logits.shape, (1, num_classes))
+
+    def test_forward_soft_labels_regression_path(self):
+        """When num_labels=1 and soft_labels=True, regression loss is used."""
+        logits = torch.tensor([[0.5]], dtype=torch.float32)
+        sequence_output = torch.randn(1, 3, 1)
+        pooled_output = torch.randn(1, 1)
+        extra_output = ()
+
+        model = self._build_stub_model(
+            logits=logits,
+            sequence_output=sequence_output,
+            pooled_output=pooled_output,
+            extra_output=extra_output,
+        )
+        model.num_labels = 1
+
+        labels = torch.tensor([[0.7]], dtype=torch.float32)
+
+        result = model(
+            input_ids=torch.tensor([[1, 2, 3]], dtype=torch.long),
+            labels=labels,
+        )
+
+        self.assertEqual(model.config.problem_type, "regression")
+        self.assertIsNotNone(result.loss)
 
 
 if __name__ == "__main__":

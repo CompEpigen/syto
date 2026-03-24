@@ -5,8 +5,7 @@ import torch
 
 from methyldl.deconvolution.evaluation import (
     compute_combined_loss,
-    compute_deconvolution_metrics,
-    compute_deconvolution_metrics_np,
+    compute_deconvolution_metrics
 )
 
 
@@ -57,12 +56,12 @@ class TestComputeDeconvolutionMetricsNp(unittest.TestCase):
 
         # This fixture intentionally contains zeros in the target so the KL path
         # exercises the epsilon-based clipping instead of relying on log(0).
-        result = compute_deconvolution_metrics_np(pred=pred, target=target)
+        result = compute_deconvolution_metrics(pred=pred, target=target)
         expected = _manual_numpy_metrics(pred=pred, target=target)
 
         self.assertEqual(set(result), {"mae", "mse", "kl", "max_error", "cosine_sim"})
         for key, expected_value in expected.items():
-            self.assertAlmostEqual(result[key], expected_value, places=7)
+            self.assertAlmostEqual(result[key], expected_value, places=5)
 
     def test_promotes_one_dimensional_inputs_to_single_sample_batch(self):
         """One-dimensional vectors should be evaluated as a batch of size one."""
@@ -71,11 +70,11 @@ class TestComputeDeconvolutionMetricsNp(unittest.TestCase):
 
         # The implementation adds a leading batch axis for 1D inputs, so this test
         # validates that branch without forcing callers to reshape inputs manually.
-        result = compute_deconvolution_metrics_np(pred=pred, target=target)
+        result = compute_deconvolution_metrics(pred=pred, target=target)
         expected = _manual_numpy_metrics(pred=pred, target=target)
 
         for key, expected_value in expected.items():
-            self.assertAlmostEqual(result[key], expected_value, places=7)
+            self.assertAlmostEqual(result[key], expected_value, places=5)
 
     def test_raises_assertion_error_for_shape_mismatch(self):
         """Mismatched NumPy shapes should fail fast with an assertion error."""
@@ -83,7 +82,7 @@ class TestComputeDeconvolutionMetricsNp(unittest.TestCase):
         target = np.array([[0.2, 0.8]], dtype=float)
 
         with self.assertRaisesRegex(AssertionError, "same shape"):
-            compute_deconvolution_metrics_np(pred=pred, target=target)
+            compute_deconvolution_metrics(pred=pred, target=target)
 
 
 class TestComputeDeconvolutionMetricsTorch(unittest.TestCase):

@@ -408,12 +408,12 @@ class TestDismirEvaluation(DismirTestBase):
             if num_labels == 1:
                 # Binary: float32, shape [batch_size, 1]
                 model.test_y = torch.tensor(
-                    model.test_y.values, dtype=torch.float32
+                    model.test_y, dtype=torch.float32
                 ).view(-1, 1)
             else:
                 # Multi-class: long, shape [batch_size]
                 model.test_y = torch.tensor(
-                    model.test_y.values, dtype=torch.long
+                    model.test_y, dtype=torch.long
                 ).squeeze()
 
             # Load and transform validation data
@@ -424,11 +424,11 @@ class TestDismirEvaluation(DismirTestBase):
 
             if num_labels == 1:
                 model.valid_y = torch.tensor(
-                    model.valid_y.values, dtype=torch.float32
+                    model.valid_y, dtype=torch.float32
                 ).view(-1, 1)
             else:
                 model.valid_y = torch.tensor(
-                    model.valid_y.values, dtype=torch.long
+                    model.valid_y, dtype=torch.long
                 ).squeeze()
 
         loss, accuracy = model.evaluate(split=split, variable_length=variable_length)
@@ -789,6 +789,105 @@ class TestModelStatePersistence(unittest.TestCase):
 
         for key in expected_keys:
             self.assertIn(key, state_dict)
+
+
+class TestDismirSoftLabels(DismirTestBase):
+    """Test soft-label support in Dismir."""
+
+    def _create_default_data(self):
+        """Create data with a 'soft_label' column for soft-label tests."""
+        dataset = generate_example_data(
+            sequence_length=128,
+            include_cpg_methylation=True,
+            include_labels=True,
+            num_samples=self.num_samples,
+        )
+        df = pd.DataFrame(
+            dataset[1:], columns=["input_ids", "methylation_ids", "label"]
+        )
+        # Add a soft_label column: list of floats that sum to 1
+        num_classes = 3
+        soft_labels = []
+        for _ in range(len(df)):
+            probs = np.random.dirichlet(np.ones(num_classes))
+            soft_labels.append(probs.tolist())
+        df["soft_label"] = soft_labels
+        # Also add dmr_label_col for DMR tests
+        df["dmr_label"] = np.random.randint(0, 5, len(df))
+
+        df.to_parquet(self.train_path)
+        df.to_parquet(self.test_path)
+        df.to_parquet(self.valid_path)
+
+    def test_soft_label_criterion_is_cwce(self):
+        """With soft_labels=True and dmr_attention_based, criterion should be CWCE."""
+        from methyldl.modelling.loss import ConfidenceWeightedCrossEntropy
+
+        model = Dismir(
+            max_sequence_length=128,
+            train_data_path=self.train_path,
+            test_data_path=self.test_path,
+            valid_data_path=self.valid_path,
+            classifier_type="dmr_attention_based",
+            num_labels=3,
+            num_dmr_labels=5,
+            dmr_label_col="dmr_label",
+            soft_labels=True,
+            device=torch.device("cpu"),
+        )
+        self.assertIsInstance(model.criterion, ConfidenceWeightedCrossEntropy)
+
+    def test_soft_label_load_and_transform_reads_soft_column(self):
+        """load_and_transform_input(soft_labels=True) should read the 'soft_label' column."""
+        model = Dismir(
+            max_sequence_length=128,
+            train_data_path=self.train_path,
+            test_data_path=self.test_path,
+            valid_data_path=self.valid_path,
+            num_labels=3,
+            device=torch.device("cpu"),
+        )
+
+        features, labels = model.load_and_transform_input(
+            self.train_path, soft_labels=True
+        )
+
+        # Labels should be 2D: [num_samples, num_classes]
+        self.assertEqual(labels.ndim, 2)
+        self.assertEqual(labels.shape[0], self.num_samples)
+        self.assertEqual(labels.shape[1], 3)
+        # Each row should sum to ~1.0
+        np.testing.assert_allclose(labels.sum(axis=1), 1.0, atol=1e-5)
+
+    def test_soft_label_training_loop_accuracy_uses_argmax(self):
+        """Soft-label training should use argmax for accuracy in the training loop."""
+        model = Dismir(
+            max_sequence_length=128,
+            train_data_path=self.train_path,
+            test_data_path=self.test_path,
+            valid_data_path=self.valid_path,
+            classifier_type="dmr_attention_based",
+            num_labels=3,
+            num_dmr_labels=5,
+            dmr_label_col="dmr_label",
+            soft_labels=True,
+            device=torch.device("cpu"),
+        )
+
+        model.train(
+            train_dir=self.temp_dir,
+            epochs=1,
+            batch_size=8,
+            patience=5,
+            variable_length=False,
+            verbose=0,
+        )
+
+        # Training should complete and produce history
+        self.assertGreater(len(model.history), 0)
+        # Accuracy should be between 0 and 1
+        self.assertTrue(0 <= model.history[0]["train_acc"] <= 1)
+        self.assertTrue(0 <= model.history[0]["val_acc"] <= 1)
 
 
 if __name__ == "__main__":
