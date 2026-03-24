@@ -4,31 +4,38 @@ import numpy as np
 import torch
 import torch.nn as nn
 
+from typing import Union
+import numpy as np
+import torch
+import torch.nn as nn
+
 def compute_deconvolution_metrics(
-    pred: torch.Tensor, target: torch.Tensor, eps: float = 1e-8
+    pred: Union[torch.Tensor, np.ndarray],
+    target: Union[torch.Tensor, np.ndarray],
+    eps: float = 1e-8,
 ) -> dict:
-    """Compute all evaluation metrics."""
+    """Compute all evaluation metrics.
+
+    Supports both torch.Tensor and numpy.ndarray inputs.
+    NumPy inputs are converted to tensors internally.
+    """
+    if isinstance(pred, np.ndarray):
+        pred = torch.from_numpy(pred)
+    if isinstance(target, np.ndarray):
+        target = torch.from_numpy(target)
+
     assert pred.shape == target.shape, "pred and target must have the same shape"
 
     with torch.no_grad():
-        # MAE
         mae = (pred - target).abs().mean().item()
-
-        # MSE
         mse = ((pred - target) ** 2).mean().item()
-
-        # KL Divergence
         kl = (
             (target * (target.clamp(min=eps).log() - pred.clamp(min=eps).log()))
             .sum(dim=-1)
             .mean()
             .item()
         )
-
-        # Max error (worst case)
         max_error = (pred - target).abs().max().item()
-
-        # Cosine similarity (average across batch)
         cosine_sim = nn.functional.cosine_similarity(pred, target, dim=-1).mean().item()
 
     return {
