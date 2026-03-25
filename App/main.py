@@ -19,29 +19,17 @@ from methyldl.modelling.experiment_wrappers import (
     DismirMLflowExperiment,
     EpigenBERT2MLflowExperiment,
     MethylBertMLflowExperiment,
-    EpigenBERT2MLflowExperiment,
-    MethylBertMLflowExperiment,
 )
-from methyldl.modelling.dnabert2 import (
+from methyldl.modelling.classifiers.dnabert2 import (
     TrainingArguments,
 )  # TODO - must be different for MethylBERT
 
 
-def setup_logging(verbose: bool = False, log_file: Optional[str] = None):
+def setup_logging(verbose: bool = False):
     """Configure logging for the application."""
     level = logging.DEBUG if verbose else logging.INFO
-
-    handlers = [logging.StreamHandler()]
-
-    # Only add FileHandler if a path is provided
-    if log_file:
-        # Create directory if it doesn't exist to prevent FileNotFoundError
-        os.makedirs(os.path.dirname(os.path.abspath(log_file)), exist_ok=True)
-        handlers.append(logging.FileHandler(log_file))
-
     logging.basicConfig(
         level=level,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         force=True,
         handlers=[
@@ -52,14 +40,11 @@ def setup_logging(verbose: bool = False, log_file: Optional[str] = None):
     return logging.getLogger(__name__)
 
 
-
 def load_config(config_path: str) -> Dict[str, Any]:
     """Load configuration from YAML file."""
     with open(config_path, "r") as f:
-    with open(config_path, "r") as f:
         config = yaml.safe_load(f)
     return config
-
 
 
 def validate_config(config: Dict[str, Any], task: str) -> None:
@@ -74,34 +59,19 @@ def validate_config(config: Dict[str, Any], task: str) -> None:
             "atlas_path",
             "input",
         ],
-        "fine_tune": ["model", "data_path", "max_sequence_length"],
-        "pretrain": ["model", "data_path"],  # Add pretrain requirements
-        "inference": [
-            "model",
-            "checkpoint_path",
-            "labels_dict_path",
-            "atlas_path",
-            "input",
-        ],
     }
-
 
     if task not in required_fields:
         raise ValueError(f"Unknown task: {task}")
-
 
     for field in required_fields[task]:
         if field not in config:
             raise ValueError(f"Missing required field '{field}' for task '{task}'")
 
-
     # Validate model-specific configuration
     model = config["model"]["architecture"].lower()
     if model not in ["dismir", "epigenbert2", "methylbert"]:
-    model = config["model"]["architecture"].lower()
-    if model not in ["dismir", "epigenbert2", "methylbert"]:
         raise ValueError(f"Unknown model architecture: {model}")
-
 
 
 def create_experiment(config: Dict[str, Any], logger: logging.Logger) -> Any:
@@ -110,13 +80,7 @@ def create_experiment(config: Dict[str, Any], logger: logging.Logger) -> Any:
     data_path = config["data_path"]
     max_seq_length = config["max_sequence_length"]
 
-    model_arch = config["model"]["architecture"].lower()
-    data_path = config["data_path"]
-    max_seq_length = config["max_sequence_length"]
-
     # MLflow configuration
-    mlflow_config = config.get("mlflow", {})
-
     mlflow_config = config.get("mlflow", {})
 
     experiment_name = None
@@ -125,23 +89,14 @@ def create_experiment(config: Dict[str, Any], logger: logging.Logger) -> Any:
     experiment_name = mlflow_config.get("experiment_name")
     tracking_uri = mlflow_config.get("tracking_uri")
 
-
-    experiment_name = mlflow_config.get("experiment_name")
-    tracking_uri = mlflow_config.get("tracking_uri")
-
     if not experiment_name:
         raise ValueError("MLflow is enabled but 'experiment_name' is not provided")
-
 
     logger.info(f"MLflow enabled - Experiment: {experiment_name}")
     if tracking_uri:
         logger.info(f"MLflow tracking URI: {tracking_uri}")
 
-
     # Model-specific parameters
-    model_config = config["model"]
-
-    if model_arch == "dismir":
     model_config = config["model"]
 
     if model_arch == "dismir":
@@ -152,11 +107,7 @@ def create_experiment(config: Dict[str, Any], logger: logging.Logger) -> Any:
             max_sequence_length=max_seq_length,
             model_flavor=model_config.get("flavor", "lstm"),
             splits=config.get("splits", ["train", "valid", "test"]),
-            model_flavor=model_config.get("flavor", "lstm"),
-            splits=config.get("splits", ["train", "valid", "test"]),
         )
-
-    elif model_arch == "epigenbert2":
 
     elif model_arch == "epigenbert2":
         return EpigenBERT2MLflowExperiment(
@@ -171,16 +122,7 @@ def create_experiment(config: Dict[str, Any], logger: logging.Logger) -> Any:
             ),
             splits=config.get("splits", ["train", "valid", "test"]),
             use_triton=model_config.get("use_triton", False),
-            use_cpg_methylation=model_config.get("use_cpg_methylation", True),
-            use_m6a_methylation=model_config.get("use_m6a_methylation", False),
-            foundation_model_huggingface=model_config.get(
-                "foundation_model", "zhihan1996/DNABERT-2-117M"
-            ),
-            splits=config.get("splits", ["train", "valid", "test"]),
-            use_triton=model_config.get("use_triton", False),
         )
-
-    elif model_arch == "methylbert":
 
     elif model_arch == "methylbert":
         return MethylBertMLflowExperiment(
@@ -194,24 +136,17 @@ def create_experiment(config: Dict[str, Any], logger: logging.Logger) -> Any:
             splits=config.get("splits", ["train", "valid", "test"]),
         )
 
-
     else:
         raise ValueError(f"Unknown model architecture: {model_arch}")
-
 
 
 def run_fine_tuning(config: Dict[str, Any], logger: logging.Logger) -> None:
     """Run fine-tuning based on configuration."""
 
-
     # Create experiment
     experiment = create_experiment(config, logger)
 
-
     # Get training configuration
-    training_config = config.get("training", {})
-    model_arch = config["model"]["architecture"].lower()
-
     training_config = config.get("training", {})
     model_arch = config["model"]["architecture"].lower()
 
@@ -219,18 +154,12 @@ def run_fine_tuning(config: Dict[str, Any], logger: logging.Logger) -> None:
     datasets = config.get("datasets", "all")
 
     if datasets == "all":
-    datasets = config.get("datasets", "all")
-
-    if datasets == "all":
         # Train on all available datasets
         logger.info("Training on all available datasets")
-        if model_arch == "dismir":
         if model_arch == "dismir":
             experiment.run_full_experiment(**training_config)
         else:
             # For transformer models, check if custom TrainingArguments provided
-            if "training_arguments" in training_config:
-                args_dict = training_config["training_arguments"]
             if "training_arguments" in training_config:
                 args_dict = training_config["training_arguments"]
                 training_args = TrainingArguments(**args_dict)
@@ -242,11 +171,8 @@ def run_fine_tuning(config: Dict[str, Any], logger: logging.Logger) -> None:
         if isinstance(datasets, str):
             datasets = [datasets]
 
-
         for dataset_name in datasets:
             logger.info(f"Training on dataset: {dataset_name}")
-
-            if model_arch == "dismir":
 
             if model_arch == "dismir":
                 experiment.train_dataset(dataset_name, **training_config)
@@ -254,13 +180,10 @@ def run_fine_tuning(config: Dict[str, Any], logger: logging.Logger) -> None:
                 # For transformer models
                 if "training_arguments" in training_config:
                     args_dict = training_config["training_arguments"]
-                if "training_arguments" in training_config:
-                    args_dict = training_config["training_arguments"]
                     training_args = TrainingArguments(**args_dict)
                     experiment.train_dataset(dataset_name, training_args=training_args)
                 else:
                     experiment.train_dataset(dataset_name, **training_config)
-
 
 
 def run_inference(config: Dict[str, Any], logger: logging.Logger) -> None:
@@ -271,30 +194,27 @@ def run_inference(config: Dict[str, Any], logger: logging.Logger) -> None:
     pipeline = InferencePipeline(config=config, logger=logger)
     results = pipeline.run()
 
-    if results is not None:
-
-        # Log summary
+    # Log summary
+    logger.info("=" * 60)
+    logger.info("INFERENCE RESULTS SUMMARY")
+    logger.info("=" * 60)
+    for method_name, proportions in results.items():
+        # Flatten the proportions array if it is 2D (e.g., shape (1, 39))
+        flat_props = proportions.flatten()
+        # 1. Pair the labels with their values
+        # pipeline.labels_dict is {int: str}, so we match by index
+        cell_contributions = []
+        for idx, name in pipeline.labels_dict.items():
+            if idx < len(flat_props):
+                cell_contributions.append((name, flat_props[idx]))
+        # 2. Sort by proportion (the second element of the tuple) in descending order
+        cell_contributions.sort(key=lambda x: x[1], reverse=True)
+        # 3. Take the top 5
+        top_5 = cell_contributions[:5]
+        # 4. Format and log
+        top5_str = ", ".join([f"{name}: {val:.4f}" for name, val in top_5])
+        logger.info(f"  {method_name} Top 5: {top5_str}")
         logger.info("=" * 60)
-        logger.info("INFERENCE RESULTS SUMMARY")
-        logger.info("=" * 60)
-        for method_name, proportions in results.items():
-            # Flatten the proportions array if it is 2D (e.g., shape (1, 39))
-            flat_props = proportions.flatten()
-            # 1. Pair the labels with their values
-            # pipeline.labels_dict is {int: str}, so we match by index
-            cell_contributions = []
-            for idx, name in pipeline.labels_dict.items():
-                if idx < len(flat_props):
-                    cell_contributions.append((name, flat_props[idx]))
-            # 2. Sort by proportion (the second element of the tuple) in descending order
-            cell_contributions.sort(key=lambda x: x[1], reverse=True)
-            # 3. Take the top 5
-            top_5 = cell_contributions[:5]
-            # 4. Format and log
-            top5_str = ", ".join([f"{name}: {val:.4f}" for name, val in top_5])
-            logger.info(f"  {method_name} Top 5: {top5_str}")
-            logger.info("=" * 60)
-
 
 
 def run_pretraining(config: Dict[str, Any], logger: logging.Logger) -> None:
@@ -302,7 +222,6 @@ def run_pretraining(config: Dict[str, Any], logger: logging.Logger) -> None:
     logger.info("Pretraining mode not yet implemented")
     # TODO: Implement pretraining logic
     raise NotImplementedError("Pretraining mode is not yet implemented")
-
 
 
 def main():
@@ -322,21 +241,9 @@ Examples:
   # Run inference
   python main.py --task inference --config config/inference.yaml --checkpoint /path/to/model
         """,
-        """,
     )
-
 
     # Required arguments
-    parser.add_argument(
-        "--task",
-        choices=["pretrain", "fine_tune", "inference"],
-        required=True,
-        help="Task to perform",
-    )
-    parser.add_argument(
-        "--config", type=str, required=True, help="Path to configuration file (YAML)"
-    )
-
     parser.add_argument(
         "--task",
         choices=["pretrain", "fine_tune", "inference"],
@@ -380,42 +287,7 @@ Examples:
         "--datasets", nargs="+", help="Specific datasets to train on (default: all)"
     )
 
-    parser.add_argument(
-        "--model",
-        choices=["dismir", "epigenbert2", "methylbert"],
-        help="Model architecture (overrides config)",
-    )
-    parser.add_argument(
-        "--data-path", type=str, help="Path to data directory (overrides config)"
-    )
-    parser.add_argument(
-        "--max-seq-length", type=int, help="Maximum sequence length (overrides config)"
-    )
-    parser.add_argument(
-        "--checkpoint", type=str, help="Path to model checkpoint for inference"
-    )
-    parser.add_argument(
-        "--bam", type=str, help="Path to input BAM file (inference mode)"
-    )
-    parser.add_argument(
-        "--atlas", type=str, help="Path to atlas TSV file (inference mode)"
-    )
-    parser.add_argument(
-        "--labels-dict",
-        type=str,
-        help="Path to labels dictionary JSON (inference mode)",
-    )
-    parser.add_argument(
-        "--output-dir", type=str, help="Output directory for inference results"
-    )
-    parser.add_argument(
-        "--datasets", nargs="+", help="Specific datasets to train on (default: all)"
-    )
-
     # MLflow overrides
-    parser.add_argument("--mlflow-uri", type=str, help="MLflow tracking URI")
-    parser.add_argument("--experiment-name", type=str, help="MLflow experiment name")
-
     parser.add_argument("--mlflow-uri", type=str, help="MLflow tracking URI")
     parser.add_argument("--experiment-name", type=str, help="MLflow experiment name")
 
@@ -425,59 +297,37 @@ Examples:
         "--dry-run", action="store_true", help="Validate configuration without running"
     )
 
-    parser.add_argument(
-        "--log-file", type=str, help="Path to output log file (optional)"
-    )
-
     args = parser.parse_args()
 
-
     # Setup logging
-    logger = setup_logging(args.verbose, args.log_file)
+    logger = setup_logging(args.verbose)
     logger.info(f"Starting MethylDL application - Task: {args.task}")
-
 
     try:
         # Load configuration
         config = load_config(args.config)
         logger.info(f"Loaded configuration from {args.config}")
 
-
         # Apply command-line overrides
         if args.model:
             if "model" not in config:
                 config["model"] = {}
             config["model"]["architecture"] = args.model
-            if "model" not in config:
-                config["model"] = {}
-            config["model"]["architecture"] = args.model
             logger.info(f"Override: model = {args.model}")
-
 
         if args.data_path:
             config["data_path"] = args.data_path
-            config["data_path"] = args.data_path
             logger.info(f"Override: data_path = {args.data_path}")
-
 
         if args.max_seq_length:
             config["max_sequence_length"] = args.max_seq_length
-            config["max_sequence_length"] = args.max_seq_length
             logger.info(f"Override: max_sequence_length = {args.max_seq_length}")
-
 
         if args.checkpoint:
             config["checkpoint_path"] = args.checkpoint
-            config["checkpoint_path"] = args.checkpoint
             logger.info(f"Override: checkpoint_path = {args.checkpoint}")
 
-
         # Inference-specific overrides
-        if hasattr(args, "bam") and args.bam:
-            if "input" not in config:
-                config["input"] = {}
-            config["input"]["type"] = "bam"
-            config["input"]["bam_path"] = args.bam
         if hasattr(args, "bam") and args.bam:
             if "input" not in config:
                 config["input"] = {}
@@ -487,12 +337,8 @@ Examples:
 
         if hasattr(args, "atlas") and args.atlas:
             config["atlas_path"] = args.atlas
-        if hasattr(args, "atlas") and args.atlas:
-            config["atlas_path"] = args.atlas
             logger.info(f"Override: atlas_path = {args.atlas}")
 
-        if hasattr(args, "labels_dict") and args.labels_dict:
-            config["labels_dict_path"] = args.labels_dict
         if hasattr(args, "labels_dict") and args.labels_dict:
             config["labels_dict_path"] = args.labels_dict
             logger.info(f"Override: labels_dict_path = {args.labels_dict}")
@@ -501,74 +347,49 @@ Examples:
             if "output" not in config:
                 config["output"] = {}
             config["output"]["output_dir"] = args.output_dir
-        if hasattr(args, "output_dir") and args.output_dir:
-            if "output" not in config:
-                config["output"] = {}
-            config["output"]["output_dir"] = args.output_dir
             logger.info(f"Override: output.output_dir = {args.output_dir}")
 
         if args.datasets:
             config["datasets"] = args.datasets
-            config["datasets"] = args.datasets
             logger.info(f"Override: datasets = {args.datasets}")
-
 
         if args.mlflow_uri:
             if "mlflow" not in config:
                 config["mlflow"] = {}
             config["mlflow"]["tracking_uri"] = args.mlflow_uri
-            if "mlflow" not in config:
-                config["mlflow"] = {}
-            config["mlflow"]["tracking_uri"] = args.mlflow_uri
             logger.info(f"Override: MLflow URI = {args.mlflow_uri}")
-
 
         if args.experiment_name:
             if "mlflow" not in config:
                 config["mlflow"] = {}
             config["mlflow"]["experiment_name"] = args.experiment_name
-            if "mlflow" not in config:
-                config["mlflow"] = {}
-            config["mlflow"]["experiment_name"] = args.experiment_name
             logger.info(f"Override: experiment_name = {args.experiment_name}")
-
 
         # Validate configuration
         validate_config(config, args.task)
         logger.info("Configuration validated successfully")
 
-
         if args.dry_run:
             logger.info(
-                
                 "Dry run mode - Configuration is valid, exiting without execution"
-            
             )
             return 0
 
-
         # Execute task
-        if args.task == "fine_tune":
         if args.task == "fine_tune":
             run_fine_tuning(config, logger)
         elif args.task == "inference":
-        elif args.task == "inference":
             run_inference(config, logger)
-        elif args.task == "pretrain":
         elif args.task == "pretrain":
             run_pretraining(config, logger)
 
-
         logger.info("Task completed successfully")
         return 0
-
 
     except Exception as e:
         logger.error(f"Error: {e}", exc_info=True)
         return 1
 
 
-
 if __name__ == "__main__":
     sys.exit(main())
-

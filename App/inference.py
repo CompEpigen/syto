@@ -31,7 +31,6 @@ from methyldl.modelling.classifiers.methylbert import (
     MethylBertFinetuneDataset,
     methylbert_finetune_collator,
     default_methylbert_config,
-    default_methylbert_config,
 )
 
 from methyldl.data import LOYFER_CELL_TYPE_MATCH_DICT
@@ -50,14 +49,12 @@ from methyldl.deconvolution.uxm import (
     uxm_deconvolution,
     rearange_uxm_deconvolution_results,
     load_atlas,
-    load_atlas,
 )
 
 from methyldl.deconvolution.xgbdeconvolver import (
     XGBoostDeconvolver,
     XGBDeconvolverConfig,
 )
-
 
 
 class InferencePipeline:
@@ -96,20 +93,6 @@ class InferencePipeline:
             f"Loaded labels dictionary with {len(self.labels_dict)} cell types"
         )
 
-        # ── Load cell-type matching dictionary (optional) ───────────────
-        # ct_match_path = config.get("cell_type_match_dict_path")
-        # if ct_match_path:
-        #     with open(ct_match_path, "r") as f:
-        #         self.cell_type_match_dict: Dict[str, str] = json.load(f)
-        #     self.logger.info(
-        #         f"Loaded cell-type match dict with {len(self.cell_type_match_dict)} entries"
-        #     )
-        # else:
-        #     self.logger.info(
-        #         f"No cell-type match dict was provided. Assuming identity mapping."
-        #     )
-        #     # Identity mapping – atlas target names already match labels_dict
-        #     self.cell_type_match_dict = {}
         self.cell_type_match_dict = LOYFER_CELL_TYPE_MATCH_DICT
 
         # ── Load atlas ──────────────────────────────────────────────────
@@ -147,7 +130,7 @@ class InferencePipeline:
             self.processed_reads = self._load_parsed_reads()
         elif input_cfg["type"] == "predicted_reads":
             self.predictions_df = self._load_reads_with_predictions()
-            self.prepared_reads = self.predictions_df   # For UXM to work
+            self.prepared_reads = self.predictions_df  # For UXM to work
             self.logger.info(
                 f"Classified reads were provided: {len(self.predictions_df)} processed reads. Proceeding with deconvolution."
             )
@@ -210,11 +193,9 @@ class InferencePipeline:
         # Resolve chromosomes
         chromosomes = input_cfg.get("chromosomes", "all")
         if chromosomes == "all":
-            chromosomes = [f"chr{i}" for i in range(1,  23)]
+            chromosomes = [f"chr{i}" for i in range(1, 23)]
             chromosomes += ["chrX"]
             chromosomes += ["chrY"]
-
-        self.logger.info(f"Processing BAM: {bam_path} ({len(chromosomes)} chromosomes)")
 
         self.logger.info(f"Processing BAM: {bam_path} ({len(chromosomes)} chromosomes)")
 
@@ -222,16 +203,10 @@ class InferencePipeline:
             require_flags = bam_cfg.get("require_flags", 3)
         elif data_type == "ont":
             self.logger.info(
-                
                 f"ont is selected as data_type. The exclude_flags will not be used and require_flags is ovveriden to 0."
-            
             )
             require_flags = 0
         else:
-            raise ValueError(
-                "The pipeline only supports BAMS originating from WGBS or ONT"
-            )
-
             raise ValueError(
                 "The pipeline only supports BAMS originating from WGBS or ONT"
             )
@@ -282,9 +257,7 @@ class InferencePipeline:
             df = pickle.load(f)
         if not isinstance(df, pd.DataFrame):
             raise TypeError(f"Expected a pandas DataFrame in {path}, got {type(df)}")
-            raise TypeError(f"Expected a pandas DataFrame in {path}, got {type(df)}")
         return df
-
 
     def _load_reads_with_predictions(self) -> pd.DataFrame:
         """Load reads augmented with read-level predictions from a pickle file."""
@@ -293,7 +266,6 @@ class InferencePipeline:
         with open(path, "rb") as f:
             df = pickle.load(f)
         if not isinstance(df, pd.DataFrame):
-            raise TypeError(f"Expected a pandas DataFrame in {path}, got {type(df)}")
             raise TypeError(f"Expected a pandas DataFrame in {path}, got {type(df)}")
         return df
 
@@ -305,7 +277,7 @@ class InferencePipeline:
         """
         Overlap processed reads with atlas regions and resolve DMR labels.
 
-        Uses ``prepare_reads_for_uxm`` from ``methyldl.deconvolution.uxm``, which:
+        Uses ``prepare_reads_for_uxm`` from edautils, which:
         - iterates atlas regions and scans sorted reads for overlaps
         - trims reads to region boundaries
         - computes M / U / X counts
@@ -347,17 +319,7 @@ class InferencePipeline:
             seq_length=seq_length,
             stride=int(seq_length / 2),
         )
-        prepared_uxm.rename(
-            columns={"seq": "input_ids", "pattern": "methylation_ids"}, inplace=True
-        )
-        chunked_inputs = prepare_methylbert_list_inference(
-            prepared_uxm,
-            "dmr_ctype_label",
-            seq_length=seq_length,
-            stride=int(seq_length / 2),
-        )
 
-        return prepared_uxm, chunked_inputs
         return prepared_uxm, chunked_inputs
 
     # ═══════════════════════════════════════════════════════════════════
@@ -421,29 +383,6 @@ class InferencePipeline:
                 ("seed", 950410),
             ]
         )
-        rrms_config = OrderedDict(
-            [
-                ("lr", 0.0004),
-                ("beta", (0.9, 0.98)),
-                ("weight_decay", 0.1),
-                ("warmup_step", 100),
-                ("eps", 1e-6),
-                ("with_cuda", True),
-                ("log_freq", 200),
-                ("eval_freq", 200),
-                ("n_hidden", None),
-                ("decrease_steps", 200),
-                ("eval", False),
-                ("amp", True),
-                ("gradient_accumulation_steps", 1),
-                ("max_grad_norm", 1.0),
-                ("save_freq", None),
-                ("loss", "ce"),
-                ("adam_beta1", 0.9),
-                ("adam_beta2", 0.98),
-                ("seed", 950410),
-            ]
-        )
 
         model_instance = MethylBert(
             foundation_model_path=model_cfg.get(
@@ -455,13 +394,13 @@ class InferencePipeline:
             num_labels=num_labels,
             num_dmr_labels=num_dmr_labels,
             output_dir=os.path.join(self.config["output"]["output_dir"], "tmp_trainer"),
-            output_dir=os.path.join(self.config["output"]["output_dir"], "tmp_trainer"),
             classifier_implementation="dmr_attention_based",
             batch_size=batch_size,
         )
 
         # ── Run predictions ────────────────────────────────────────────
         self.logger.info("Running MethylBERT predictions ...")
+        print(dataset.__getitem__(0))
         predictions = model_instance.predict(
             dataset,
             batch_size=batch_size,
@@ -491,13 +430,13 @@ class InferencePipeline:
     def _aggregate_to_dmr(self) -> pd.DataFrame:
         """
         Aggregate read-level predictions to DMR level using
-        ``aggregate_predictions_by_dmr`` from ``methyldl.modelling.prediction_aggregation``.
+        ``aggregate_predictions_by_dmr`` from edautils.
         """
         self.logger.info("Aggregating predictions by DMR ...")
 
         aggregated = aggregate_predictions_by_dmr(
             df=self.predictions_df,
-            group_cols=["dmr_ctype_label",  "dmr_ctype"],
+            group_cols=["dmr_ctype_label", "dmr_ctype"],
             weight_col="NCPGS",
             create_weight_from_cpgs=False,
             fill_in_missing_labels=self.fill_in_missing_labels,
@@ -551,7 +490,6 @@ class InferencePipeline:
         return results
 
     def _run_xgboost_deconvolution(self, method_cfg: Dict[str, Any]) -> np.ndarray:
-    def _run_xgboost_deconvolution(self, method_cfg: Dict[str, Any]) -> np.ndarray:
         """
         Run XGBoost-based deconvolution.
 
@@ -576,8 +514,6 @@ class InferencePipeline:
         self.logger.debug(f"XGBoost proportions: {proportions}")
 
         return proportions
-
-    def _run_nn_deconvolution(self, method_cfg: Dict[str, Any]) -> np.ndarray:
 
     def _run_nn_deconvolution(self, method_cfg: Dict[str, Any]) -> np.ndarray:
         """
@@ -637,10 +573,6 @@ class InferencePipeline:
                 "Architecture for NN method should be either Shallow_Wide_Network or 3Layer_MLP"
             )
         device = "cuda"
-            raise ValueError(
-                "Architecture for NN method should be either Shallow_Wide_Network or 3Layer_MLP"
-            )
-        device = "cuda"
         deconvolver.to(device)
         deconvolver.load_state_dict(torch.load(checkpoint_path, weights_only=True))
         deconvolver.eval()
@@ -655,7 +587,7 @@ class InferencePipeline:
         # X = torch.unsqueeze(X,0)
         # X = torch.concat([torch.diagonal(X[:, :, :39], dim1=1, dim2=2),X[:, :, -1]], dim=1)
         deconv_preds = deconvolver(X)
-        proportions = np.round(deconv_preds.to("cpu").detach().numpy(),  4)
+        proportions = np.round(deconv_preds.to("cpu").detach().numpy(), 4)
         self.logger.debug(f"{architecture} proportions: {proportions}")
 
         return proportions
@@ -682,12 +614,11 @@ class InferencePipeline:
 
         # Align proportions to match labels_dict order
         ref_cells = [x for x in ref_cells if x != "Megakaryocytes"]
-        ref_cells = [x for x in ref_cells if x != "Megakaryocytes"]
 
         proportions_aligned = rearange_uxm_deconvolution_results(
             self.labels_dict_reversed, uxm_proportions, ref_cells
         )
-        proportions_aligned = np.round(np.array(proportions_aligned),  4)
+        proportions_aligned = np.round(np.array(proportions_aligned), 4)
 
         self.logger.debug(f"UXM proportions: {proportions_aligned}")
         return proportions_aligned
@@ -734,7 +665,6 @@ class InferencePipeline:
 
         return self._extract_diag_and_rej(matrix)
 
-
     def _build_uxm_input(
         self, uxm_atlas: pd.DataFrame, ref_cells: list
     ) -> Dict[str, Any]:
@@ -755,19 +685,9 @@ class InferencePipeline:
         results_agg["count"] = (
             results_agg["record_M"] + results_agg["record_U"] + results_agg["record_X"]
         )
-        results_agg = (
-            prepared[prepared["NCPGS"] > 3]
-            .groupby("name")
-            .aggregate({"record_M": "sum", "record_U": "sum", "record_X": "sum"})
-            .reset_index()
-        )
-        results_agg["count"] = (
-            results_agg["record_M"] + results_agg["record_U"] + results_agg["record_X"]
-        )
         results_agg["sf"] = results_agg["record_U"] / results_agg["count"]
-        #  TODO: Derrive direction from the source
+        # TODO: Derrive direction from the source
         results_agg["direction"] = "U"
-        sample_name = "sample"
         sample_name = "sample"
 
         sf = deepcopy(results_agg[["name", "direction"]])
@@ -792,11 +712,8 @@ class InferencePipeline:
 
         # ── Processed reads (pickle) ───────────────────────────────────
         if (
-            (
             output_cfg.get("save_processed_reads", True)
-           
             and self.processed_reads is not None
-        )
         ):
             path = os.path.join(output_dir, "processed_reads.pkl")
             with open(path, "wb") as f:
@@ -817,9 +734,7 @@ class InferencePipeline:
 
                 if isinstance(proportions, np.ndarray):
                     prop_df = pd.DataFrame(
-                        
-                        [list(self.labels_dict.values()),  proportions.flatten()]
-                    
+                        [list(self.labels_dict.values()), proportions.flatten()]
                     ).T
                     prop_df.columns = ["CellType", method_name]
                 elif isinstance(proportions, pd.DataFrame):

@@ -90,9 +90,9 @@ def prepare_methylbert_list_inference(
             dna = " ".join([x[0] for x in chunk])
             methyl = "".join([x[1] for x in chunk])
             ncpgs_marked = methyl.count("0") + methyl.count("1")
-
-            label = 39
-            o_label = 39
+            # TODO: remove labels consistently from the chunks 
+            label = 0
+            o_label = 0
             dmr_label = row[dmr_label_column]
             dmr_ctype = row["dmr_ctype_label"]
 
