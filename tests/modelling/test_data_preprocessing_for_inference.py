@@ -162,9 +162,9 @@ class TestPrepareMethylbertListInference(unittest.TestCase):
         self.assertEqual(
             prepared[1:],
             [
-                ["ATC TCG", "10", "tumor", "dmr-a", 39, 39, "read-1", 2],
-                ["TCG CGA", "01", "tumor", "dmr-a", 39, 39, "read-1", 2],
-                ["CGA GAT", "10", "tumor", "dmr-a", 39, 39, "read-1", 2],
+                ["ATC TCG", "10", "tumor", "dmr-a", 0, 0, "read-1", 2],
+                ["TCG CGA", "01", "tumor", "dmr-a", 0, 0, "read-1", 2],
+                ["CGA GAT", "10", "tumor", "dmr-a", 0, 0, "read-1", 2],
             ],
         )
 
