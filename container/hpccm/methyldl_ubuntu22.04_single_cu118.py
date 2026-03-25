@@ -65,11 +65,24 @@ Stage0 += copy(src="./poetry.lock", dest="/workspace/methyldl/poetry.lock")
 # Set working directory
 Stage0 += workdir(directory="/workspace/methyldl")
 
+# # Install dependencies first (better caching)
+# Stage0 += shell(commands=[
+#     'cd /workspace/methyldl',
+#     'poetry install --no-root --no-interaction --no-ansi',
+#     'poetry cache clear pypi --all -n'
+# ])
+
 # Install dependencies first (better caching)
+# Install dependencies
 Stage0 += shell(
     commands=[
         "cd /workspace/methyldl",
+        # 1. Let Poetry install everything (including the WRONG torch version)
         "poetry install --no-root --no-interaction --no-ansi",
+        # 2. FORCE OVERWRITE torch with the P100-compatible version (CUDA 11.8)
+        # We use the pip inside the .venv directly to bypass Poetry's checks
+        "./.venv/bin/pip install --force-reinstall torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118",
+        # 3. Clean up
         "poetry cache clear pypi --all -n",
     ]
 )
@@ -82,6 +95,7 @@ Stage0 += copy(
     src="./foundationalModels", dest="/workspace/methyldl/foundationalModels"
 )
 Stage0 += copy(src="./tests", dest="/workspace/methyldl/tests")
+Stage0 += copy(src="./EDA/edautils.py", dest="/workspace/EDA/edautils.py")
 
 # Install the package itself
 Stage0 += shell(
@@ -92,6 +106,13 @@ Stage0 += shell(
 )
 
 # Set environment variables
+# 6.0	Tesla P100	Required for older HPC clusters (VSC genius).
+# 7.0	Tesla V100	Extremely common in research clusters (VSC genius).
+# 7.5	RTX 6000 (Turing) / T4
+# 8.0	A100	High-end HPC standard.
+# 8.6+	RTX 3090 / A6000 / L40	Newer consumer and enterprise cards.
+# 9.0    H100
+
 Stage0 += environment(
     variables={
         "PATH": "/workspace/methyldl/.venv/bin:$PATH",
@@ -99,7 +120,7 @@ Stage0 += environment(
         "PYTHONPATH": "/workspace/methyldl:$PYTHONPATH",
         "CUDA_HOME": "/usr/local/cuda",
         "LD_LIBRARY_PATH": "/usr/local/cuda/lib64:$LD_LIBRARY_PATH",
-        "TORCH_CUDA_ARCH_LIST": '"7.5;8.0;8.6;8.9;9.0"',
+        "TORCH_CUDA_ARCH_LIST": '"6.0;7.0;7.2;7.5;8.0;8.6;8.9;9.0"',
         "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
         "TRANSFORMERS_CACHE": "/workspace/cache/huggingface",
         "HF_HOME": "/workspace/cache/huggingface",

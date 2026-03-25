@@ -743,6 +743,7 @@ class TestMethylBertPretrainDataset(unittest.TestCase):
 
     def test_pretrain_dataset_from_file(self):
         """Test pretrain dataset creation from file."""
+        from methyldl.data.dataset import generate_example_data_for_methylbert
 
         # Generate synthetic data
         data = generate_example_data_for_methylbert(
@@ -893,6 +894,170 @@ class TestMethylBertPretrainDataset(unittest.TestCase):
             self.assertEqual(item["bert_mask"].shape[0], 7)
         finally:
             os.unlink(temp_file)
+
+
+class TestMethylBertSoftCollator(unittest.TestCase):
+    """Test suite for methylbert_finetune_soft_collator."""
+
+    def test_soft_finetune_collator(self):
+        """Test soft-label collator stacks float labels and on_target_mask."""
+        from methyldl.modelling.classifiers.methylbert import (
+            methylbert_finetune_soft_collator,
+        )
+
+        num_classes = 5
+        features = [
+            {
+                "input_ids": torch.randint(0, 10, (150,)),
+                "token_type_ids": torch.randint(0, 3, (150,)),
+                "labels": torch.softmax(torch.randn(num_classes), dim=-1),
+                "dmr_ids": 1,
+                "on_target_mask": torch.tensor(True),
+            },
+            {
+                "input_ids": torch.randint(0, 10, (150,)),
+                "token_type_ids": torch.randint(0, 3, (150,)),
+                "labels": torch.softmax(torch.randn(num_classes), dim=-1),
+                "dmr_ids": 2,
+                "on_target_mask": torch.tensor(False),
+            },
+        ]
+
+        batch = methylbert_finetune_soft_collator(features)
+
+        # Check batch structure
+        self.assertIn("input_ids", batch)
+        self.assertIn("labels", batch)
+        self.assertIn("dmr_ids", batch)
+        self.assertIn("on_target_mask", batch)
+
+        # Labels should be float tensors of shape [batch_size, num_classes]
+        self.assertEqual(batch["labels"].shape, (2, num_classes))
+        self.assertEqual(batch["labels"].dtype, torch.float32)
+
+        # dmr_ids should be long
+        self.assertEqual(batch["dmr_ids"].dtype, torch.long)
+
+    def test_soft_finetune_collator_with_list_labels(self):
+        """Test that collator handles list labels (non-tensor) too."""
+        from methyldl.modelling.classifiers.methylbert import (
+            methylbert_finetune_soft_collator,
+        )
+
+        features = [
+            {
+                "input_ids": torch.randint(0, 10, (150,)),
+                "token_type_ids": torch.randint(0, 3, (150,)),
+                "labels": [0.8, 0.1, 0.1],
+                "dmr_ids": 0,
+                "on_target_mask": torch.tensor(True),
+            },
+        ]
+
+        batch = methylbert_finetune_soft_collator(features)
+        self.assertEqual(batch["labels"].shape, (1, 3))
+        self.assertEqual(batch["labels"].dtype, torch.float32)
+
+
+class TestMethylBertSoftLabelLossSetup(unittest.TestCase):
+    """Test loss setup for soft-label loss types."""
+
+    def _build_small_hf_config(self, num_labels=5, loss="cwce"):
+        config = BertConfig(
+            vocab_size=80,
+            hidden_size=12,
+            num_hidden_layers=1,
+            num_attention_heads=3,
+            intermediate_size=24,
+            max_position_embeddings=32,
+            type_vocab_size=3,
+        )
+        config.num_labels = num_labels
+        config.num_dmr_labels = 4
+        config.loss = loss
+        return config
+
+    def test_setup_loss_cwce(self):
+        """Verify _setup_loss('cwce') returns ConfidenceWeightedCrossEntropy."""
+        from methyldl.modelling.loss import ConfidenceWeightedCrossEntropy
+
+        config = self._build_small_hf_config(num_labels=5, loss="cwce")
+        model = MethylBertEmbeddedDMR(config, seq_len=5)
+        self.assertIsInstance(
+            model.classification_loss_fct, ConfidenceWeightedCrossEntropy
+        )
+
+    def test_setup_loss_on_target_ce(self):
+        """Verify _setup_loss('on_target_ce') returns OnTargetSoftLoss."""
+        from methyldl.modelling.loss import OnTargetSoftLoss
+
+        config = self._build_small_hf_config(num_labels=5, loss="on_target_ce")
+        model = MethylBertEmbeddedDMR(config, seq_len=5)
+        self.assertIsInstance(model.classification_loss_fct, OnTargetSoftLoss)
+
+
+class TestMethylBertSoftLabelForward(unittest.TestCase):
+    """Test forward pass with soft labels."""
+
+    def _build_small_hf_config(self, num_labels=5, loss="cwce"):
+        config = BertConfig(
+            vocab_size=80,
+            hidden_size=12,
+            num_hidden_layers=1,
+            num_attention_heads=3,
+            intermediate_size=24,
+            max_position_embeddings=32,
+            type_vocab_size=3,
+        )
+        config.num_labels = num_labels
+        config.num_dmr_labels = 4
+        config.loss = loss
+        return config
+
+    def test_forward_with_soft_labels_cwce(self):
+        """Forward pass with loss='cwce' and 2D float soft labels should compute loss."""
+        config = self._build_small_hf_config(num_labels=5, loss="cwce")
+        model = MethylBertEmbeddedDMR(config, seq_len=5)
+
+        input_ids = torch.randint(5, 20, (2, 6))
+        token_type_ids = torch.randint(0, 3, (2, 6))
+        # Soft labels: [batch_size, num_classes]
+        soft_labels = torch.softmax(torch.randn(2, 5), dim=-1)
+        dmr_ids = torch.tensor([1, 2], dtype=torch.long)
+
+        output = model(
+            input_ids=input_ids,
+            token_type_ids=token_type_ids,
+            labels=soft_labels,
+            dmr_ids=dmr_ids,
+        )
+
+        self.assertIsNotNone(output.loss)
+        self.assertFalse(torch.isnan(output.loss))
+        self.assertEqual(output.logits.shape, (2, 5))
+
+    def test_forward_with_soft_labels_on_target_ce(self):
+        """Forward pass with loss='on_target_ce', soft labels, and on_target_mask."""
+        config = self._build_small_hf_config(num_labels=5, loss="on_target_ce")
+        model = MethylBertEmbeddedDMR(config, seq_len=5)
+
+        input_ids = torch.randint(5, 20, (2, 6))
+        token_type_ids = torch.randint(0, 3, (2, 6))
+        soft_labels = torch.softmax(torch.randn(2, 5), dim=-1)
+        dmr_ids = torch.tensor([1, 2], dtype=torch.long)
+        on_target_mask = torch.tensor([True, False])
+
+        output = model(
+            input_ids=input_ids,
+            token_type_ids=token_type_ids,
+            labels=soft_labels,
+            dmr_ids=dmr_ids,
+            on_target_mask=on_target_mask,
+        )
+
+        self.assertIsNotNone(output.loss)
+        self.assertFalse(torch.isnan(output.loss))
+        self.assertEqual(output.logits.shape, (2, 5))
 
 
 if __name__ == "__main__":

@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import List, Literal, Optional, Callable, Union, Dict, Tuple
 import numpy as np
 from methyldl.deconvolution.evaluation import (
-    compute_deconvolution_metrics_np,
+    compute_deconvolution_metrics,
     compute_combined_loss,
 )
 
@@ -286,7 +286,7 @@ class XGBoostDeconvolver:
         # Compute final metrics
         train_pred_raw = self._predict_raw(X_train_feat)
         train_pred = self._transform_output(train_pred_raw)
-        train_metrics = compute_deconvolution_metrics_np(train_pred, y_train)
+        train_metrics = compute_deconvolution_metrics(train_pred, y_train)
         train_loss = compute_combined_loss(train_pred, y_train, **loss_weights)
 
         self.history.train_loss.append(train_loss)
@@ -299,7 +299,7 @@ class XGBoostDeconvolver:
         if X_val is not None and y_val is not None:
             val_pred_raw = self._predict_raw(X_val_feat)
             val_pred = self._transform_output(val_pred_raw)
-            val_metrics = compute_deconvolution_metrics_np(val_pred, y_val)
+            val_metrics = compute_deconvolution_metrics(val_pred, y_val)
             val_loss = compute_combined_loss(val_pred, y_val, **loss_weights)
 
             self.history.val_loss.append(val_loss)
@@ -374,7 +374,7 @@ class XGBoostDeconvolver:
             loss_weights = {"mse": 1.0, "kl": 0.5}
 
         pred = self.predict(X)
-        metrics = compute_deconvolution_metrics_np(pred, y)
+        metrics = compute_deconvolution_metrics(pred, y)
         metrics["loss"] = compute_combined_loss(pred, y, **loss_weights)
 
         return metrics
@@ -446,6 +446,11 @@ def train_xgb_deconvolver(
     X_val: np.ndarray,
     y_val: np.ndarray,
     config: Optional[XGBDeconvolverConfig] = None,
+    n_dmr_groups=39,
+    n_pred_classes=40,
+    n_cell_types=39,
+    with_reject_features=True,
+    process_inputs=True,
     output_transform: Literal["none", "clip_normalize", "softmax"] = "clip_normalize",
     loss_weights: Optional[Dict[str, float]] = None,
     early_stopping_metric: str = "val_mae",
@@ -465,7 +470,15 @@ def train_xgb_deconvolver(
     if config is None:
         config = XGBDeconvolverConfig(early_stopping_rounds=early_stopping_patience)
 
-    model = XGBoostDeconvolver(config=config, output_transform=output_transform)
+    model = XGBoostDeconvolver(
+        config=config,
+        output_transform=output_transform,
+        n_dmr_groups=n_dmr_groups,
+        n_pred_classes=n_pred_classes,
+        n_cell_types=n_cell_types,
+        with_reject_features=with_reject_features,
+        process_inputs=process_inputs,
+    )
 
     model.fit(
         X_train,

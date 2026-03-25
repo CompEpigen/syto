@@ -23,6 +23,7 @@ import itertools
 from methyldl.modelling.evaluation import (
     compute_metrics,
     preprocess_logits_for_prediction,
+    compute_metrics_soft_labels,
 )
 
 from torch.utils.data import Dataset
@@ -32,6 +33,7 @@ import multiprocessing as mp
 from functools import partial
 import pickle
 from methyldl.modelling.common import DMRAttentionClassifier
+from methyldl.modelling.loss import ConfidenceWeightedCrossEntropy, OnTargetSoftLoss
 
 default_methylbert_config = OrderedDict(
     [
@@ -60,13 +62,36 @@ default_methylbert_config = OrderedDict(
 
 def methylbert_finetune_collator(features):
     """
-    Batch features that are already in the correct format.
+    Batch features that are already in the correct format (hard labels).
     """
     return {
         "input_ids": torch.stack([f["input_ids"] for f in features]),
         "token_type_ids": torch.stack([f["token_type_ids"] for f in features]),
         "labels": torch.tensor([f["labels"] for f in features], dtype=torch.long),
         "dmr_ids": torch.tensor([f["dmr_ids"] for f in features], dtype=torch.long),
+    }
+
+
+def methylbert_finetune_soft_collator(features):
+    """
+    Batch features for soft-label fine-tuning.
+    Labels are stacked as float tensors of shape [batch_size, num_classes].
+    """
+    return {
+        "input_ids": torch.stack([f["input_ids"] for f in features]),
+        "token_type_ids": torch.stack([f["token_type_ids"] for f in features]),
+        "labels": torch.stack(
+            [
+                (
+                    f["labels"]
+                    if isinstance(f["labels"], torch.Tensor)
+                    else torch.tensor(f["labels"], dtype=torch.float)
+                )
+                for f in features
+            ]
+        ),
+        "dmr_ids": torch.tensor([f["dmr_ids"] for f in features], dtype=torch.long),
+        "on_target_mask": torch.stack([f["on_target_mask"] for f in features]),
     }
 
 
@@ -270,7 +295,7 @@ class MethylBertEmbeddedDMR(BertPreTrainedModel):
         if not hasattr(config, "loss"):
             config.loss = "bce"  # Default loss
 
-        if config.loss not in ["bce", "focal_bce", "ce"]:
+        if config.loss not in ["bce", "focal_bce", "ce", "cwce", "on_target_ce"]:
             raise ValueError(
                 f"loss must be bce, focal_bce, or ce. {config.loss} is given."
             )
@@ -325,6 +350,15 @@ class MethylBertEmbeddedDMR(BertPreTrainedModel):
         elif loss == "ce":
             print("Cross Entropy loss assigned (multi-class)")
             return nn.CrossEntropyLoss()
+        elif loss == "cwce":
+            print("Confidence Weighted Cross Entropy assigned (multi-class)")
+            return ConfidenceWeightedCrossEntropy(self.num_labels)
+        elif loss == "on_target_ce":
+            print("On Target Confidence Weighted Cross Entropy assigned (multi-class)")
+            Warning(
+                "Make sure that dmr_ids are matching target labels!!! Otherwise, it wouldn't work and your model will likely not to learn anything usefull."
+            )
+            return OnTargetSoftLoss(self.num_labels)
         else:
             raise ValueError(f"Unknown loss type: {loss}")
 
@@ -367,6 +401,7 @@ class MethylBertEmbeddedDMR(BertPreTrainedModel):
         inputs_embeds=None,
         labels=None,  # Cell Type labels
         dmr_ids=None,  # DMR labels
+        on_target_mask=None,  # Whether or not the read is on target
     ):
         outputs = self.bert(
             input_ids,
@@ -410,10 +445,20 @@ class MethylBertEmbeddedDMR(BertPreTrainedModel):
                 loss = self.classification_loss_fct(
                     ctype_logits.squeeze(), labels.float()
                 )
+            elif labels.ndim >= 2 and labels.shape[-1] == self.num_labels:
+                # Soft labels: already a [B, C] probability distribution
+                if self.loss == "on_target_ce":
+                    loss = self.classification_loss_fct(
+                        ctype_logits, labels.float(), on_target_mask
+                    )
+                else:
+                    loss = self.classification_loss_fct(ctype_logits, labels.float())
+
             elif self.num_labels == 2 and self.loss in ["bce", "focal_bce"]:
                 ctype_label_onehot = F.one_hot(labels, num_classes=2).float()
                 loss = self.classification_loss_fct(ctype_logits, ctype_label_onehot)
             else:
+                # Hard labels with CE
                 loss = self.classification_loss_fct(ctype_logits, labels)
 
         return MethylBertOutput(
@@ -444,15 +489,18 @@ class MethylBert:
         batch_size=None,
         lazy_tokenization=False,
         cache_dir="./cache",
-        classifier_implementation: str = "vanilla",  # NEW PARAMETER
+        classifier_implementation: str = "vanilla",
+        soft_labels: bool = False,
     ):
         """
-        Extended initialization with classifier implementation selection.
+        Extended initialization with classifier implementation and soft label selection.
 
         Args:
             ... (existing parameters) ...
             classifier_implementation: str
                 Choice of classifier: "vanilla" or "dmr_attention_based"
+            soft_labels: bool
+                If True, use soft-label collator and tokenizer for probability vectors.
         """
         if custom_config is None:
             raise ValueError("Must provide a custom_config dictionary.")
@@ -462,6 +510,7 @@ class MethylBert:
         self.lazy_tokenization = lazy_tokenization
         self.cache_dir = cache_dir
         self.classifier_implementation = classifier_implementation
+        self.soft_labels = soft_labels
 
         # Validate classifier implementation
         if classifier_implementation not in ["vanilla", "dmr_attention_based"]:
@@ -605,10 +654,10 @@ class MethylBert:
 
         # fallback to a user-provided or default data_collator
         if data_collator is None:
-            # default to a finetune data collator, or pretrain, or ...
-            data_collator = (
-                methylbert_finetune_collator  # default is one for fine-tuning
-            )
+            if self.soft_labels:
+                data_collator = methylbert_finetune_soft_collator
+            else:
+                data_collator = methylbert_finetune_collator
 
         args = self.training_args
         if prediction_mode:
@@ -630,7 +679,9 @@ class MethylBert:
             tokenizer=self.tokenizer,
             data_collator=data_collator,
             preprocess_logits_for_metrics=preprocessing_function,
-            compute_metrics=compute_metrics,
+            compute_metrics=(
+                compute_metrics if not self.soft_labels else compute_metrics_soft_labels
+            ),
             callbacks=callbacks,
         )
 
@@ -645,6 +696,7 @@ class MethylBert:
         data_collator=None,
         training_args=None,
         callbacks: Optional[List[TrainerCallback]] = None,
+        resume_from_checkpoint: Optional[Union[bool, str]] = None,
     ):
         """
         Fine-tune your model on a training set, optional validation set, etc.
@@ -679,8 +731,19 @@ class MethylBert:
             custom_training_args=training_args,
             callbacks=callbacks,
         )
+        checkpoint_path = None
+        if resume_from_checkpoint is not None:
+            if isinstance(resume_from_checkpoint, bool) and resume_from_checkpoint:
+                # Resume from the last checkpoint in output_dir
+                checkpoint_path = True
+            elif isinstance(resume_from_checkpoint, str):
+                # Resume from specific checkpoint path
+                checkpoint_path = resume_from_checkpoint
+        elif hasattr(self, "resume_from_checkpoint") and self.resume_from_checkpoint:
+            # Use checkpoint path from initialization if provided
+            checkpoint_path = self.resume_from_checkpoint
 
-        self.trainer.train()
+        self.trainer.train(resume_from_checkpoint=checkpoint_path)
 
         # if test_dataset:
         #     results = self.trainer.evaluate(test_dataset)
@@ -844,6 +907,57 @@ def _line2tokens_finetune(l, tokenizer, max_len=150, headers=None):
     l["methyl_seq"] = [int(m) for m in l["methyl_seq"]]
 
     l["ctype_label"] = int(l["ctype"])
+    l["dmr_label"] = int(l["dmr_label"])
+
+    if len(l["dna_seq"]) > max_len:
+        l["dna_seq"] = l["dna_seq"][:max_len]
+        l["methyl_seq"] = l["methyl_seq"][:max_len]
+    else:
+        cur_seq_len = len(l["dna_seq"])
+        l["dna_seq"] = l["dna_seq"] + [
+            [tokenizer.pad_index] for k in range(max_len - cur_seq_len)
+        ]
+        l["methyl_seq"] = l["methyl_seq"] + [2 for k in range(max_len - cur_seq_len)]
+
+    return l
+
+
+def _line2tokens_finetune_soft(l, tokenizer, max_len=150, headers=None):
+    """
+    Like _line2tokens_finetune but parses soft labels.
+    The 'ctype' column should contain comma-separated floats, e.g. "0.1,0.0,0.9".
+    """
+    if not all(
+        [
+            h in headers
+            for h in ["dna_seq", "methyl_seq", "ctype", "dmr_ctype", "dmr_label"]
+        ]
+    ):
+        raise ValueError(
+            "The header must contain dna_seq, methyl_seq, ctype, dmr_ctype, dmr_label"
+        )
+
+    max_len = min(max_len, 511)
+
+    l = l.strip().split("\t")
+    if len(headers) == len(l):
+        l = {k: v for k, v in zip(headers, l)}
+    else:
+        print(headers, l)
+        raise ValueError(
+            f"Only {len(headers)} elements are in the input file header, whereas the line has {len(l)} elements."
+        )
+
+    l["dna_seq"] = l["dna_seq"].split(" ")
+    l["dna_seq"] = [[f] for f in tokenizer.to_seq(l["dna_seq"])]
+    l["methyl_seq"] = [int(m) for m in l["methyl_seq"]]
+
+    # Parse soft labels: comma-separated float vector, or array/list directly
+    if isinstance(l["ctype"], str):
+        l["ctype_label"] = [float(x) for x in l["ctype"].split(",")]
+    else:
+        # Already a list or numpy array (e.g. from in-memory data)
+        l["ctype_label"] = list(l["ctype"])
     l["dmr_label"] = int(l["dmr_label"])
 
     if len(l["dna_seq"]) > max_len:
@@ -1062,6 +1176,7 @@ class MethylBertFinetuneDataset(MethylBertDataset):
         lazy_tokenization: bool = False,
         cache_dir: Optional[str] = None,
         use_mmap: bool = False,
+        soft_labels: bool = False,
     ):
         """
         MethylBERT dataset with multiple optimization strategies for large datasets.
@@ -1090,6 +1205,12 @@ class MethylBertFinetuneDataset(MethylBertDataset):
         self.lazy_tokenization = lazy_tokenization
         self.cache_dir = cache_dir
         self.use_mmap = use_mmap
+        self.soft_labels = soft_labels
+
+        # Select the appropriate tokenizer function
+        self._tokenize_fn = (
+            _line2tokens_finetune_soft if soft_labels else _line2tokens_finetune
+        )
 
         # Create cache directory if needed
         if self.cache_dir:
@@ -1113,7 +1234,17 @@ class MethylBertFinetuneDataset(MethylBertDataset):
                 header.append("dmr_ctype")
                 for row in data_source[1:]:
                     row.append(1)
-            lines = ["\t".join(map(str, row)) for row in data_source]
+            if "on_target_mask" not in header:
+                header.append("on_target_mask")
+                for row in data_source[1:]:
+                    row.append(0)
+
+            def _serialize_val(v):
+                if isinstance(v, np.ndarray):
+                    return ",".join(str(x) for x in v)
+                return str(v)
+
+            lines = ["\t".join(_serialize_val(x) for x in row) for row in data_source]
 
         # Parse header and raw sequences
         self.headers = lines[0].split("\t")
@@ -1151,7 +1282,7 @@ class MethylBertFinetuneDataset(MethylBertDataset):
                 if len(raw_seqs) < 1000:
                     # Small dataset: process sequentially
                     self.lines = [
-                        _line2tokens_finetune(
+                        self._tokenize_fn(
                             line,
                             tokenizer=self.vocab,
                             max_len=self.seq_len,
@@ -1164,7 +1295,7 @@ class MethylBertFinetuneDataset(MethylBertDataset):
                     with mp.Pool(n_cores) as pool:
                         self.lines = pool.map(
                             partial(
-                                _line2tokens_finetune,
+                                self._tokenize_fn,
                                 tokenizer=self.vocab,
                                 max_len=self.seq_len,
                                 headers=self.headers,
@@ -1201,7 +1332,7 @@ class MethylBertFinetuneDataset(MethylBertDataset):
 
         # Tokenize
         line = self.raw_lines[index]
-        tokenized = _line2tokens_finetune(
+        tokenized = self._tokenize_fn(
             line, tokenizer=self.vocab, max_len=self.seq_len, headers=self.headers
         )
 
@@ -1268,6 +1399,15 @@ class MethylBertFinetuneDataset(MethylBertDataset):
         # Deep copy to avoid modifying cached data
         item = deepcopy(item)
 
+        mask_raw = item.get("on_target_mask", False)
+        if isinstance(mask_raw, str):
+            # Handle string representations like 'False', 'True', '0', '1'
+            is_on_target = mask_raw.lower() in ["true", "1"]
+        else:
+            is_on_target = bool(mask_raw)
+
+        on_target_tensor = torch.tensor(is_on_target, dtype=torch.bool)
+
         # Convert to tensors
         dna_seq = torch.squeeze(torch.tensor(np.array(item["dna_seq"], dtype=np.int32)))
         methyl_seq = torch.squeeze(
@@ -1286,11 +1426,18 @@ class MethylBertFinetuneDataset(MethylBertDataset):
         dna_seq = torch.cat((torch.tensor([self.vocab.sos_index]), dna_seq))
         methyl_seq = torch.cat((torch.tensor([2]), methyl_seq))
 
+        # For soft labels, return as float tensor; for hard labels, return scalar int
+        if self.soft_labels:
+            labels = torch.tensor(item["ctype_label"], dtype=torch.float)
+        else:
+            labels = item["ctype_label"]
+
         return {
             "input_ids": dna_seq,
             "token_type_ids": methyl_seq,
-            "labels": item["ctype_label"],
+            "labels": labels,
             "dmr_ids": item["dmr_label"],
+            "on_target_mask": on_target_tensor,
         }
 
     def __del__(self):

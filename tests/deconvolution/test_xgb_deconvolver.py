@@ -268,7 +268,7 @@ class TestXGBoostDeconvolverFitEvaluateAndIO(unittest.TestCase):
         self.y_val = np.array([[0.3, 0.3, 0.4], [0.2, 0.5, 0.3]], dtype=float)
 
     @patch("methyldl.deconvolution.xgbdeconvolver.compute_combined_loss")
-    @patch("methyldl.deconvolution.xgbdeconvolver.compute_deconvolution_metrics_np")
+    @patch("methyldl.deconvolution.xgbdeconvolver.compute_deconvolution_metrics")
     def test_fit_with_validation_populates_train_and_val_history(
         self, mock_metrics, mock_loss
     ):
@@ -311,7 +311,7 @@ class TestXGBoostDeconvolverFitEvaluateAndIO(unittest.TestCase):
         self.assertEqual(self.model.history.val_mae, [0.11])
 
     @patch("methyldl.deconvolution.xgbdeconvolver.compute_combined_loss")
-    @patch("methyldl.deconvolution.xgbdeconvolver.compute_deconvolution_metrics_np")
+    @patch("methyldl.deconvolution.xgbdeconvolver.compute_deconvolution_metrics")
     def test_fit_without_validation_only_populates_train_history(
         self, mock_metrics, mock_loss
     ):
@@ -333,7 +333,7 @@ class TestXGBoostDeconvolverFitEvaluateAndIO(unittest.TestCase):
         self.assertEqual(self.model.history.val_loss, [])
 
     @patch("methyldl.deconvolution.xgbdeconvolver.compute_combined_loss")
-    @patch("methyldl.deconvolution.xgbdeconvolver.compute_deconvolution_metrics_np")
+    @patch("methyldl.deconvolution.xgbdeconvolver.compute_deconvolution_metrics")
     def test_evaluate_with_explicit_loss_weights(self, mock_metrics, mock_loss):
         """evaluate should merge computed metrics with combined loss."""
         self.model._is_fitted = True
