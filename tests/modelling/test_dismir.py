@@ -407,14 +407,12 @@ class TestDismirEvaluation(DismirTestBase):
             # Handle labels based on num_labels
             if num_labels == 1:
                 # Binary: float32, shape [batch_size, 1]
-                model.test_y = torch.tensor(
-                    model.test_y, dtype=torch.float32
-                ).view(-1, 1)
+                model.test_y = torch.tensor(model.test_y, dtype=torch.float32).view(
+                    -1, 1
+                )
             else:
                 # Multi-class: long, shape [batch_size]
-                model.test_y = torch.tensor(
-                    model.test_y, dtype=torch.long
-                ).squeeze()
+                model.test_y = torch.tensor(model.test_y, dtype=torch.long).squeeze()
 
             # Load and transform validation data
             model.valid_x, model.valid_y = model.load_and_transform_input(
@@ -423,13 +421,11 @@ class TestDismirEvaluation(DismirTestBase):
             model.valid_x = torch.tensor(model.valid_x, dtype=torch.float32)
 
             if num_labels == 1:
-                model.valid_y = torch.tensor(
-                    model.valid_y, dtype=torch.float32
-                ).view(-1, 1)
+                model.valid_y = torch.tensor(model.valid_y, dtype=torch.float32).view(
+                    -1, 1
+                )
             else:
-                model.valid_y = torch.tensor(
-                    model.valid_y, dtype=torch.long
-                ).squeeze()
+                model.valid_y = torch.tensor(model.valid_y, dtype=torch.long).squeeze()
 
         loss, accuracy = model.evaluate(split=split, variable_length=variable_length)
 

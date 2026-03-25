@@ -28,7 +28,6 @@ def validate_ref_tissues(df, tissue_list):
             sys.exit(1)
 
 
-
 def validate_file(fpath):
     """Validate that the provided file path exists and is a file"""
     if not op.isfile(fpath):

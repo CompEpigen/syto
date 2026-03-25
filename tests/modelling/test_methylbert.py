@@ -26,7 +26,6 @@ from methyldl.modelling.classifiers.methylbert import (
 )
 
 
-
 class TestMethylVocab(unittest.TestCase):
     """Test suite for MethylVocab class."""
 
@@ -984,7 +983,9 @@ class TestMethylBertSoftLabelLossSetup(unittest.TestCase):
 
         config = self._build_small_hf_config(num_labels=5, loss="cwce")
         model = MethylBertEmbeddedDMR(config, seq_len=5)
-        self.assertIsInstance(model.classification_loss_fct, ConfidenceWeightedCrossEntropy)
+        self.assertIsInstance(
+            model.classification_loss_fct, ConfidenceWeightedCrossEntropy
+        )
 
     def test_setup_loss_on_target_ce(self):
         """Verify _setup_loss('on_target_ce') returns OnTargetSoftLoss."""

@@ -368,11 +368,12 @@ class TestSplitLongReads(unittest.TestCase):
 
 from methyldl.data.utils import split_by_file_and_class
 
+
 class TestSplitByFileAndClass(unittest.TestCase):
     def test_split_by_file_and_class(self):
         import pandas as pd
         import numpy as np
-        
+
         # Create a dummy dataframe with target_col and file_col
         # We need three classes, with different number of files
         # Class 0: 3 files
@@ -380,34 +381,37 @@ class TestSplitByFileAndClass(unittest.TestCase):
         # Class 2: 1 file
         data = []
         # Class 0: 100 reads total. File A: 50, File B: 30, File C: 20
-        data += [{'original_label': 0, 'file': 'A'}] * 50
-        data += [{'original_label': 0, 'file': 'B'}] * 30
-        data += [{'original_label': 0, 'file': 'C'}] * 20
-        
+        data += [{"original_label": 0, "file": "A"}] * 50
+        data += [{"original_label": 0, "file": "B"}] * 30
+        data += [{"original_label": 0, "file": "C"}] * 20
+
         # Class 1: 100 reads total. File D: 70, File E: 30
-        data += [{'original_label': 1, 'file': 'D'}] * 70
-        data += [{'original_label': 1, 'file': 'E'}] * 30
-        
+        data += [{"original_label": 1, "file": "D"}] * 70
+        data += [{"original_label": 1, "file": "E"}] * 30
+
         # Class 2: 100 reads total. File F: 100
-        data += [{'original_label': 2, 'file': 'F'}] * 100
-        
+        data += [{"original_label": 2, "file": "F"}] * 100
+
         df = pd.DataFrame(data)
-        
-        train_df, valid_df, test_df = split_by_file_and_class(df, target_col='original_label', file_col='file')
-        
+
+        train_df, valid_df, test_df = split_by_file_and_class(
+            df, target_col="original_label", file_col="file"
+        )
+
         # Assert lengths are roughly around exactly splitted components
         # And assert every class is in all splits
-        self.assertTrue(0 in train_df['original_label'].values)
-        self.assertTrue(1 in train_df['original_label'].values)
-        self.assertTrue(2 in train_df['original_label'].values)
-        
-        self.assertTrue(0 in valid_df['original_label'].values)
-        self.assertTrue(1 in valid_df['original_label'].values)
-        self.assertTrue(2 in valid_df['original_label'].values)
-        
-        self.assertTrue(0 in test_df['original_label'].values)
-        self.assertTrue(1 in test_df['original_label'].values)
-        self.assertTrue(2 in test_df['original_label'].values)
+        self.assertTrue(0 in train_df["original_label"].values)
+        self.assertTrue(1 in train_df["original_label"].values)
+        self.assertTrue(2 in train_df["original_label"].values)
+
+        self.assertTrue(0 in valid_df["original_label"].values)
+        self.assertTrue(1 in valid_df["original_label"].values)
+        self.assertTrue(2 in valid_df["original_label"].values)
+
+        self.assertTrue(0 in test_df["original_label"].values)
+        self.assertTrue(1 in test_df["original_label"].values)
+        self.assertTrue(2 in test_df["original_label"].values)
+
 
 if __name__ == "__main__":
     unittest.main()

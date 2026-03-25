@@ -23,7 +23,7 @@ import itertools
 from methyldl.modelling.evaluation import (
     compute_metrics,
     preprocess_logits_for_prediction,
-    compute_metrics_soft_labels
+    compute_metrics_soft_labels,
 )
 
 from torch.utils.data import Dataset

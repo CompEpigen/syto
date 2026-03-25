@@ -487,7 +487,7 @@ class TestBertForSequenceClassificationForward(unittest.TestCase):
         model.config = SimpleNamespace(problem_type=None, use_return_dict=True)
         model.bert = _FixedBackbone((sequence_output, pooled_output, extra_output))
         model.dropout = torch.nn.Identity()
-        model.soft_labels = False 
+        model.soft_labels = False
         model.classifier = _FixedClassifier(logits)
         return model
 

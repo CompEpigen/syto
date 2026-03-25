@@ -5,7 +5,7 @@ import torch
 
 from methyldl.deconvolution.evaluation import (
     compute_combined_loss,
-    compute_deconvolution_metrics
+    compute_deconvolution_metrics,
 )
 
 

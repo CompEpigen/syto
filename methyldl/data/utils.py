@@ -109,49 +109,61 @@ def _merge_comma_separated(str1, str2):
     merged.discard("")  # Remove empty strings
     return ",".join(sorted(merged))
 
+
 import numpy as np
 from sklearn.model_selection import train_test_split
 
-def split_by_file_and_class(df, target_col='original_label', file_col='file', 
-                            train_ratio=0.7, valid_ratio=0.15, test_ratio=0.15, 
-                            random_state=42):
+
+def split_by_file_and_class(
+    df,
+    target_col="original_label",
+    file_col="file",
+    train_ratio=0.7,
+    valid_ratio=0.15,
+    test_ratio=0.15,
+    random_state=42,
+):
     """
     Splits the dataset into train, valid, and test sets.
-    Prioritizes file-level isolation to prevent data leakage, 
+    Prioritizes file-level isolation to prevent data leakage,
     while EXPLICITLY guaranteeing every class is represented in all splits.
     """
-    assert np.isclose(train_ratio + valid_ratio + test_ratio, 1.0), "Ratios must sum to 1.0"
-    
+    assert np.isclose(
+        train_ratio + valid_ratio + test_ratio, 1.0
+    ), "Ratios must sum to 1.0"
+
     train_chunks, valid_chunks, test_chunks = [], [], []
-    
+
     # Group the entire dataset by the ground truth cell type
     grouped = df.groupby(target_col)
-    
+
     for label, group in grouped:
         # Get read counts per file for this specific cell type
         file_counts = group[file_col].value_counts().to_dict()
-        files_sorted = sorted(file_counts.keys(), key=lambda k: file_counts[k], reverse=True)
+        files_sorted = sorted(
+            file_counts.keys(), key=lambda k: file_counts[k], reverse=True
+        )
         n_files = len(files_sorted)
         total_reads = sum(file_counts.values())
-        
+
         if n_files >= 3:
             # REVISED GREEDY FILE-LEVEL ALLOCATION WITH COVERAGE OVERRIDE
             targets = {
-                'train': total_reads * train_ratio,
-                'valid': total_reads * valid_ratio,
-                'test': total_reads * test_ratio
+                "train": total_reads * train_ratio,
+                "valid": total_reads * valid_ratio,
+                "test": total_reads * test_ratio,
             }
-            current_counts = {'train': 0, 'valid': 0, 'test': 0}
-            allocations = {'train': [], 'valid': [], 'test': []}
-            
+            current_counts = {"train": 0, "valid": 0, "test": 0}
+            allocations = {"train": [], "valid": [], "test": []}
+
             for i, file in enumerate(files_sorted):
                 f_count = file_counts[file]
                 remaining_files = n_files - i
-                
+
                 # Check which buckets still have 0 files
                 empty_buckets = [b for b in targets.keys() if not allocations[b]]
-                
-                # FORCE COVERAGE: If we only have just enough files left to fill the empty 
+
+                # FORCE COVERAGE: If we only have just enough files left to fill the empty
                 # buckets, we must abandon the ratio math and fill the empty buckets.
                 if len(empty_buckets) >= remaining_files:
                     best_bucket = max(empty_buckets, key=lambda b: targets[b])
@@ -159,37 +171,43 @@ def split_by_file_and_class(df, target_col='original_label', file_col='file',
                     # Otherwise, use standard greedy: give to bucket with highest deficit
                     deficits = {k: targets[k] - current_counts[k] for k in targets}
                     best_bucket = max(deficits, key=deficits.get)
-                    
+
                 allocations[best_bucket].append(file)
                 current_counts[best_bucket] += f_count
-                
-            train_chunks.append(group[group[file_col].isin(allocations['train'])])
-            valid_chunks.append(group[group[file_col].isin(allocations['valid'])])
-            test_chunks.append(group[group[file_col].isin(allocations['test'])])
-            
+
+            train_chunks.append(group[group[file_col].isin(allocations["train"])])
+            valid_chunks.append(group[group[file_col].isin(allocations["valid"])])
+            test_chunks.append(group[group[file_col].isin(allocations["test"])])
+
         elif n_files == 2:
             # 2 FILES: Keep Train isolated. Split File 2 into Valid/Test.
             file1, file2 = files_sorted[0], files_sorted[1]
-            
+
             # Put the largest file in Train
             train_chunks.append(group[group[file_col] == file1])
-            
+
             # Split the second file between valid and test
             file2_df = group[group[file_col] == file2]
             val_prop = valid_ratio / (valid_ratio + test_ratio)
-            
-            val_df, test_df = train_test_split(file2_df, train_size=val_prop, random_state=random_state)
+
+            val_df, test_df = train_test_split(
+                file2_df, train_size=val_prop, random_state=random_state
+            )
             valid_chunks.append(val_df)
             test_chunks.append(test_df)
-            
+
         else:
             # 1 FILE: Unavoidable read-level split to ensure class coverage.
             file_df = group
-            train_df, temp_df = train_test_split(file_df, train_size=train_ratio, random_state=random_state)
-            
+            train_df, temp_df = train_test_split(
+                file_df, train_size=train_ratio, random_state=random_state
+            )
+
             val_prop = valid_ratio / (valid_ratio + test_ratio)
-            val_df, test_df = train_test_split(temp_df, train_size=val_prop, random_state=random_state)
-            
+            val_df, test_df = train_test_split(
+                temp_df, train_size=val_prop, random_state=random_state
+            )
+
             train_chunks.append(train_df)
             valid_chunks.append(val_df)
             test_chunks.append(test_df)
@@ -198,5 +216,5 @@ def split_by_file_and_class(df, target_col='original_label', file_col='file',
     df_train = pd.concat(train_chunks, ignore_index=True)
     df_valid = pd.concat(valid_chunks, ignore_index=True)
     df_test = pd.concat(test_chunks, ignore_index=True)
-    
+
     return df_train, df_valid, df_test

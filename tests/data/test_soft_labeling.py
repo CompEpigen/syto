@@ -10,7 +10,7 @@ from methyldl.data.soft_labeling import (
 
 class TestExtractCpgSignature(unittest.TestCase):
     def test_basic(self):
-        row = {'trimmed_start': 100, 'pattern': '01201'}
+        row = {"trimmed_start": 100, "pattern": "01201"}
         # 2 is an unknown status, should be ignored
         sig = extract_cpg_signature(row)
         self.assertEqual(sig, ((100, 0), (101, 1), (103, 0), (104, 1)))
@@ -26,7 +26,9 @@ class TestSignatureDistance(unittest.TestCase):
 
     def test_length_penalty(self):
         sig1 = ((100, 0), (101, 1))
-        sig3 = ((100, 0),)  # Share 1 length 1, max length 2. Mismatch: 0/1. Penalty: 1 - 1/2 = 0.5
+        sig3 = (
+            (100, 0),
+        )  # Share 1 length 1, max length 2. Mismatch: 0/1. Penalty: 1 - 1/2 = 0.5
         self.assertEqual(signature_distance(sig1, sig3), 0.5)
 
     def test_no_shared_positions(self):
@@ -41,17 +43,17 @@ class TestApplyNormalizedKnnSmoothing(unittest.TestCase):
         sig2 = ((100, 0), (101, 0))
         sig3 = ((200, 0),)
 
-        row1 = {'name': 'RegionA', 'cpg_sig': sig1, 'total_reads': 20}
+        row1 = {"name": "RegionA", "cpg_sig": sig1, "total_reads": 20}
         for i in range(40):
             row1[i] = 0
         row1[0] = 20
 
-        row2 = {'name': 'RegionA', 'cpg_sig': sig2, 'total_reads': 15}
+        row2 = {"name": "RegionA", "cpg_sig": sig2, "total_reads": 15}
         for i in range(40):
             row2[i] = 0
         row2[1] = 15
 
-        row3 = {'name': 'RegionA', 'cpg_sig': sig3, 'total_reads': 50}
+        row3 = {"name": "RegionA", "cpg_sig": sig3, "total_reads": 50}
         for i in range(40):
             row3[i] = 0
         row3[2] = 50
@@ -69,9 +71,9 @@ class TestApplyNormalizedKnnSmoothing(unittest.TestCase):
         res = apply_normalized_knn_smoothing(
             self.df, min_reads=30, max_distance=0.5, num_classes=40
         )
-        res1 = res[res['cpg_sig'] == self.sig1].iloc[0]
-        self.assertEqual(res1['raw_reads_pooled'], 35)
-        self.assertEqual(res1['num_signatures_pooled'], 2)
+        res1 = res[res["cpg_sig"] == self.sig1].iloc[0]
+        self.assertEqual(res1["raw_reads_pooled"], 35)
+        self.assertEqual(res1["num_signatures_pooled"], 2)
 
     def test_soft_label_normalization(self):
         # global counts: c0=20, c1=15, c2=50 -> median=20
@@ -80,8 +82,8 @@ class TestApplyNormalizedKnnSmoothing(unittest.TestCase):
         res = apply_normalized_knn_smoothing(
             self.df, min_reads=30, max_distance=0.5, num_classes=40
         )
-        res1 = res[res['cpg_sig'] == self.sig1].iloc[0]
-        prob = res1['soft_label']
+        res1 = res[res["cpg_sig"] == self.sig1].iloc[0]
+        prob = res1["soft_label"]
         self.assertAlmostEqual(prob[0], 0.5, delta=0.05)
         self.assertAlmostEqual(prob[1], 0.5, delta=0.05)
 

@@ -36,9 +36,7 @@ class TestConfidenceWeightedCrossEntropy(unittest.TestCase):
         min_prob = 1.0 / self.num_classes
 
         sharp_weight = (sharp_max - min_prob) / (1.0 - min_prob)
-        flat_weight = torch.clamp(
-            (flat_max - min_prob) / (1.0 - min_prob), min=0.01
-        )
+        flat_weight = torch.clamp((flat_max - min_prob) / (1.0 - min_prob), min=0.01)
 
         self.assertAlmostEqual(sharp_weight.item(), 1.0, places=5)
         self.assertAlmostEqual(flat_weight.item(), 0.01, places=5)

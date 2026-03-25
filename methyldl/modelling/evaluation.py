@@ -8,6 +8,7 @@ import torch
 from typing import Union, Tuple, Any
 from scipy.special import softmax
 
+
 def calculate_metric_with_sklearn(predictions: np.ndarray, labels: np.ndarray):
     valid_mask = (
         labels != -100

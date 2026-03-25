@@ -22,6 +22,7 @@ COLUMN_ALIASES = {
     "dmr_label": ["dmr_label"],
 }
 
+
 def resolve_column(columns, canonical_name):
     """Find the first matching alias for a canonical column name."""
     aliases = COLUMN_ALIASES.get(canonical_name, [canonical_name])
@@ -34,16 +35,18 @@ def resolve_column(columns, canonical_name):
 class SupervisedDataset(Dataset):
     """Dataset for supervised fine-tuning or predicting"""
 
-    def __init__(self, 
-                 data_path_or_list: Union[str,list], 
-                 tokenizer: transformers.PreTrainedTokenizer, 
-                 kmer: int = -1,
-                 first_n_samples: int = None,
-                 data_interface:str = "csv",
-                 lazy_tokenization = False,
-                 include_dmr_ids = False,
-                 dmr_label_column = None,
-                 soft_labels = False):
+    def __init__(
+        self,
+        data_path_or_list: Union[str, list],
+        tokenizer: transformers.PreTrainedTokenizer,
+        kmer: int = -1,
+        first_n_samples: int = None,
+        data_interface: str = "csv",
+        lazy_tokenization=False,
+        include_dmr_ids=False,
+        dmr_label_column=None,
+        soft_labels=False,
+    ):
         """
         Args:
             data_path_or_list (str or list): Path to the CSV file or a structured list.
@@ -71,7 +74,9 @@ class SupervisedDataset(Dataset):
                 # Use data directly as a structured list
                 data = data_path_or_list
             else:
-                raise ValueError("data_path_or_list must be a string (CSV path) or a list (structured like a CSV).")
+                raise ValueError(
+                    "data_path_or_list must be a string (CSV path) or a list (structured like a CSV)."
+                )
             # Extract header and data
             header = data[0]
             if first_n_samples is not None:
@@ -102,7 +107,9 @@ class SupervisedDataset(Dataset):
 
             # Extract labels (optional)
             if soft_labels:
-                raise NotImplementedError("Method to encode soft labels with .csv interface is not implemented")
+                raise NotImplementedError(
+                    "Method to encode soft labels with .csv interface is not implemented"
+                )
             else:
                 self.labels = (
                     [int(row[labels_index]) for row in data]
@@ -124,16 +131,20 @@ class SupervisedDataset(Dataset):
             elif os.path.exists(data_path_or_list + ".parquet"):
                 data = pd.read_parquet(data_path_or_list + ".parquet")
             else:
-                data = pd.read_csv(data_path_or_list+".csv")
-            
+                data = pd.read_csv(data_path_or_list + ".csv")
+
             cols = data.columns
             dna_col = resolve_column(cols, "input_ids")
             meth_col = resolve_column(cols, "methylation_ids")
             label_col = resolve_column(cols, "soft_label" if soft_labels else "label")
             if dna_col is None:
-                raise ValueError(f"No recognized DNA sequence column found. Expected one of: {COLUMN_ALIASES['input_ids']}")
+                raise ValueError(
+                    f"No recognized DNA sequence column found. Expected one of: {COLUMN_ALIASES['input_ids']}"
+                )
             if meth_col is None:
-                raise ValueError(f"No recognized Methylation sequence column found. Expected one of: {COLUMN_ALIASES['methylation_ids']}")
+                raise ValueError(
+                    f"No recognized Methylation sequence column found. Expected one of: {COLUMN_ALIASES['methylation_ids']}"
+                )
             dna, methylation, labels = (
                 data[dna_col],
                 data[meth_col],
@@ -141,7 +152,9 @@ class SupervisedDataset(Dataset):
             )
             if self.include_dmr_ids:
                 if self.dmr_label_column is None:
-                    raise ValueError("dmr_label_column must not be none if include_dmr_ids is set to True")
+                    raise ValueError(
+                        "dmr_label_column must not be none if include_dmr_ids is set to True"
+                    )
                 self.dmr_ids = data[self.dmr_label_column]
             self.labels = labels.to_list()
             self.cpg_methylation = methylation.to_list()
