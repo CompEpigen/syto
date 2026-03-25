@@ -6,22 +6,20 @@ from concurrent.futures import ThreadPoolExecutor
 import threading
 
 import cvxpy as cp
-from sklearn.base import BaseEstimator
+from sklearn.base import BaseEstimator, RegressorMixin
 import numpy as np
 from tqdm import tqdm
 from scipy.optimize import nnls
 
 
-class NNLSDeconvolver(BaseEstimator):
+class AbstractLSDeconvolver(BaseEstimator, RegressorMixin):
     """
-    In this implementation, we use NNLS (Non Negative Least Squares)
-    to predict the mixture proportions for each sample, given a reference prediction matrix
-    containing the pure predictions for each cell type.
+    Parent class of least-squares-based deconvolution methods.
     """
 
     def fit(self, X: np.ndarray, y: np.ndarray):
         """
-        Fit the deconvolver from pure reference predictions.
+        Store the reference prediction matrix built from pure reference predictions.
 
         Args:
             X: Array of shape (n_cell_types, n_features) containing one flattened
@@ -31,7 +29,7 @@ class NNLSDeconvolver(BaseEstimator):
                 0, ..., n_cell_types - 1.
 
         Returns:
-            The fitted NNLSDeconvolver instance.
+            The fitted AbstractLSDeconvolver instance.
         """
         assert X.ndim == 2, "X must be a 2D matrix of shape (n_cell_types, n_features)"
         self.n_cell_types_ = len(y)
@@ -45,6 +43,38 @@ class NNLSDeconvolver(BaseEstimator):
             ]
         )
         return self
+
+    def predict_single_sample(self, x: np.ndarray) -> np.ndarray:
+        raise NotImplementedError("Subclasses must implement predict_single_sample")
+
+    def _predict_chunk_sequential(self, X_chunk: np.ndarray) -> np.ndarray:
+        """
+        Predict NNLS outputs for a chunk of samples sequentially.
+
+        Args:
+            X_chunk: Array of shape (chunk_size, n_features) containing a subset of
+                samples to process in the current worker.
+
+        Returns:
+            A tuple ``(normalized, unnormalized, residuals)`` where the first two
+            arrays have shape (chunk_size, n_cell_types) and ``residuals`` has shape
+            (chunk_size,).
+        """
+        n_samples = X_chunk.shape[0]
+        chunk_predictions = np.zeros((n_samples, self.n_cell_types_))
+
+        for i, sample in enumerate(X_chunk):
+            chunk_predictions[i] = self.predict_single_sample(sample)
+
+        return chunk_predictions
+
+
+class NNLSDeconvolver(AbstractLSDeconvolver):
+    """
+    In this implementation, we use NNLS (Non Negative Least Squares)
+    to predict the mixture proportions for each sample, given a reference prediction matrix
+    containing the pure predictions for each cell type.
+    """
 
     def predict_single_sample(self, x: np.ndarray) -> np.ndarray:
         """
@@ -197,19 +227,24 @@ class NNLSDeconvolver(BaseEstimator):
             return self._predict_sequential(X)
 
 
-class PSLSDeconvolver(BaseEstimator):
+class PSLSDeconvolver(AbstractLSDeconvolver):
     """Probability Simplex Least Squares Deconvolver (PSLS).
 
     This is a variant of NNLS where we add the additional constraint
     that the mixture proportions must sum to 1, in addition to being non-negative.
 
-    It is highly advised to use the method "cvxpy" for this deconvolver,
-    as the PGD method is slower and potentially less accurate.
+    It is highly advised to use the solver_type "cvxpy" for this deconvolver,
+    as the PGD solver is slower and less accurate.
     """
 
-    def __init__(self):
+    def __init__(self, solver_type="cvxpy"):
         """Initialize the deconvolver state used across repeated fits."""
+        assert solver_type in [
+            "cvxpy",
+            "pgd",
+        ], f"Unsupported solver_type: {solver_type}"
         self._cvxpy_fit_generation_ = -1
+        self.solver_type = solver_type
 
     def fit(self, X: np.ndarray, y: np.ndarray):
         """
@@ -225,31 +260,23 @@ class PSLSDeconvolver(BaseEstimator):
         Returns:
             The fitted PSLSDeconvolver instance.
         """
-        assert X.ndim == 2, "X must be a 2D matrix of shape (n_cell_types, n_features)"
-        self.n_cell_types_ = len(y)
-        self.n_features_ = X.shape[1]
-        assert set(y) == set(range(self.n_cell_types_))
-        assert X.shape[0] == self.n_cell_types_
-        self.reference_prediction_matrix_ = np.ascontiguousarray(
-            np.hstack(
-                [
-                    X[y == cell_type_label].reshape(-1, 1)
-                    for cell_type_label in range(self.n_cell_types_)
-                ]
+        # call AbstractLSDeconvolver.fit to store the reference prediction matrix and related state
+        super().fit(X, y)
+
+        if self.solver_type == "pgd":
+            # precomputed matrices for the PGD algorithm
+            self._pgd_ptp_ = (
+                self.reference_prediction_matrix_.T @ self.reference_prediction_matrix_
             )
-        )
-
-        # precomputed matrices for the PGD algorithm
-        self.pgd_ptp_ = (
-            self.reference_prediction_matrix_.T @ self.reference_prediction_matrix_
-        )
-        self.pgd_xtp_multiplier_ = self.reference_prediction_matrix_
-        self.pgd_step_size_ = 1.0 / np.linalg.norm(self.pgd_ptp_, ord=2)
-
-        # cvxpy problem state for each worker thread
-        # (to avoid rebuilding the problem for each worker)
-        self._cvxpy_thread_cache_ = threading.local()
-        self._cvxpy_fit_generation_ = self._cvxpy_fit_generation_ + 1
+            self._pgd_xtp_multiplier_ = self.reference_prediction_matrix_
+            self._pgd_step_size_ = 1.0 / np.linalg.norm(self._pgd_ptp_, ord=2)
+        elif self.solver_type == "cvxpy":
+            # cvxpy problem state for each worker thread
+            # (to avoid rebuilding the problem for each worker)
+            self._cvxpy_thread_cache_ = threading.local()
+            self._cvxpy_fit_generation_ = self._cvxpy_fit_generation_ + 1
+        else:
+            raise ValueError(f"Unsupported solver_type: {self.solver_type}")
 
         return self
 
@@ -274,15 +301,15 @@ class PSLSDeconvolver(BaseEstimator):
         """
         assert x.shape == (self.n_features_,)
         w = np.full(self.n_cell_types_, 1.0 / self.n_cell_types_)
-        ptm = x @ self.pgd_xtp_multiplier_
+        ptm = x @ self._pgd_xtp_multiplier_
 
         for i in range(max_iter):
             w_old = w.copy()
 
             # 1. Gradient Step: w_next = w - eta * grad
             # grad = P^T(Pw - M) = PtP @ w - PtM
-            grad = self.pgd_ptp_ @ w - ptm
-            v = w - self.pgd_step_size_ * grad
+            grad = self._pgd_ptp_ @ w - ptm
+            v = w - self._pgd_step_size_ * grad
 
             # 2. Projection Step
             w = _project_on_simplex(v)
@@ -329,12 +356,12 @@ class PSLSDeconvolver(BaseEstimator):
             (n_samples, self.n_cell_types_),
             1.0 / self.n_cell_types_,
         )
-        ptm = X @ self.pgd_xtp_multiplier_
+        ptm = X @ self._pgd_xtp_multiplier_
 
         for iteration in range(max_iter):
             w_old = w.copy()
-            grad = w @ self.pgd_ptp_ - ptm
-            v = w - self.pgd_step_size_ * grad
+            grad = w @ self._pgd_ptp_ - ptm
+            v = w - self._pgd_step_size_ * grad
             w = _project_rows_on_simplex(v)
 
             if np.max(np.abs(w - w_old)) < tol:
@@ -405,36 +432,31 @@ class PSLSDeconvolver(BaseEstimator):
         problem.solve(solver=cp.OSQP, warm_start=True)
         return w.value
 
-    def predict_single_sample(self, x: np.ndarray, method="cvxpy") -> np.ndarray:
+    def predict_single_sample(self, x: np.ndarray) -> np.ndarray:
         """
-        Predicts the mixture proportions for a single sample using the specified method.
+        Predicts the mixture proportions for a single sample using the specified solver_type.
 
         Args:
             x: Array of shape (n_features,) containing the sample prediction vector.
-            method: Solver to use. Must be either ``"cvxpy"`` or ``"pgd"``.
 
         Returns:
             Array of shape (n_cell_types,) containing the estimated mixture
             proportions.
-
-        Raises:
-            ValueError: If ``method`` is not supported.
         """
-        if method == "cvxpy":
+        if self.solver_type == "cvxpy":
             return self.predict_single_sample_cvxpy(x)
-        elif method == "pgd":
+        elif self.solver_type == "pgd":
             return self.predict_single_sample_pgd(x)
         else:
-            raise ValueError(f"Unsupported method: {method}")
+            raise ValueError(f"Unsupported solver_type: {self.solver_type}")
 
-    def _predict_sequential(self, X: np.ndarray, method="cvxpy") -> np.ndarray:
+    def _predict_sequential(self, X: np.ndarray) -> np.ndarray:
         """
         Predict mixture proportions for a batch of samples sequentially.
 
         Args:
             X: Array of shape (n_samples, n_features) containing the samples to
                 deconvolve.
-            method: Solver to use. Must be either ``"cvxpy"`` or ``"pgd"``.
 
         Returns:
             Array of shape (n_samples, n_cell_types) containing the estimated
@@ -449,25 +471,22 @@ class PSLSDeconvolver(BaseEstimator):
         for i, sample in tqdm(
             enumerate(X), total=n_samples, desc="Predicting with PSLS sequentially"
         ):
-            mixture_prop_pred[i] = self.predict_single_sample(sample, method=method)
+            mixture_prop_pred[i] = self.predict_single_sample(sample)
         return mixture_prop_pred
 
-    def _predict_chunk_sequential(
-        self, X_chunk: np.ndarray, method="cvxpy"
-    ) -> np.ndarray:
+    def _predict_chunk_sequential(self, X_chunk: np.ndarray) -> np.ndarray:
         """
         Predict mixture proportions for one chunk of samples sequentially.
 
         Args:
             X_chunk: Array of shape (chunk_size, n_features) containing the samples
                 assigned to a worker.
-            method: Solver to use. Must be either ``"cvxpy"`` or ``"pgd"``.
 
         Returns:
             Array of shape (chunk_size, n_cell_types) containing the estimated
             mixture proportions for the chunk.
         """
-        if method == "pgd":
+        if self.solver_type == "pgd":
             return self.predict_batch_pgd(X_chunk)
 
         n_samples = X_chunk.shape[0]
@@ -477,11 +496,11 @@ class PSLSDeconvolver(BaseEstimator):
 
         # predict the mixture proportions for each sample
         for i, sample in enumerate(X_chunk):
-            mixture_prop_pred[i] = self.predict_single_sample(sample, method=method)
+            mixture_prop_pred[i] = self.predict_single_sample(sample)
         return mixture_prop_pred
 
     def _predict_parallel(
-        self, x: np.ndarray, method="cvxpy", n_workers: int = 1, chunk_size=100
+        self, x: np.ndarray, n_workers: int = 1, chunk_size=100
     ) -> np.ndarray:
         """
         Predict mixture proportions for a batch of samples in parallel.
@@ -493,7 +512,6 @@ class PSLSDeconvolver(BaseEstimator):
         Args:
             x: Array of shape (n_samples, n_features) containing the samples to
                 deconvolve.
-            method: Solver to use. Must be either ``"cvxpy"`` or ``"pgd"``.
             n_workers: Number of worker threads to use.
             chunk_size: Number of samples assigned to each chunk.
 
@@ -515,9 +533,7 @@ class PSLSDeconvolver(BaseEstimator):
             results = list(
                 tqdm(
                     executor.map(
-                        lambda chunk: self._predict_chunk_sequential(
-                            chunk, method=method
-                        ),
+                        lambda chunk: self._predict_chunk_sequential(chunk),
                         chunks,
                     ),
                     total=len(chunks),
@@ -527,13 +543,11 @@ class PSLSDeconvolver(BaseEstimator):
         mixture_prop_pred = np.vstack(results)
         return mixture_prop_pred
 
-    def predict(
-        self, X: np.ndarray, n_workers: int = 1, method="cvxpy", chunk_size=100
-    ) -> np.ndarray:
+    def predict(self, X: np.ndarray, n_workers: int = 1, chunk_size=100) -> np.ndarray:
         """
         Predict mixture proportions for a batch of samples.
 
-        The fastest tested setup is n_workers>1 (but not too large) with method="cvxpy"
+        The fastest tested setup is n_workers>1 (but not too large) with solver_type="cvxpy"
         and a moderate chunk_size (e.g. 100).
 
         Args:
@@ -541,23 +555,16 @@ class PSLSDeconvolver(BaseEstimator):
                 deconvolve.
             n_workers: Number of worker threads to use. Values greater than 1 enable
                 chunk-based parallel prediction.
-            method: Solver to use. Must be either ``"cvxpy"`` or ``"pgd"``.
             chunk_size: Number of samples per chunk when ``n_workers > 1``.
 
         Returns:
             Array of shape (n_samples, n_cell_types) containing the estimated
             mixture proportions.
-
-        Raises:
-            AssertionError: If ``method`` is not one of the supported solvers.
         """
-        assert method in ["cvxpy", "pgd"], f"Unsupported method: {method}"
         if n_workers > 1:
-            return self._predict_parallel(
-                X, method=method, n_workers=n_workers, chunk_size=chunk_size
-            )
+            return self._predict_parallel(X, n_workers=n_workers, chunk_size=chunk_size)
         else:
-            return self._predict_sequential(X, method=method)
+            return self._predict_sequential(X)
 
 
 def _project_on_simplex(v: np.ndarray) -> np.ndarray:
