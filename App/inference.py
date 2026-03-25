@@ -93,20 +93,6 @@ class InferencePipeline:
             f"Loaded labels dictionary with {len(self.labels_dict)} cell types"
         )
 
-        # ── Load cell-type matching dictionary (optional) ───────────────
-        # ct_match_path = config.get("cell_type_match_dict_path")
-        # if ct_match_path:
-        #     with open(ct_match_path, "r") as f:
-        #         self.cell_type_match_dict: Dict[str, str] = json.load(f)
-        #     self.logger.info(
-        #         f"Loaded cell-type match dict with {len(self.cell_type_match_dict)} entries"
-        #     )
-        # else:
-        #     self.logger.info(
-        #         f"No cell-type match dict was provided. Assuming identity mapping."
-        #     )
-        #     # Identity mapping – atlas target names already match labels_dict
-        #     self.cell_type_match_dict = {}
         self.cell_type_match_dict = LOYFER_CELL_TYPE_MATCH_DICT
 
         # ── Load atlas ──────────────────────────────────────────────────
@@ -122,6 +108,10 @@ class InferencePipeline:
         self.predictions_df: Optional[pd.DataFrame] = None
         self.dmr_aggregated: Optional[pd.DataFrame] = None
         self.deconvolution_results: Dict[str, Any] = {}
+        self.features_mask = np.load(config["features_mask_path"])["features_mask"]
+
+        # By default the algorithm assumes that we have at least some data for each DMR group.
+        self.fill_in_missing_labels = self.config.get("fill_in_missing_labels", False)
 
     # ═══════════════════════════════════════════════════════════════════
     #  Public API
@@ -150,39 +140,42 @@ class InferencePipeline:
                 f"Unknown input type: {input_cfg['type']}. "
                 "Must be 'bam' or 'processed_reads'."
             )
-        if not self.skip_classification:
+        if not self.processed_reads is None:
+            if not self.skip_classification:
+                self.logger.info(
+                    f"Stage 1 complete: {len(self.processed_reads)} processed reads"
+                )
+
+                # ── Stage 2: overlap reads with atlas regions ───────────────────
+                self.prepared_reads, self.prepared_reads_chuncked = (
+                    self._prepare_reads()
+                )
+                self.logger.info(
+                    f"Stage 2 complete: {len(self.prepared_reads)} atlas-overlapped reads"
+                )
+
+                # ── Stage 3: MethylBERT predictions ─────────────────────────────
+                self.predictions_df = self._predict_methylbert()
+                self.logger.info(
+                    f"Stage 3 complete: predictions for {len(self.predictions_df)} reads"
+                )
+
+            # ── Stage 4: aggregate to DMR level ────────────────────────────
+            self.dmr_aggregated = self._aggregate_to_dmr()
             self.logger.info(
-                f"Stage 1 complete: {len(self.processed_reads)} processed reads"
+                f"Stage 4 complete: {len(self.dmr_aggregated)} DMR-level aggregations"
             )
 
-            # ── Stage 2: overlap reads with atlas regions ───────────────────
-            self.prepared_reads, self.prepared_reads_chuncked = self._prepare_reads()
+            # ── Stage 5: deconvolution ─────────────────────────────────────
+            self.deconvolution_results = self._run_deconvolution()
             self.logger.info(
-                f"Stage 2 complete: {len(self.prepared_reads)} atlas-overlapped reads"
+                f"Stage 5 complete: ran {len(self.deconvolution_results)} deconvolution methods"
             )
 
-            # ── Stage 3: MethylBERT predictions ─────────────────────────────
-            self.predictions_df = self._predict_methylbert()
-            self.logger.info(
-                f"Stage 3 complete: predictions for {len(self.predictions_df)} reads"
-            )
+            # ── Save results ────────────────────────────────────────────────
+            self._save_results()
 
-        # ── Stage 4: aggregate to DMR level ────────────────────────────
-        self.dmr_aggregated = self._aggregate_to_dmr()
-        self.logger.info(
-            f"Stage 4 complete: {len(self.dmr_aggregated)} DMR-level aggregations"
-        )
-
-        # ── Stage 5: deconvolution ─────────────────────────────────────
-        self.deconvolution_results = self._run_deconvolution()
-        self.logger.info(
-            f"Stage 5 complete: ran {len(self.deconvolution_results)} deconvolution methods"
-        )
-
-        # ── Save results ────────────────────────────────────────────────
-        self._save_results()
-
-        return self.deconvolution_results
+            return self.deconvolution_results
 
     # ═══════════════════════════════════════════════════════════════════
     #  Stage 1: BAM processing / loading pre-processed reads
@@ -231,6 +224,29 @@ class InferencePipeline:
             min_cpgs=bam_cfg.get("min_cpgs", 1),
             merge_pairs=bam_cfg.get("merge_pairs", True),
         )
+        if not len(df):
+            self.logger.warning(
+                "The dataset has 0 reads after applying all samtools filters. The attempt will be made to reparse .bam without applying flag filters"
+            )
+            df = process_bam_with_chunking(
+                bam_path=bam_path,
+                chromosomes=chromosomes,
+                methyl_tr=bam_cfg.get("ont_methyl_tr", 122),
+                n_jobs=bam_cfg.get("n_jobs", 4),
+                reference_path=reference_path,
+                data_type=data_type,
+                min_mapq=bam_cfg.get("min_mapq", 10),
+                require_flags=None,
+                exclude_flags=None,
+                min_cpgs=bam_cfg.get("min_cpgs", 1),
+                merge_pairs=bam_cfg.get("merge_pairs", True),
+            )
+        if not len(df):
+            self.logger.warning(
+                "Setting exclude_flags=None and require_flags=None didn't help. The processing of this file will be terminated."
+            )
+            return None
+
         return df
 
     def _load_parsed_reads(self) -> pd.DataFrame:
@@ -261,7 +277,7 @@ class InferencePipeline:
         """
         Overlap processed reads with atlas regions and resolve DMR labels.
 
-        Uses ``prepare_reads_for_uxm`` from ``methyldl.deconvolution.uxm``, which:
+        Uses ``prepare_reads_for_uxm`` from edautils, which:
         - iterates atlas regions and scans sorted reads for overlaps
         - trims reads to region boundaries
         - computes M / U / X counts
@@ -339,7 +355,9 @@ class InferencePipeline:
 
         # ── Load MethylBERT model ──────────────────────────────────────
         self.logger.info(f"Loading MethylBERT from checkpoint: {checkpoint_path}")
-        num_labels = len(self.labels_dict) + 1  # Rejected label
+        # num_labels = len(self.labels_dict)+1 #Rejected label
+        # TODO Make it a parameter
+        num_labels = len(self.labels_dict)
         num_dmr_labels = dataset.num_dmrs()
 
         rrms_config = OrderedDict(
@@ -372,35 +390,35 @@ class InferencePipeline:
             ),
             seq_len=seq_len,
             custom_config=rrms_config.copy(),
-            load_weights=True,
             fine_tuned_model_path=checkpoint_path,
             num_labels=num_labels,
             num_dmr_labels=num_dmr_labels,
             output_dir=os.path.join(self.config["output"]["output_dir"], "tmp_trainer"),
             classifier_implementation="dmr_attention_based",
             batch_size=batch_size,
-            lazy_tokenization=True,
         )
 
         # ── Run predictions ────────────────────────────────────────────
         self.logger.info("Running MethylBERT predictions ...")
+        print(dataset.__getitem__(0))
         predictions = model_instance.predict(
             dataset,
-            data_collator=methylbert_finetune_collator,
             batch_size=batch_size,
         )
         predictions_pd = pd.DataFrame(
-            predictions[0], columns=["prediction_" + str(x) for x in range(40)]
+            predictions[0], columns=["prediction_" + str(x) for x in range(num_labels)]
         )
-        predictions_pd["read_name"] = [x[-2] for x in self.prepared_reads_chuncked[1:]]
+        predictions_pd["read_name"] = [x[-3] for x in self.prepared_reads_chuncked[1:]]
         predictions_pd["ncpgs_marked"] = [
-            x[-1] for x in self.prepared_reads_chuncked[1:]
+            x[-2] for x in self.prepared_reads_chuncked[1:]
         ]
 
         predictions_pd = aggregate_chuncked_predictions_weighted(predictions_pd)
-        result_df = pd.merge(
-            self.prepared_reads, predictions_pd, on="read_name"
-        ).dropna()
+
+        result_df = pd.merge(self.prepared_reads, predictions_pd, on="read_name")
+        result_df = result_df.dropna(
+            subset=result_df.columns.difference(["soft_label"])
+        )
         result_df.rename(columns={"M_rate": "methylation_level"}, inplace=True)
 
         return result_df
@@ -412,7 +430,7 @@ class InferencePipeline:
     def _aggregate_to_dmr(self) -> pd.DataFrame:
         """
         Aggregate read-level predictions to DMR level using
-        ``aggregate_predictions_by_dmr`` from ``methyldl.modelling.prediction_aggregation``.
+        ``aggregate_predictions_by_dmr`` from edautils.
         """
         self.logger.info("Aggregating predictions by DMR ...")
 
@@ -421,6 +439,8 @@ class InferencePipeline:
             group_cols=["dmr_ctype_label", "dmr_ctype"],
             weight_col="NCPGS",
             create_weight_from_cpgs=False,
+            fill_in_missing_labels=self.fill_in_missing_labels,
+            labels_dict=self.labels_dict,
         )
 
         return aggregated
@@ -482,9 +502,15 @@ class InferencePipeline:
         deconvolver = XGBoostDeconvolver.load(checkpoint_path)
 
         # Build the prediction matrix from DMR-aggregated data
-        prediction_matrix = self._build_prediction_matrix()
-
-        proportions = np.round(deconvolver.predict(prediction_matrix), 4)
+        # prediction_matrix = self._build_prediction_matrix()
+        X = self._extract_features_by_mask(
+            np.array(self.dmr_aggregated[[f"prediction_{i}_wavg" for i in range(39)]]),
+            self.features_mask,
+        )
+        deconv_preds = deconvolver._predict_raw(X)
+        deconv_preds = deconvolver._transform_output(deconv_preds)[0]
+        # proportions = np.round(deconvolver.predict(prediction_matrix),4)
+        proportions = np.round(deconv_preds, 4)
         self.logger.debug(f"XGBoost proportions: {proportions}")
 
         return proportions
@@ -501,25 +527,45 @@ class InferencePipeline:
         self.logger.info(f"Loading {architecture} from {checkpoint_path}")
 
         if architecture == "Shallow_Wide_Network":
+            #     deconvolver  = nn.Sequential(
+            #     nn.Linear(78, 1024),
+            #     nn.GELU(),
+            #     nn.Dropout(0.2),
+            #     nn.Linear(1024, 39),
+            #     nn.Softmax(dim=-1)
+            # )
             deconvolver = nn.Sequential(
-                nn.Linear(78, 1024),
+                nn.Linear(152, 1024),
                 nn.GELU(),
                 nn.Dropout(0.2),
                 nn.Linear(1024, 39),
                 nn.Softmax(dim=-1),
             )
         elif architecture == "3Layer_MLP":
+            # deconvolver = nn.Sequential(
+            #     nn.Linear(78, 128),
+            #     nn.GELU(),
+            #     nn.Dropout(0.2),
+            #     nn.Linear(128, 128),
+            #     nn.GELU(),
+            #     nn.Dropout(0.2),
+            #     nn.Linear(128, 64),
+            #     nn.GELU(),
+            #     nn.Dropout(0.2),
+            #     nn.Linear(64, 39),
+            #     nn.Softmax(dim=-1)
+            # )
             deconvolver = nn.Sequential(
-                nn.Linear(78, 128),
+                nn.Linear(152, 512),
                 nn.GELU(),
                 nn.Dropout(0.2),
-                nn.Linear(128, 128),
+                nn.Linear(512, 256),
                 nn.GELU(),
                 nn.Dropout(0.2),
-                nn.Linear(128, 64),
+                nn.Linear(256, 152),
                 nn.GELU(),
-                nn.Dropout(0.2),
-                nn.Linear(64, 39),
+                nn.Dropout(0.1),
+                nn.Linear(152, 39),
                 nn.Softmax(dim=-1),
             )
         else:
@@ -531,12 +577,15 @@ class InferencePipeline:
         deconvolver.load_state_dict(torch.load(checkpoint_path, weights_only=True))
         deconvolver.eval()
         X = torch.FloatTensor(
-            np.array(self.dmr_aggregated[[f"prediction_{i}_wavg" for i in range(40)]])
+            self._extract_features_by_mask(
+                np.array(
+                    self.dmr_aggregated[[f"prediction_{i}_wavg" for i in range(39)]]
+                ),
+                self.features_mask,
+            )
         ).to("cuda")
-        X = torch.unsqueeze(X, 0)
-        X = torch.concat(
-            [torch.diagonal(X[:, :, :39], dim1=1, dim2=2), X[:, :, -1]], dim=1
-        )
+        # X = torch.unsqueeze(X,0)
+        # X = torch.concat([torch.diagonal(X[:, :, :39], dim1=1, dim2=2),X[:, :, -1]], dim=1)
         deconv_preds = deconvolver(X)
         proportions = np.round(deconv_preds.to("cpu").detach().numpy(), 4)
         self.logger.debug(f"{architecture} proportions: {proportions}")
@@ -577,6 +626,15 @@ class InferencePipeline:
     @staticmethod
     def _extract_diag_and_rej(matrix):
         return np.reshape(np.concat([np.diag(matrix), matrix[:, -1]], axis=0), (1, 78))
+
+    @staticmethod
+    def _extract_features_by_mask(matrix, target_mask):
+        return np.expand_dims(
+            np.ma.masked_array(
+                matrix, ~np.array(target_mask, dtype=np.bool)
+            ).compressed(),
+            0,
+        )
 
     def _build_prediction_matrix(self) -> np.ndarray:
         """

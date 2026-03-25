@@ -11,8 +11,25 @@ import numpy as np
 import pandas as pd
 from scipy.stats import entropy
 from tqdm import tqdm
-
 from methyldl.data.sequencing.genome import collapse_methylation
+
+COLUMN_ALIASES = {
+    "input_ids": ["input_ids", "genome_sequence", "seq", "dna"],
+    "methylation_ids": ["methylation_ids", "cpg_methylation_sequence", "pattern"],
+    "label": ["label"],
+    "soft_label": ["soft_label"],
+    "m6a_methylation_sequence": ["m6a_methylation_sequence"],
+    "dmr_label": ["dmr_label"],
+}
+
+
+def resolve_column(columns, canonical_name):
+    """Find the first matching alias for a canonical column name."""
+    aliases = COLUMN_ALIASES.get(canonical_name, [canonical_name])
+    for alias in aliases:
+        if alias in columns:
+            return alias
+    return None
 
 
 class SupervisedDataset(Dataset):
@@ -27,6 +44,8 @@ class SupervisedDataset(Dataset):
         data_interface: str = "csv",
         lazy_tokenization=False,
         include_dmr_ids=False,
+        dmr_label_column=None,
+        soft_labels=False,
     ):
         """
         Args:
@@ -42,6 +61,8 @@ class SupervisedDataset(Dataset):
         self.m6a_methylation = None
         self.lazy_tokenization = lazy_tokenization
         self.include_dmr_ids = include_dmr_ids
+        self.soft_labels = soft_labels
+        self.dmr_label_column = dmr_label_column
 
         # Determine input type
         if data_interface == "csv":
@@ -85,11 +106,16 @@ class SupervisedDataset(Dataset):
             texts = [row[genome_index] for row in data]
 
             # Extract labels (optional)
-            self.labels = (
-                [int(row[labels_index]) for row in data]
-                if labels_index is not None
-                else None
-            )
+            if soft_labels:
+                raise NotImplementedError(
+                    "Method to encode soft labels with .csv interface is not implemented"
+                )
+            else:
+                self.labels = (
+                    [int(row[labels_index]) for row in data]
+                    if labels_index is not None
+                    else None
+                )
 
             # Extract methylation data (optional)
             self.cpg_methylation = (
@@ -107,13 +133,29 @@ class SupervisedDataset(Dataset):
             else:
                 data = pd.read_csv(data_path_or_list + ".csv")
 
+            cols = data.columns
+            dna_col = resolve_column(cols, "input_ids")
+            meth_col = resolve_column(cols, "methylation_ids")
+            label_col = resolve_column(cols, "soft_label" if soft_labels else "label")
+            if dna_col is None:
+                raise ValueError(
+                    f"No recognized DNA sequence column found. Expected one of: {COLUMN_ALIASES['input_ids']}"
+                )
+            if meth_col is None:
+                raise ValueError(
+                    f"No recognized Methylation sequence column found. Expected one of: {COLUMN_ALIASES['methylation_ids']}"
+                )
             dna, methylation, labels = (
-                data["input_ids"],
-                data["methylation_ids"],
-                data["label"],
+                data[dna_col],
+                data[meth_col],
+                data[label_col],
             )
             if self.include_dmr_ids:
-                self.dmr_ids = data["dmr_label"]
+                if self.dmr_label_column is None:
+                    raise ValueError(
+                        "dmr_label_column must not be none if include_dmr_ids is set to True"
+                    )
+                self.dmr_ids = data[self.dmr_label_column]
             self.labels = labels.to_list()
             self.cpg_methylation = methylation.to_list()
             texts = dna.to_list()
@@ -213,6 +255,7 @@ class DataCollatorForSupervisedDataset:
     """Collate examples for supervised fine-tuning."""
 
     tokenizer: transformers.PreTrainedTokenizer
+    soft_labels: bool = False
 
     def __call__(self, instances: Sequence[Dict]) -> Dict[str, torch.Tensor]:
         keys = instances[0].keys()
@@ -236,7 +279,10 @@ class DataCollatorForSupervisedDataset:
                 batch["m6a_methylation"], batch_first=True, padding_value=2
             )
         if "labels" in batch:
-            batch["labels"] = torch.tensor(batch["labels"], dtype=torch.long)
+            if self.soft_labels:
+                batch["labels"] = torch.stack(batch["labels"]).float()
+            else:
+                batch["labels"] = torch.stack(batch["labels"]).long()
         if "dmr_ids" in batch:
             batch["dmr_ids"] = torch.tensor(batch["dmr_ids"], dtype=torch.long)
 

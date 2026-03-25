@@ -28,6 +28,7 @@ from methyldl.data.dataset import *
 from safetensors.torch import load_file
 from transformers.models.bert.configuration_bert import BertConfig
 from methyldl.modelling.common import DMRAttentionClassifier
+from methyldl.modelling.loss import ConfidenceWeightedCrossEntropy
 
 
 class BertEmbeddings(nn.Module):
@@ -254,7 +255,9 @@ class BertForSequenceClassification(BertPreTrainedModel):
     e.g., GLUE tasks.
     """
 
-    def __init__(self, prertained_model, num_labels=None, num_dmr_labels=None):
+    def __init__(
+        self, prertained_model, num_labels=None, num_dmr_labels=None, soft_labels=False
+    ):
         super().__init__(prertained_model.config)
         # Overwritting num_labels if those were provided during constructio since the foundational model features classifier with 2 labels
         # Sometimes, one need to overwrite it before fine-tunning for multi-label learning
@@ -269,6 +272,7 @@ class BertForSequenceClassification(BertPreTrainedModel):
         self.bert = BertModel(prertained_model.bert)  # Reconstructing original model
         self.dropout = prertained_model.dropout
         self.num_dmr_labels = num_dmr_labels
+        self.soft_labels = soft_labels
         if num_dmr_labels is None:
             self.classifier = prertained_model.classifier
         else:
@@ -335,7 +339,9 @@ class BertForSequenceClassification(BertPreTrainedModel):
                 if self.num_labels == 1:
                     self.config.problem_type = "regression"
                 elif self.num_labels > 1 and (
-                    labels.dtype == torch.long or labels.dtype == torch.int
+                    labels.dtype == torch.long
+                    or labels.dtype == torch.int
+                    or self.soft_labels
                 ):
                     self.config.problem_type = "single_label_classification"
                 else:
@@ -348,8 +354,11 @@ class BertForSequenceClassification(BertPreTrainedModel):
                 else:
                     loss = loss_fct(logits, labels)
             elif self.config.problem_type == "single_label_classification":
-                loss_fct = nn.CrossEntropyLoss()
-                loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
+                if self.soft_labels:
+                    loss_fct = ConfidenceWeightedCrossEntropy(self.num_labels)
+                else:
+                    loss_fct = nn.CrossEntropyLoss()
+                loss = loss_fct(logits.view(-1, self.num_labels), labels)
             elif self.config.problem_type == "multi_label_classification":
                 loss_fct = nn.BCEWithLogitsLoss()
                 loss = loss_fct(logits, labels)
@@ -406,11 +415,19 @@ class TrainingArguments(transformers.TrainingArguments):
 
 
 def initialize_model_with_custom_embeddings(
-    base_model, use_cpg, use_m6a, num_labels=None, num_dmr_labels=None
+    base_model,
+    use_cpg,
+    use_m6a,
+    num_labels=None,
+    num_dmr_labels=None,
+    soft_labels=False,
 ):
     base_model.bert.embeddings = BertEmbeddings(base_model.bert, use_cpg, use_m6a)
     model = BertForSequenceClassification(
-        base_model, num_labels=num_labels, num_dmr_labels=num_dmr_labels
+        base_model,
+        num_labels=num_labels,
+        num_dmr_labels=num_dmr_labels,
+        soft_labels=soft_labels,
     )
     if num_dmr_labels is None:
         model.classifier = nn.Linear(768, out_features=num_labels, bias=True)
@@ -431,18 +448,20 @@ class EpigenDnabert2:
         use_triton=True,
         training_args=None,
         num_dmr_labels=None,
+        soft_labels=False,
     ):
 
         assert len(
             foundation_model_huggingface
         ), "Must specify foundation model path hosted on Hugging Face"
         self.num_dmr_labels = num_dmr_labels
+        self.soft_labels = soft_labels
 
         config = BertForSequenceClassification.config_class.from_pretrained(
             foundation_model_huggingface
         )
         config = BertConfig(**config.to_dict(), use_triton=use_triton)
-        # Does not load weights just yet, because if we have a checkpoint, the weights will be retrieved from it
+        # Does not load weights just yet, because if we have a checkpoint, the weights will be retrived from it
         # base_model = transformers.AutoModelForSequenceClassification.from_config(trust_remote_code=trust_remote_code, config = config)
         base_model = transformers.AutoModelForSequenceClassification.from_pretrained(
             foundation_model_huggingface,
@@ -457,6 +476,7 @@ class EpigenDnabert2:
             use_m6a_methylation,
             num_labels=num_labels,
             num_dmr_labels=num_dmr_labels,
+            soft_labels=soft_labels,
         )
 
         self.num_labels = num_labels
@@ -487,6 +507,7 @@ class EpigenDnabert2:
                 use_m6a_methylation,
                 num_labels=num_labels,
                 num_dmr_labels=num_dmr_labels,
+                soft_labels=soft_labels,
             )
         self.model = model
         self.num_labels = num_labels
@@ -539,7 +560,9 @@ class EpigenDnabert2:
             use_fast=True,
             trust_remote_code=trust_remote_code,
         )
-        self.data_collator = DataCollatorForSupervisedDataset(tokenizer=self.tokenizer)
+        self.data_collator = DataCollatorForSupervisedDataset(
+            tokenizer=self.tokenizer, soft_labels=self.soft_labels
+        )
         self.trainer = None
 
     def __str__(self):

@@ -172,6 +172,8 @@ def prepare_reads_for_uxm(
 
     n_records = len(reads_data)
 
+    is_soft_label_avaliable = "soft_label" in reads_data.columns
+
     # Build chromosome start index mapping
     chrom_start_idx = {}
     if n_records > 0:
@@ -232,6 +234,10 @@ def prepare_reads_for_uxm(
 
                 new_pattern = pattern[offset_start:offset_end]
                 new_seq = seq[offset_start:offset_end]
+                if is_soft_label_avaliable:
+                    soft_label = record["soft_label"]
+                else:
+                    soft_label = np.nan
 
                 if debug:
                     results.append(
@@ -253,6 +259,7 @@ def prepare_reads_for_uxm(
                             end,
                             record["original_label"],
                             record["label"],
+                            soft_label,
                         )
                     )
                 else:
@@ -269,6 +276,7 @@ def prepare_reads_for_uxm(
                             end,
                             record["original_label"],
                             record["label"],
+                            soft_label,
                         )
                     )
 
@@ -294,6 +302,7 @@ def prepare_reads_for_uxm(
             "region_end",
             "original_label",
             "label",
+            "soft_label",
         ]
     else:
         columns = [
@@ -308,6 +317,7 @@ def prepare_reads_for_uxm(
             "region_end",
             "original_label",
             "label",
+            "soft_label",
         ]
 
     results = pd.DataFrame(results, columns=columns)

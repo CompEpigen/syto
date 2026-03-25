@@ -11,12 +11,59 @@ from matplotlib.gridspec import GridSpec
 from scipy import stats
 from sklearn.metrics import confusion_matrix, r2_score
 
-from methyldl.deconvolution.neural_deconvolvers.diagonal_aware_deconvolver import (
+from methyldl.deconvolution.deep_deconvolvers.diagonal_aware_deconvolver import (
     DiagonalAwareDeconvolver,
 )
-from methyldl.deconvolution.neural_deconvolvers.deep_deconvolvers_training import (
+from methyldl.deconvolution.deep_deconvolvers.training import (
     DeconvolverOutput,
 )
+
+
+def print_deconvolution_metrics_summary(metrics: dict):
+    """Print a formatted summary of the metrics."""
+    print("=" * 60)
+    print("DECONVOLUTION RESULTS SUMMARY")
+    print("=" * 60)
+
+    if "celltype_metrics" in metrics:
+        ct_metrics = metrics["celltype_metrics"]
+        print(f"\n📊 Overall R²: {ct_metrics['overall_r2']:.4f}")
+
+        print("\n📋 Per Cell Type R²:")
+        print("-" * 40)
+
+        # Sort by R² descending
+        sorted_ct = sorted(
+            ct_metrics["per_celltype_r2"].items(),
+            key=lambda x: x[1] if not np.isnan(x[1]) else -1,
+            reverse=True,
+        )
+
+        for ct_name, r2 in sorted_ct:
+            if not np.isnan(r2):
+                bar = "█" * int(r2 * 20) + "░" * (20 - int(r2 * 20))
+                print(f"  {ct_name:20s} │ {bar} │ {r2:.4f}")
+            else:
+                print(f"  {ct_name:20s} │ {'N/A':^20s} │ N/A")
+
+    if "complexity_metrics" in metrics:
+        cx_metrics = metrics["complexity_metrics"]
+
+        print("\n📈 Performance by Mixture Complexity:")
+        print("-" * 50)
+        print(f"  {'# Cell Types':^15s} │ {'N Samples':^10s} │ {'R²':^10s}")
+        print("-" * 50)
+
+        for complexity in sorted(cx_metrics["per_complexity_r2"].keys()):
+            r2 = cx_metrics["per_complexity_r2"][complexity]
+            n_samples = cx_metrics["per_complexity_n_samples"][complexity]
+
+            if not np.isnan(r2):
+                print(f"  {complexity:^15d} │ {n_samples:^10d} │ {r2:^10.4f}")
+            else:
+                print(f"  {complexity:^15d} │ {n_samples:^10d} │ {'N/A':^10s}")
+
+    print("\n" + "=" * 60)
 
 
 def bland_altman_plot(
@@ -2904,3 +2951,93 @@ def plot_deconvolution_results(
     }
 
     return fig, all_metrics
+
+
+import ast
+from matplotlib.patches import Patch
+import matplotlib.pyplot as plt
+import seaborn as sns
+import numpy as np
+
+
+def plot_soft_label_distribution(
+    df, target_dmr_ctype, target_label, labels_dict, num_classes=40
+):
+    """
+    Plots the distribution of soft label probabilities across all classes,
+    using a dictionary to map class indices to biological names.
+    """
+    # 1. Filter the dataset
+    subset = df[
+        (df["dmr_ctype"] == target_dmr_ctype) & (df["original_label"] == target_label)
+    ].copy()
+
+    if len(subset) == 0:
+        print(
+            f"No reads found for dmr_ctype='{target_dmr_ctype}' and label={target_label}"
+        )
+        return
+
+    print(f"Found {len(subset):,} reads for this subset. Generating plot...")
+
+    # 2. Extract and stack the soft labels into a 2D numpy array
+    try:
+        soft_labels_matrix = np.vstack(subset["soft_label"].values)
+    except ValueError:
+        # Safely evaluate string representations of lists if necessary
+        subset["soft_label"] = subset["soft_label"].apply(
+            lambda x: ast.literal_eval(x) if isinstance(x, str) else x
+        )
+        soft_labels_matrix = np.vstack(subset["soft_label"].values)
+
+    # 3. Set up the plot
+    plt.figure(figsize=(18, 7))  # Made slightly wider to accommodate text labels
+
+    ax = sns.boxplot(
+        data=soft_labels_matrix,
+        color="lightgray",
+        fliersize=1,
+        linewidth=1.2,
+        showfliers=True,
+    )
+
+    # 4. Highlight the target label box
+    if target_label < len(ax.patches):
+        box = ax.patches[target_label]
+        box.set_facecolor("dodgerblue")
+        box.set_edgecolor("darkblue")
+        box.set_linewidth(2)
+
+    # 5. Formatting with the dictionary mappings
+    target_name = labels_dict.get(target_label, f"Class {target_label}")
+
+    plt.title(
+        f"Soft Label Distributions for {target_dmr_ctype} Regions\n"
+        f"(Ground Truth: {target_name} [{target_label}] | Reads: {len(subset):,})",
+        fontsize=14,
+        fontweight="bold",
+    )
+    plt.xlabel("Cell Type", fontsize=12)
+    plt.ylabel("Probability Score", fontsize=12)
+
+    # Generate the string labels for the x-axis using the dictionary
+    # Fall back to the integer string if an index is missing from the dict
+    x_labels = [labels_dict.get(i, str(i)) for i in range(num_classes)]
+
+    # Apply the string labels and force a 90-degree rotation so they don't overlap
+    plt.xticks(ticks=range(num_classes), labels=x_labels, rotation=90)
+    plt.ylim(-0.05, 1.05)
+
+    plt.grid(axis="y", linestyle="--", alpha=0.7)
+
+    # Update legend to show the mapped name
+    legend_elements = [
+        Patch(
+            facecolor="dodgerblue", edgecolor="darkblue", label=f"Target: {target_name}"
+        ),
+        Patch(facecolor="lightgray", edgecolor="#333333", label="Other Cell Types"),
+    ]
+    plt.legend(handles=legend_elements, loc="upper right")
+
+    plt.tight_layout()
+    plt.show()

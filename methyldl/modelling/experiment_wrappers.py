@@ -719,6 +719,15 @@ class DismirMLflowExperiment(AbstractMLFlowExperiment):
             else:
                 best_threshold = 0.5 if num_classes == 2 else None
 
+            # Calculate metrics
+            metrics = self._calculate_metrics(
+                labels,
+                predictions,
+                predictions_binary,
+                best_threshold=best_threshold if best_threshold else 0.5,
+                num_classes=num_classes,
+            )
+
             # Create predictions dataframe
             if num_classes > 2:
                 pred_dict = {
@@ -748,15 +757,6 @@ class DismirMLflowExperiment(AbstractMLFlowExperiment):
                         "predicted_label": predictions_binary,
                     }
                 )
-
-            # Calculate metrics
-            metrics = self._calculate_metrics(
-                labels,
-                predictions,
-                predictions_binary,
-                best_threshold=best_threshold if best_threshold else 0.5,
-                num_classes=num_classes,
-            )
 
             return metrics, predictions_df
 
