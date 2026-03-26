@@ -124,7 +124,17 @@ def aggregate_predictions_by_dmr(
             )
             synthetic_rows = result["_merge"] == "right_only"
             result.drop(columns=["_merge"], inplace=True)
-            result[result.isna()] = 0
+            fill_columns = [col for col in result.columns if col not in group_cols]
+            string_fill_columns = [
+                col
+                for col in fill_columns
+                if pd.api.types.is_string_dtype(result[col].dtype)
+            ]
+            if string_fill_columns:
+                result = result.astype(
+                    {col: object for col in string_fill_columns}, copy=False
+                )
+            result.loc[:, fill_columns] = result.loc[:, fill_columns].fillna(0)
             result.loc[synthetic_rows, "label"] = -1
             result["total_weight"] = result["total_weight"].apply(lambda x: max(x, 1))
 
