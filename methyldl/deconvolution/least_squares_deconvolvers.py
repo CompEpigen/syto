@@ -135,6 +135,7 @@ class NNLSDeconvolver(AbstractLSDeconvolver):
         unnorm_mixture_proportions, residual = nnls(
             self.reference_prediction_matrix_, x
         )
+        unnorm_mixture_proportions = np.array(unnorm_mixture_proportions)
         mixture_proportions_sum = unnorm_mixture_proportions.sum()
         if mixture_proportions_sum > 0:
             norm_mixture_proportions = (

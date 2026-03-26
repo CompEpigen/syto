@@ -50,6 +50,7 @@ from methyldl.deconvolution.uxm import (
     rearange_uxm_deconvolution_results,
     load_atlas,
 )
+from methyldl.deconvolution.least_squares_deconvolvers import PSLSDeconvolver, NNLSDeconvolver
 
 from methyldl.deconvolution.xgbdeconvolver import (
     XGBoostDeconvolver,
@@ -160,22 +161,19 @@ class InferencePipeline:
                     f"Stage 3 complete: predictions for {len(self.predictions_df)} reads"
                 )
 
-            # ── Stage 4: aggregate to DMR level ────────────────────────────
-            self.dmr_aggregated = self._aggregate_to_dmr()
-            self.logger.info(
-                f"Stage 4 complete: {len(self.dmr_aggregated)} DMR-level aggregations"
-            )
-
-            # ── Stage 5: deconvolution ─────────────────────────────────────
-            self.deconvolution_results = self._run_deconvolution()
-            self.logger.info(
-                f"Stage 5 complete: ran {len(self.deconvolution_results)} deconvolution methods"
-            )
-
-            # ── Save results ────────────────────────────────────────────────
-            self._save_results()
-
-            return self.deconvolution_results
+        # ── Stage 4: aggregate to DMR level ────────────────────────────
+        self.dmr_aggregated = self._aggregate_to_dmr()
+        self.logger.info(
+            f"Stage 4 complete: {len(self.dmr_aggregated)} DMR-level aggregations"
+        )
+        # ── Stage 5: deconvolution ─────────────────────────────────────
+        self.deconvolution_results = self._run_deconvolution()
+        self.logger.info(
+            f"Stage 5 complete: ran {len(self.deconvolution_results)} deconvolution methods"
+        )
+        # ── Save results ────────────────────────────────────────────────
+        self._save_results()
+        return self.deconvolution_results
 
     # ═══════════════════════════════════════════════════════════════════
     #  Stage 1: BAM processing / loading pre-processed reads
@@ -400,7 +398,7 @@ class InferencePipeline:
 
         # ── Run predictions ────────────────────────────────────────────
         self.logger.info("Running MethylBERT predictions ...")
-        print(dataset.__getitem__(0))
+
         predictions = model_instance.predict(
             dataset,
             batch_size=batch_size,
@@ -478,6 +476,9 @@ class InferencePipeline:
                     results[name] = self._run_uxm_deconvolution(method_cfg)
                 elif name in ["3Layer_MLP", "Shallow_Wide_Network"]:
                     results[name] = self._run_nn_deconvolution(method_cfg)
+                elif name == "ls":
+                    flavor = method_cfg["flavor"]
+                    results[flavor] = self._run_ls_deconvolution(method_cfg)
                 else:
                     self.logger.warning(
                         f"Unknown deconvolution method: {name}, skipping"
@@ -488,6 +489,31 @@ class InferencePipeline:
                 )
 
         return results
+    
+    def _run_ls_deconvolution(self, method_cfg: Dict[str,Any]) -> np.ndarray:
+        """
+        Run LS based deconvolution on the aggregated predictions selected feature matrices
+        """
+        checkpoint_path = method_cfg["checkpoint_path"]
+        flavor = method_cfg["flavor"]
+        self.logger.info(f"Loading {flavor} from {checkpoint_path}")
+        X = self._extract_features_by_mask(
+            np.array(self.dmr_aggregated[[f"prediction_{i}_wavg" for i in range(39)]]),
+            self.features_mask,
+        )
+        X = X.flatten()
+        if flavor == "nnls":
+            deconvolver = NNLSDeconvolver.load(checkpoint_path)
+            proportions,_,_ = deconvolver.predict_single_sample(X)
+        elif flavor == "psls":
+            deconvolver = PSLSDeconvolver.load(checkpoint_path)
+            proportions = deconvolver.predict_single_sample(X)
+        else:
+            raise ValueError("LS fabily of deconvolvers supports only two flavors: nnls and psls")
+        proportions = np.round(proportions,4)
+        self.logger.debug(f"{flavor} proportions: {proportions}")
+
+        return proportions
 
     def _run_xgboost_deconvolution(self, method_cfg: Dict[str, Any]) -> np.ndarray:
         """

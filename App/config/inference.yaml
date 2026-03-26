@@ -28,7 +28,7 @@ atlas_path: ../UXM_deconv/supplemental/Atlas.U25.l4.hg38.full.tsv
 input:
   # Input type: "bam" for raw BAM files, "processed_reads" for pre-processed pickle
   #type: predicted_reads
-  type: bam
+  type: predicted_reads
   # Path to input BAM file (used when type: bam)
   bam_path: /data/dmytro/dimelo_antonella/BSBolt/WGBS/AS-136075.rmdup.bam
   # Path to pre-processed reads pickle (used when type: processed_reads)
@@ -63,7 +63,7 @@ deconvolution:
   methods:
     - name: xgboost
       enabled: true
-      checkpoint_path: Tutorials/methylBertLoyferWithReject_attentionClassifier_DMRs_stratified_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels/xgb_dpth15.pt
+      checkpoint_path: Tutorials/methylBertLoyferWithReject_attentionClassifier_DMRs_stratified_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels/xgb_dpth15.joblib
     - name: uxm
       enabled: true
     - name: 3Layer_MLP
@@ -72,10 +72,19 @@ deconvolution:
     - name: Shallow_Wide_Network
       enabled: true
       checkpoint_path: Tutorials/methylBertLoyferWithReject_attentionClassifier_DMRs_stratified_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels/swn_mlp_best_deconvolver.pt
+    - name: ls
+      flavor: nnls
+      enabled: true
+      checkpoint_path: Tutorials/methylBertLoyferWithReject_attentionClassifier_DMRs_stratified_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels/nnls_deconvolver.joblib
+    - name: ls
+      flavor: psls
+      enabled: true
+      checkpoint_path: Tutorials/methylBertLoyferWithReject_attentionClassifier_DMRs_stratified_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels/psls_deconvolver.joblib
+      
 
 # Output configuration
 output:
-  output_dir: inference_output_ENCFF336CKG
+  output_dir: inference_output_AS-136075
   save_processed_reads: true   # Save processed reads as pickle
   save_predictions: true       # Save MethylBERT predictions as pickle
   save_deconvolution: true     # Save deconvolution proportions as CSV
