@@ -82,7 +82,9 @@ Stage0 += shell(
         # 2. FORCE OVERWRITE torch with the P100-compatible version (CUDA 11.8)
         # We use the pip inside the .venv directly to bypass Poetry's checks
         "./.venv/bin/pip install --force-reinstall torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118",
-        # 3. Clean up
+        # 3. FIX NUMBA COMPATIBILITY by downgrading numpy
+        "./.venv/bin/pip install 'numpy<2.4'",
+        # 4. Clean up
         "poetry cache clear pypi --all -n",
     ]
 )
@@ -143,8 +145,8 @@ Stage0 += label(
     metadata={
         "maintainer": "Dmytro Rizdvanteskyi",
         "description": "MethylDL container - Ubuntu 22.04",
-        "cuda.version": "12.8",
-        "pytorch.version": "2.7.0+cu128",
+        "cuda.version": "11.8",
+        "pytorch.version": "2.7.0+cu118",
         "python.version": "3.12",
         "os": "ubuntu22.04",
     }
