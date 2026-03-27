@@ -57,6 +57,8 @@ from methyldl.deconvolution.xgbdeconvolver import (
     XGBDeconvolverConfig,
 )
 
+from methyldl.deconvolution.linear_calibrator import LinearCalibrator
+
 
 class InferencePipeline:
     """
@@ -502,14 +504,21 @@ class InferencePipeline:
             self.features_mask,
         )
         X = X.flatten()
-        if flavor == "nnls":
+        if "nnls" in flavor:
             deconvolver = NNLSDeconvolver.load(checkpoint_path)
             proportions,_,_ = deconvolver.predict_single_sample(X)
-        elif flavor == "psls":
+        elif "psls" in flavor:
             deconvolver = PSLSDeconvolver.load(checkpoint_path)
             proportions = deconvolver.predict_single_sample(X)
         else:
             raise ValueError("LS fabily of deconvolvers supports only two flavors: nnls and psls")
+        
+        if method_cfg["use_callibration"]:
+            calibrator = LinearCalibrator()
+            calibrator.load_calibration_parameters(method_cfg["callibrator_path"])
+            proportions = calibrator.predict(np.expand_dims(proportions,0))
+
+
         proportions = np.round(proportions,4)
         self.logger.debug(f"{flavor} proportions: {proportions}")
 

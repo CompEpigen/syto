@@ -27,29 +27,31 @@ atlas_path: ../UXM_deconv/supplemental/Atlas.U25.l4.hg38.full.tsv
 # Input configuration
 input:
   # Input type: "bam" for raw BAM files, "processed_reads" for pre-processed pickle
-  #type: predicted_reads
   type: predicted_reads
+  # type: bam
   # Path to input BAM file (used when type: bam)
-  bam_path: /data/dmytro/dimelo_antonella/BSBolt/WGBS/AS-136075.rmdup.bam
+  bam_path: /data/dmytro/dimelo_antonella/DiMeLo/DiMeLo_Sample2.bam
   # Path to pre-processed reads pickle (used when type: processed_reads)
   # Must match output format of process_bam_with_chunking()
   parsed_reads_path: null
-  predicted_reads_path: inference_output_AS-136075/predictions.pkl
+  predicted_reads_path: inference_output_DiMeLo_Sample2/predictions.pkl
   # Path to reference genome FASTA (required for WGBS BAMs)
   reference_path: ../wgbs_tools/references/hg38/hg38.fa.gz
   # Data type: null for auto-detect, or "ont" / "wgbs"
-  data_type: wgbs
+  data_type: ont
   # Chromosomes to process: list of chromosome names, or "all"
   chromosomes: all
 
+
 # BAM processing parameters (used when input.type: bam)
 bam_processing:
-  n_jobs: 4
+  n_jobs: 8
   min_mapq: 10
   require_flags: 3
   exclude_flags: 1796
   min_cpgs: 1
   merge_pairs: true
+  ont_methyl_tr: 180 #~0.7
 
 # MethylBERT prediction parameters
 max_sequence_length: 150
@@ -73,18 +75,32 @@ deconvolution:
       enabled: true
       checkpoint_path: Tutorials/methylBertLoyferWithReject_attentionClassifier_DMRs_stratified_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels/swn_mlp_best_deconvolver.pt
     - name: ls
+      flavor: nnls_calibrated
+      enabled: true
+      use_callibration: true
+      checkpoint_path: Tutorials/methylBertLoyferWithReject_attentionClassifier_DMRs_stratified_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels/nnls_deconvolver.joblib
+      callibrator_path: Tutorials/methylBertLoyferWithReject_attentionClassifier_DMRs_stratified_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels/nnls_linear_calibrator.npz
+    - name: ls
+      flavor: psls_calibrated
+      enabled: true
+      use_callibration: true
+      checkpoint_path: Tutorials/methylBertLoyferWithReject_attentionClassifier_DMRs_stratified_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels/psls_deconvolver.joblib
+      callibrator_path: Tutorials/methylBertLoyferWithReject_attentionClassifier_DMRs_stratified_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels/psls_linear_calibrator.npz
+    - name: ls
       flavor: nnls
       enabled: true
+      use_callibration: False
       checkpoint_path: Tutorials/methylBertLoyferWithReject_attentionClassifier_DMRs_stratified_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels/nnls_deconvolver.joblib
     - name: ls
       flavor: psls
       enabled: true
+      use_callibration: False
       checkpoint_path: Tutorials/methylBertLoyferWithReject_attentionClassifier_DMRs_stratified_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels/psls_deconvolver.joblib
       
 
 # Output configuration
 output:
-  output_dir: inference_output_AS-136075
+  output_dir: inference_output_DiMeLo_Sample2
   save_processed_reads: true   # Save processed reads as pickle
   save_predictions: true       # Save MethylBERT predictions as pickle
   save_deconvolution: true     # Save deconvolution proportions as CSV
