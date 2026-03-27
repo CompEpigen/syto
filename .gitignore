@@ -1,6 +1,7 @@
 .vscode/*
 App/mlruns/*
 App/output/*
+output/*
 
 
 # Byte-compiled / optimized / DLL files
