@@ -37,6 +37,7 @@ USE_FAKEROOT=false
 CLEAN_BUILD=false
 SKIP_GENERATE=false
 VERBOSE=false
+OUTPUT_DIR=""
 
 # Function to print colored output
 print_info() {
@@ -69,6 +70,7 @@ Arguments:
 Options:
   --sudo            Use sudo for apptainer build (default: no)
   --fakeroot        Use fakeroot for apptainer build (default: no)
+  --output-dir DIR  Put Apptainer config/cache/tmp files under DIR
   --clean           Remove existing definition and image files before building
   --skip-generate   Skip HPCCM generation, use existing .def file
   --verbose         Show verbose output
@@ -80,6 +82,9 @@ Examples:
 
   # Build with sudo
   $0 methyldl_ubuntu22_single --sudo
+
+  # Build with Apptainer cache/config/tmp stored outside home
+  $0 methyldl_ubuntu22_single --fakeroot --output-dir /path/to/build-output
 
   # Clean build with sudo
   $0 methyldl_rockylinux9_multi --sudo --clean
@@ -111,6 +116,14 @@ while [ $# -gt 0 ]; do
             ;;
         --fakeroot)
             USE_FAKEROOT=true
+            ;;
+        --output-dir)
+            if [ $# -lt 2 ]; then
+                print_error "--output-dir requires an argument"
+                usage
+            fi
+            OUTPUT_DIR="$2"
+            shift
             ;;
         --clean)
             CLEAN_BUILD=true
@@ -150,6 +163,27 @@ RECIPE_FILE="${RECIPE_DIR}/${RECIPE_NAME}.py"
 DEF_FILE="${DEF_DIR}/${RECIPE_NAME}.def"
 IMAGE_FILE="${IMAGE_DIR}/${RECIPE_NAME}.sif"
 
+# Optional Apptainer runtime directories
+APPTAINER_CONFIG_DIR=""
+APPTAINER_CACHE_DIR=""
+APPTAINER_TMP_DIR=""
+
+if [ -n "$OUTPUT_DIR" ]; then
+    mkdir -p "$OUTPUT_DIR"
+    OUTPUT_DIR="$(cd "$OUTPUT_DIR" && pwd)"
+
+    APPTAINER_CONFIG_DIR="${OUTPUT_DIR}/apptainer-config"
+    APPTAINER_CACHE_DIR="${OUTPUT_DIR}/apptainer-cache"
+    APPTAINER_TMP_DIR="${OUTPUT_DIR}/apptainer-tmp"
+
+    mkdir -p "$APPTAINER_CONFIG_DIR" "$APPTAINER_CACHE_DIR" "$APPTAINER_TMP_DIR"
+
+    export APPTAINER_CONFIGDIR="$APPTAINER_CONFIG_DIR"
+    export APPTAINER_CACHEDIR="$APPTAINER_CACHE_DIR"
+    export APPTAINER_TMPDIR="$APPTAINER_TMP_DIR"
+    export TMPDIR="$APPTAINER_TMP_DIR"
+fi
+
 # Print build configuration
 print_info "=========================================="
 print_info "MethylDL Container Build Script"
@@ -158,6 +192,12 @@ print_info "Recipe:     ${RECIPE_NAME}"
 print_info "Recipe dir: ${RECIPE_DIR}"
 print_info "Def dir:    ${DEF_DIR}"
 print_info "Image dir:  ${IMAGE_DIR}"
+if [ -n "$OUTPUT_DIR" ]; then
+    print_info "Output dir: ${OUTPUT_DIR}"
+    print_info "Apptainer config dir: ${APPTAINER_CONFIG_DIR}"
+    print_info "Apptainer cache dir:  ${APPTAINER_CACHE_DIR}"
+    print_info "Apptainer tmp dir:    ${APPTAINER_TMP_DIR}"
+fi
 print_info "Build mode: $([ "$USE_SUDO" = true ] && echo "sudo" || echo "fakeroot")"
 print_info "Clean:      ${CLEAN_BUILD}"
 print_info "=========================================="
@@ -222,7 +262,7 @@ print_info "Building Singularity image..."
 # Construct build command
 BUILD_CMD="apptainer build"
 if [ "$USE_SUDO" = true ]; then
-    BUILD_CMD="sudo ${BUILD_CMD}"
+    BUILD_CMD="sudo --preserve-env=APPTAINER_CONFIGDIR,APPTAINER_CACHEDIR,APPTAINER_TMPDIR,TMPDIR ${BUILD_CMD}"
 elif [ "$USE_FAKEROOT" = true ]; then
     BUILD_CMD="${BUILD_CMD} --fakeroot"
 fi
