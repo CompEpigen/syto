@@ -25,17 +25,20 @@ from methyldl.modelling.classifiers.dnabert2 import (
 )  # TODO - must be different for MethylBERT
 
 
-def setup_logging(verbose: bool = False):
+def setup_logging(verbose: bool = False, log_file: str = None):
     """Configure logging for the application."""
     level = logging.DEBUG if verbose else logging.INFO
+    handlers = [logging.StreamHandler()]
+
+    if log_file:
+        os.makedirs(os.path.dirname(log_file), exist_ok=True)
+        handlers.append(logging.FileHandler(log_file))
+
     logging.basicConfig(
         level=level,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         force=True,
-        handlers=[
-            logging.StreamHandler(),
-            logging.FileHandler("test_container_tmp/App.log"),
-        ],
+        handlers=handlers,
     )
     return logging.getLogger(__name__)
 
@@ -286,6 +289,8 @@ Examples:
     parser.add_argument(
         "--datasets", nargs="+", help="Specific datasets to train on (default: all)"
     )
+    parser.add_argument("--log-file", type=str, default=None,
+                    help="Path to log file. If not set, logs go to stdout only.")
 
     # MLflow overrides
     parser.add_argument("--mlflow-uri", type=str, help="MLflow tracking URI")
@@ -300,7 +305,7 @@ Examples:
     args = parser.parse_args()
 
     # Setup logging
-    logger = setup_logging(args.verbose)
+    logger = setup_logging(args.verbose, args.log_file)
     logger.info(f"Starting MethylDL application - Task: {args.task}")
 
     try:
