@@ -142,7 +142,7 @@ METHYLBERT_PRETRAINED_MODEL_ARCHIVE_MAP = {
 def sigmoid_focal_loss(
     inputs: torch.Tensor,
     targets: torch.Tensor,
-    alpha: float = 0.1,
+    alpha: float = 0.25,
     gamma: float = 2,
     reduction: str = "none",
 ) -> torch.Tensor:
@@ -454,8 +454,8 @@ class MethylBertEmbeddedDMR(BertPreTrainedModel):
                 else:
                     loss = self.classification_loss_fct(ctype_logits, labels.float())
 
-            elif self.num_labels == 2 and self.loss in ["bce", "focal_bce"]:
-                ctype_label_onehot = F.one_hot(labels, num_classes=2).float()
+            elif self.num_labels >= 2 and self.loss in ["bce", "focal_bce"]:
+                ctype_label_onehot = F.one_hot(labels, num_classes=self.num_labels).float()
                 loss = self.classification_loss_fct(ctype_logits, ctype_label_onehot)
             else:
                 # Hard labels with CE
