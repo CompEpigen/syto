@@ -36,6 +36,57 @@ except ImportError as e:
 logger = logging.getLogger(__name__)
 
 
+# ── Rotary Positional Embedding (RoPE) ────────────────────────────────────────
+
+def _rotate_half(x: torch.Tensor) -> torch.Tensor:
+    """Rotate the second half of the last dimension to implement RoPE."""
+    x1, x2 = x[..., : x.shape[-1] // 2], x[..., x.shape[-1] // 2 :]
+    return torch.cat([-x2, x1], dim=-1)
+
+
+def _apply_rotary(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
+    return x * cos + _rotate_half(x) * sin
+
+
+class RotaryEmbedding(nn.Module):
+    """Rotary positional embeddings (RoPE, Su et al. 2021).
+
+    Operates on query/key tensors of shape (batch, heads, seq, head_dim).
+    Frequencies are cached and extended lazily as longer sequences appear.
+    """
+
+    def __init__(self, dim: int, base: int = 10000):
+        super().__init__()
+        inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2).float() / dim))
+        self.register_buffer("inv_freq", inv_freq, persistent=False)
+        self._seq_len_cached = 0
+        self._cos_cached: Optional[torch.Tensor] = None
+        self._sin_cached: Optional[torch.Tensor] = None
+
+    def _update_cache(self, seq_len: int, device: torch.device, dtype: torch.dtype):
+        if seq_len > self._seq_len_cached:
+            self._seq_len_cached = seq_len
+            t = torch.arange(seq_len, device=device, dtype=self.inv_freq.dtype)
+            freqs = torch.outer(t, self.inv_freq)
+            emb = torch.cat([freqs, freqs], dim=-1)  # [s, d]
+            # [1, 1, s, d] — broadcasts over (batch, heads)
+            self._cos_cached = emb.cos()[None, None].to(dtype)
+            self._sin_cached = emb.sin()[None, None].to(dtype)
+
+    def forward(
+        self, q: torch.Tensor, k: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Apply RoPE to query and key tensors (batch, heads, seq, head_dim)."""
+        seq_len = q.shape[2]
+        self._update_cache(seq_len, q.device, q.dtype)
+        cos = self._cos_cached[:, :, :seq_len]
+        sin = self._sin_cached[:, :, :seq_len]
+        return _apply_rotary(q, cos, sin), _apply_rotary(k, cos, sin)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+
 class BertEmbeddings(nn.Module):
 
     def __init__(self, config):
@@ -129,6 +180,9 @@ class BertUnpadSelfAttention(nn.Module):
         self.p_dropout = config.attention_probs_dropout_prob
         self.Wqkv = nn.Linear(self.all_head_size, 3 * config.hidden_size)
         self.use_triton = config.use_triton
+        self.use_rope = getattr(config, "positional_encoding", "alibi") == "rope"
+        if self.use_rope:
+            self.rotary_emb = RotaryEmbedding(self.attention_head_size)
 
         # Warn if defaulting to pytorch because of import issues
         if config.use_triton and flash_attn_qkvpacked_func is None:
@@ -182,8 +236,11 @@ class BertUnpadSelfAttention(nn.Module):
         if self.p_dropout or not self.use_triton or flash_attn_qkvpacked_func is None:
             # if we have nonzero attention dropout (e.g. during fine-tuning) or no Triton, compute attention in PyTorch
             q = qkv[:, :, 0, :, :].permute(0, 2, 1, 3)  # b h s d
-            k = qkv[:, :, 1, :, :].permute(0, 2, 3, 1)  # b h d s
+            k = qkv[:, :, 1, :, :].permute(0, 2, 1, 3)  # b h s d (not yet transposed)
             v = qkv[:, :, 2, :, :].permute(0, 2, 1, 3)  # b h s d
+            if self.use_rope:
+                q, k = self.rotary_emb(q, k)
+            k = k.permute(0, 1, 3, 2)  # b h d s  (transpose for matmul)
             attention_scores = torch.matmul(q, k) / math.sqrt(self.attention_head_size)
             attention_scores = attention_scores + bias
             attention_probs = nn.functional.softmax(attention_scores, dim=-1)
@@ -371,21 +428,23 @@ class BertEncoder(nn.Module):
         )
 
         self.num_attention_heads = config.num_attention_heads
+        self.use_rope = getattr(config, "positional_encoding", "alibi") == "rope"
 
-        # The alibi mask will be dynamically expanded if it is too small for
-        # the input the model receives. But it generally helps to initialize it
-        # to a reasonably large size to help pre-allocate CUDA memory.
-        # The default `alibi_starting_size` is 512.
-        self._current_alibi_size = int(config.alibi_starting_size)
-        self.alibi = torch.zeros(
-            (
-                1,
-                self.num_attention_heads,
-                self._current_alibi_size,
-                self._current_alibi_size,
+        if not self.use_rope:
+            # The alibi mask will be dynamically expanded if it is too small for
+            # the input the model receives. But it generally helps to initialize it
+            # to a reasonably large size to help pre-allocate CUDA memory.
+            # The default `alibi_starting_size` is 512.
+            self._current_alibi_size = int(config.alibi_starting_size)
+            self.alibi = torch.zeros(
+                (
+                    1,
+                    self.num_attention_heads,
+                    self._current_alibi_size,
+                    self._current_alibi_size,
+                )
             )
-        )
-        self.rebuild_alibi_tensor(size=config.alibi_starting_size)
+            self.rebuild_alibi_tensor(size=config.alibi_starting_size)
 
     def rebuild_alibi_tensor(
         self, size: int, device: Optional[Union[torch.device, str]] = None
@@ -422,7 +481,7 @@ class BertEncoder(nn.Module):
         relative_position = torch.abs(memory_position - context_position)
         # [n_heads, max_token_length, max_token_length]
         relative_position = relative_position.unsqueeze(0).expand(n_heads, -1, -1)
-        slopes = torch.Tensor(_get_alibi_head_slopes(n_heads)).to(device)
+        slopes = torch.tensor(_get_alibi_head_slopes(n_heads), device=device)
         alibi = slopes.unsqueeze(1).unsqueeze(1) * -relative_position
         # [1, n_heads, max_token_length, max_token_length]
         alibi = alibi.unsqueeze(0)
@@ -456,19 +515,26 @@ class BertEncoder(nn.Module):
             hidden_states, attention_mask_bool
         )
 
-        # Add alibi matrix to extended_attention_mask
-        if self._current_alibi_size < seqlen:
-            # Rebuild the alibi tensor when needed
-            warnings.warn(
-                f"Increasing alibi size from {self._current_alibi_size} to {seqlen}"
-            )
-            self.rebuild_alibi_tensor(size=seqlen, device=hidden_states.device)
-        elif self.alibi.device != hidden_states.device:
-            # Device catch-up
-            self.alibi = self.alibi.to(hidden_states.device)
-        alibi_bias = self.alibi[:, :, :seqlen, :seqlen]
         attn_bias = extended_attention_mask[:, :, :seqlen, :seqlen]
-        alibi_attn_mask = attn_bias + alibi_bias
+        if self.use_rope:
+            # RoPE: positional information is baked into Q/K rotations;
+            # the bias passed to attention layers is only the padding mask.
+            alibi_attn_mask = attn_bias
+        else:
+            # Add alibi matrix to extended_attention_mask
+            if self._current_alibi_size < seqlen or self.alibi.device.type == "meta":
+                # Rebuild the alibi tensor when needed or when it is a meta tensor
+                # (meta tensors are created during from_pretrained init and have no data)
+                if self._current_alibi_size < seqlen:
+                    warnings.warn(
+                        f"Increasing alibi size from {self._current_alibi_size} to {seqlen}"
+                    )
+                self.rebuild_alibi_tensor(size=max(seqlen, self._current_alibi_size), device=hidden_states.device)
+            elif self.alibi.device != hidden_states.device:
+                # Device catch-up
+                self.alibi = self.alibi.to(hidden_states.device)
+            alibi_bias = self.alibi[:, :, :seqlen, :seqlen]
+            alibi_attn_mask = attn_bias + alibi_bias
 
         all_encoder_layers = []
         if subset_mask is None:

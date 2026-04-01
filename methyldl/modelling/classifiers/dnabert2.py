@@ -412,6 +412,9 @@ class TrainingArguments(transformers.TrainingArguments):
     gradient_checkpointing: bool = field(default=False)
     skip_memory_metrics: bool = field(default=True)
     auto_find_batch_size: bool = field(default=False)
+    lr_scheduler_type: transformers.SchedulerType = field(
+        default=transformers.SchedulerType.LINEAR, metadata={"help": "The scheduler type to use."}
+    )
 
 
 def initialize_model_with_custom_embeddings(
@@ -449,18 +452,20 @@ class EpigenDnabert2:
         training_args=None,
         num_dmr_labels=None,
         soft_labels=False,
+        alibi_slope_multiplier=1.0,
+        positional_encoding: str = "alibi",
     ):
-
-        assert len(
-            foundation_model_huggingface
-        ), "Must specify foundation model path hosted on Hugging Face"
+        assert positional_encoding in ("alibi", "rope"), (
+            f"positional_encoding must be 'alibi' or 'rope', got {positional_encoding!r}"
+        )
+        assert len(foundation_model_huggingface), "Must specify foundation model path hosted on Hugging Face"
         self.num_dmr_labels = num_dmr_labels
         self.soft_labels = soft_labels
 
         config = BertForSequenceClassification.config_class.from_pretrained(
             foundation_model_huggingface
         )
-        config = BertConfig(**config.to_dict(), use_triton=use_triton)
+        config = BertConfig(**config.to_dict(), use_triton=use_triton, positional_encoding=positional_encoding)
         # Does not load weights just yet, because if we have a checkpoint, the weights will be retrived from it
         # base_model = transformers.AutoModelForSequenceClassification.from_config(trust_remote_code=trust_remote_code, config = config)
         base_model = transformers.AutoModelForSequenceClassification.from_pretrained(
@@ -512,6 +517,25 @@ class EpigenDnabert2:
         self.model = model
         self.num_labels = num_labels
         self.config = config
+
+        # Scale the cached ALiBi bias tensor so that short reads receive the same
+        # positional penalty range the model was exposed to during pre-training.
+        # Without this, all slopes collapse to a narrow range at short token counts
+        # and every head becomes nearly position-agnostic.
+        if positional_encoding == "alibi" and alibi_slope_multiplier != 1.0:
+            encoder = self.model.bert.encoder
+            encoder.alibi = encoder.alibi * alibi_slope_multiplier
+            # Patch rebuild_alibi_tensor so the multiplier is preserved whenever
+            # the encoder dynamically expands the bias cache for longer sequences.
+            _orig_rebuild = encoder.rebuild_alibi_tensor
+            def _rebuild_scaled(
+                size, device=None,
+                _m=alibi_slope_multiplier, _fn=_orig_rebuild, _enc=encoder,
+            ):
+                _fn(size, device=device)
+                _enc.alibi = _enc.alibi * _m
+            encoder.rebuild_alibi_tensor = _rebuild_scaled
+
         model_max_length = round(
             max_sequence_length // 4 + 1
         )  # BPE encoding reduces sequence length approximately by a factor of 4
@@ -534,7 +558,7 @@ class EpigenDnabert2:
             warmup_steps=100,
             logging_steps=100,
             num_train_epochs=250,
-            overwrite_output_dir=True,
+            # overwrite_output_dir=True, # commented out when using P100
             log_level="info",
             find_unused_parameters=False,
             batch_eval_metrics=False,
@@ -590,7 +614,7 @@ class EpigenDnabert2:
                 model_init=model_init,
                 callbacks=callbacks,
                 optimizers=optimizers,
-                tokenizer=self.tokenizer,
+                # tokenizer=self.tokenizer,
                 preprocess_logits_for_metrics=preprocess_logits_for_prediction,
                 compute_metrics=compute_metrics,
             )
@@ -604,7 +628,7 @@ class EpigenDnabert2:
                 model_init=model_init,
                 callbacks=callbacks,
                 optimizers=optimizers,
-                tokenizer=self.tokenizer,
+                # tokenizer=self.tokenizer,
             )
 
     def predict(self, test_dataset, batch_size=None, clear_cache=True):
@@ -675,7 +699,7 @@ class EpigenDnabert2:
                 model=self.model,
                 args=training_args,
                 data_collator=self.data_collator,
-                tokenizer=self.tokenizer,
+                # tokenizer=self.tokenizer, # commented out for P100
                 compute_metrics=None,
                 preprocess_logits_for_metrics=keep_logits_only,
             )
