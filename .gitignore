@@ -188,6 +188,8 @@ cython_debug/
 /Tutorials/methylBertLoyferWithReject*
 /Tutorials/loyfer_atlas_crazy_split
 /Tutorials/DNABERT2_*
+/Tutorials/archive
+/Tutorials/methylBert_Loyfer_205files_*
 /test_container_tmp
 /EDA/*.pkl
 /EDA/*.pt
