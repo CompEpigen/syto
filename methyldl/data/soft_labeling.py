@@ -14,34 +14,26 @@ def extract_cpg_signature(row):
     )
 
 
-def signature_distance(sig1, sig2, length_penalty_weight=1):
+def signature_distance(sig1, sig2):
     """
-    Computes distance between two CpG signatures (0.0 to 2.0).
-    Distance = Mismatch Rate + Length Penalty.
+    Computes Jaccard distance between two CpG signatures.
+    Each signature is treated as a set of (position, state) tuples.
+    Distance = 1.0 - (|Intersection| / |Union|)
     """
-    dict1 = dict(sig1)
-    dict2 = dict(sig2)
-
-    shared_pos = set(dict1.keys()).intersection(set(dict2.keys()))
-
-    # If they share no CpGs, they are maximally distant
-    if not shared_pos:
-        return 2.0
-
-    # 1. Mismatch Rate
-    mismatches = sum(1 for p in shared_pos if dict1[p] != dict2[p])
-    mismatch_rate = mismatches / len(shared_pos)
-
-    # 2. Length Penalty
-    length_penalty = (
-        1.0 - (len(shared_pos) / max(len(dict1), len(dict2)))
-    ) * length_penalty_weight
-
-    return mismatch_rate + length_penalty
+    set1 = set(sig1)
+    set2 = set(sig2)
+    
+    if not set1 and not set2:
+        return 0.0
+        
+    intersection = len(set1.intersection(set2))
+    union = len(set1.union(set2))
+    
+    return 1.0 - (intersection / union)
 
 
 def apply_normalized_knn_smoothing(
-    base_counts, min_reads=30, max_distance=0.5, num_classes=40, length_penalty_weight=1
+    base_counts, min_reads=30, max_distance=0.5, num_classes=40
 ):
     """
     Applies KNN smoothing with strict distance constraints and global
@@ -86,7 +78,7 @@ def apply_normalized_knn_smoothing(
         dist_mat = np.zeros((n_sigs, n_sigs))
         for i in range(n_sigs):
             for j in range(i + 1, n_sigs):
-                d = signature_distance(sigs[i], sigs[j], length_penalty_weight)
+                d = signature_distance(sigs[i], sigs[j])
                 dist_mat[i, j] = d
                 dist_mat[j, i] = d
 
