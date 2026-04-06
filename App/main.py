@@ -62,6 +62,12 @@ def validate_config(config: Dict[str, Any], task: str) -> None:
             "atlas_path",
             "input",
         ],
+        "generate_pseudobulk": [
+            "classifier_type",
+            "generation_mode",
+            "output_dir",
+            "labels_dict_path",
+        ],
     }
 
     if task not in required_fields:
@@ -71,10 +77,11 @@ def validate_config(config: Dict[str, Any], task: str) -> None:
         if field not in config:
             raise ValueError(f"Missing required field '{field}' for task '{task}'")
 
-    # Validate model-specific configuration
-    model = config["model"]["architecture"].lower()
-    if model not in ["dismir", "epigenbert2", "methylbert"]:
-        raise ValueError(f"Unknown model architecture: {model}")
+    # Validate model-specific configuration (not needed for generate_pseudobulk)
+    if task != "generate_pseudobulk":
+        model = config["model"]["architecture"].lower()
+        if model not in ["dismir", "epigenbert2", "methylbert"]:
+            raise ValueError(f"Unknown model architecture: {model}")
 
 
 def create_experiment(config: Dict[str, Any], logger: logging.Logger) -> Any:
@@ -227,6 +234,26 @@ def run_pretraining(config: Dict[str, Any], logger: logging.Logger) -> None:
     raise NotImplementedError("Pretraining mode is not yet implemented")
 
 
+def run_pseudobulk_generation(config: Dict[str, Any], logger: logging.Logger) -> None:
+    """Run pseudo-bulk mixture generation based on configuration."""
+    from pseudobulk_pipeline import PseudoBulkPipeline
+
+    logger.info("Starting pseudo-bulk generation pipeline")
+    pipeline = PseudoBulkPipeline(config=config, logger=logger)
+    result = pipeline.run()
+
+    # Log summary
+    logger.info("=" * 60)
+    logger.info("PSEUDO-BULK GENERATION SUMMARY")
+    logger.info("=" * 60)
+    logger.info(f"  Total examples: {result['proportions'].shape[0]}")
+    logger.info(f"  Features shape (train): {result['features_train'].shape}")
+    logger.info(f"  Features shape (valid): {result['features_valid'].shape}")
+    logger.info(f"  Features shape (test):  {result['features_test'].shape}")
+    logger.info(f"  Output saved to: {config['output_dir']}")
+    logger.info("=" * 60)
+
+
 def main():
     """Main entry point for the application."""
     parser = argparse.ArgumentParser(
@@ -249,7 +276,7 @@ Examples:
     # Required arguments
     parser.add_argument(
         "--task",
-        choices=["pretrain", "fine_tune", "inference"],
+        choices=["pretrain", "fine_tune", "inference", "generate_pseudobulk"],
         required=True,
         help="Task to perform",
     )
@@ -387,6 +414,8 @@ Examples:
             run_inference(config, logger)
         elif args.task == "pretrain":
             run_pretraining(config, logger)
+        elif args.task == "generate_pseudobulk":
+            run_pseudobulk_generation(config, logger)
 
         logger.info("Task completed successfully")
         return 0
