@@ -878,7 +878,7 @@ class MethylBert:
     def predict(
         self,
         dataset,
-        data_collator=methylbert_finetune_collator,
+        data_collator=None,
         batch_size=None,
         clear_cache=True,
     ):
