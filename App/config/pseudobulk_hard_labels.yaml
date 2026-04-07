@@ -14,21 +14,21 @@ classifier_type: methylbert
 # "uxm_prepared"  — splits already prepared for uxm
 # "pre_predicted"  — pre-predicted splits (already enriched with predictions)
 # input_type: raw_splits
-input_type: pre_predicted
+input_type: raw_splits
 
 # Directory containing train.parquet, valid.parquet, test.parquet
 # (used when input_type == parquet)
-#data_path: /home/luna.kuleuven.be/u0169940/Data/Loyfer/SoftLabelsTrainingData_205files_pooled_Jaccard_hg38_mincpg_4_minlen_10_no_data_leak_d041
+data_path: /home/luna.kuleuven.be/u0169940/Data/Loyfer/SoftLabelsTrainingData_205files_pooled_Jaccard_hg38_mincpg_4_minlen_10_no_data_leak
 
 # Pre-predicted pickle paths (used when input_type == pickle)
-pickle_paths:
-  train: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Tutorials/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels_pooled_jakkard_no_data_leak_d041/pseudobulk/train_predicted.pkl
-  valid: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Tutorials/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels_pooled_jakkard_no_data_leak_d041/pseudobulk/valid_predicted.pkl
-  test: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Tutorials/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels_pooled_jakkard_no_data_leak_d041/pseudobulk/test_predicted.pkl
+#pickle_paths:
+#  train: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Tutorials/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_no_data_leak_postfiltered_min_length_50_soft_labels_pooled_jakkard_no_data_leak/pseudobulk/train_predicted.pkl
+#  valid: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Tutorials/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_no_data_leak_postfiltered_min_length_50_soft_labels_pooled_jakkard_no_data_leak/pseudobulk/valid_predicted.pkl
+#  test: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Tutorials/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_no_data_leak_postfiltered_min_length_50_soft_labels_pooled_jakkard_no_data_leak/pseudobulk/test_predicted.pkl
 
 # ── Classifier checkpoint ────────────────────────────────────────
 # Required when input_type == parquet (classifier must run prediction)
-classifier_checkpoint: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Tutorials/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels_pooled_jakkard_no_data_leak_d041/checkpoint-1000/model.safetensors
+classifier_checkpoint: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Tutorials/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_hard_labels_minibatch_balanced/checkpoint-200/model.safetensors
 
 classifier_config:
   foundation_model: hanyangii/methylbert_hg19_12l
@@ -36,14 +36,14 @@ classifier_config:
   dmr_label_column: dmr_ctype_label
   seq_length: 150
   batch_size: 2200
-  soft_labels: true 
+  soft_labels: false 
   # Dismir-specific (only used when classifier_type == dismir)
   # dismir_flavor: lstm
 
 # ── Labels & atlas ────────────────────────────────────────────────
 labels_dict_path: App/labels_dict.json
 atlas_path: /home/luna.kuleuven.be/u0169940/Repos/UXM_deconv/supplemental/Atlas.U25.l4.hg38.full.tsv
-num_labels: 39
+num_labels: 40
 
 # ── Split rebalancing ─────────────────────────────────────────────
 # Redistribute files across splits so every split has all
@@ -55,7 +55,7 @@ rebalance_splits: false
 # Whether to run prepare_reads_for_uxm during read preparation (Stage 2)
 generate_uxm_inputs: true
 # Whether to compute sf/counts tables during IO generation (Stage 4)
-generate_uxm_inputs_in_ios: true
+generate_uxm_inputs_in_ios: false
 
 # ── Generation mode ───────────────────────────────────────────────
 # "random"              — randomly select cell types and proportions
@@ -84,4 +84,4 @@ resume_from_checkpoint: false
 n_read_per_split: 475000
 
 # ── Output ────────────────────────────────────────────────────────
-output_dir: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Tutorials/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels_pooled_jakkard_no_data_leak_d041/pseudobulk
+output_dir: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Tutorials/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_hard_labels_minibatch_balanced/pseudobulk
