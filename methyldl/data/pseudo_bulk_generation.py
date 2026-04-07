@@ -451,13 +451,13 @@ def run_ios_generation_parallel(
     all_indices = list(range(n_io_examples))
     batches_indices = [
         all_indices[i : i + batch_size]
-        for i in range(0, len(all_indices), batch_size)
+        for i in range(start_checkpoint_idx, len(all_indices), batch_size)
     ]
 
     if target_proportions is not None:
         batches_proportions = [
             target_proportions[i : i + batch_size]
-            for i in range(0, len(target_proportions), batch_size)
+            for i in range(start_checkpoint_idx, len(target_proportions), batch_size)
         ]
     else:
         batches_proportions = [None] * len(batches_indices)
@@ -497,7 +497,7 @@ def run_ios_generation_parallel(
         }
 
         # Process results as they complete
-        with tqdm(total=n_io_examples, desc="Generating examples") as pbar:
+        with tqdm(total=n_io_examples-start_checkpoint_idx, desc="Generating examples") as pbar:
             for future in as_completed(futures):
                 results, exceptions = future.result()
                 all_ios.extend(results)
