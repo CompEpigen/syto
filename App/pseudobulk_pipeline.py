@@ -127,7 +127,11 @@ class PseudoBulkPipeline:
                 pickle.dump((train, valid, test), f)
         elif self.config["input_type"] == "uxm_prepared":
             self.logger.info("Skipping Stage 1 and 2: Loading uxm prepared reads ...")
-            with open(os.path.join(self.output_dir, "uxm_prepared_reads.pkl"), "rb") as f:
+            uxm_path = self.config.get(
+                "uxm_prepared_reads_path",
+                os.path.join(self.output_dir, "uxm_prepared_reads.pkl"),
+            )
+            with open(uxm_path, "rb") as f:
                 train, valid, test = pickle.load(f)
             self.logger.info(
                 f"  After loading: train={len(train)}, valid={len(valid)}, "
