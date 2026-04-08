@@ -133,7 +133,7 @@ class ClassifierAdapter:
             custom_config=rrms_config,
             foundation_model_path=self.foundation_model_path,
             num_labels=self.num_labels,
-            num_dmr_labels=self.num_labels,  # Will be overridden per-split if needed
+            num_dmr_labels=self.num_labels if self.soft_labels else self.num_labels-1,  # Will be overridden per-split if needed
             fine_tuned_model_path=self.checkpoint_path,
             classifier_implementation=self.classifier_head_implementation,
             soft_labels=self.soft_labels,
