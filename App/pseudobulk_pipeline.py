@@ -202,6 +202,9 @@ class PseudoBulkPipeline:
                 **shared_kwargs,
             )
         elif generation_mode == "target_proportions":
+            self.logger.info(
+                f"Using provided target proportions for generation with start checkpoint index of {shared_kwargs["start_checkpoint_idx"]}"
+            )
             target_proportions_path = self.config["target_proportions_path"]
             target_proportions = np.load(target_proportions_path)
             target_proportions = target_proportions["proportions"]

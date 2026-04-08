@@ -497,7 +497,7 @@ def run_ios_generation_parallel(
         }
 
         # Process results as they complete
-        with tqdm(total=n_io_examples-start_checkpoint_idx, desc="Generating examples") as pbar:
+        with tqdm(total=n_io_examples, desc="Generating examples",initial=start_checkpoint_idx) as pbar:
             for future in as_completed(futures):
                 results, exceptions = future.result()
                 all_ios.extend(results)
