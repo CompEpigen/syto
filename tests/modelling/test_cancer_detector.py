@@ -6,6 +6,8 @@ logical unit; edge-case branches (insufficient data, all-zero / all-one
 methylation rates, 1-D likelihood input, …) are exercised explicitly.
 """
 
+import os
+import tempfile
 import unittest
 
 import numpy as np
@@ -201,9 +203,9 @@ class TestFit(unittest.TestCase):
         df = pd.concat([df, extra], ignore_index=True)
         clf = CancerDetectorClassifier()
         clf.fit(df, class_prior_type="train_freq")
-        # A should have higher prior
-        idx_a = clf.classes.index("A")
-        idx_b = clf.classes.index("B")
+        # A should have higher prior; use np.where since classes is now an ndarray
+        idx_a = int(np.where(clf.classes == "A")[0][0])
+        idx_b = int(np.where(clf.classes == "B")[0][0])
         self.assertGreater(clf.class_priors[idx_a], clf.class_priors[idx_b])
         np.testing.assert_almost_equal(clf.class_priors.sum(), 1.0)
 
@@ -211,8 +213,8 @@ class TestFit(unittest.TestCase):
         """Markers and classes should be stored in sorted order."""
         df = _make_train_df(markers=("z_marker", "a_marker"), classes=("Z", "A"))
         clf, _ = _fitted_classifier(train_df=df)
-        self.assertEqual(clf.markers, ["a_marker", "z_marker"])
-        self.assertEqual(clf.classes, ["A", "Z"])
+        np.testing.assert_array_equal(clf.markers, ["a_marker", "z_marker"])
+        np.testing.assert_array_equal(clf.classes, ["A", "Z"])
 
     def test_fit_missing_column_raises(self):
         """Passing a non-existent column name should raise ``AssertionError``."""
@@ -393,8 +395,8 @@ class TestPredictProbaFromLikelihoods(unittest.TestCase):
         # With equal likelihoods, posterior = prior, so P(A) > P(B)
         lik = np.array([[1.0, 1.0]])
         proba = clf._predict_proba_from_likelihoods(lik)
-        idx_a = clf.classes.index("A")
-        idx_b = clf.classes.index("B")
+        idx_a = int(np.where(clf.classes == "A")[0][0])
+        idx_b = int(np.where(clf.classes == "B")[0][0])
         self.assertGreater(proba[0, idx_a], proba[0, idx_b])
 
 
@@ -449,6 +451,99 @@ class TestPredictProba(unittest.TestCase):
             col_marker_label="mk",
         )
         self.assertEqual(proba.shape[0], len(df))
+
+
+# ---------------------------------------------------------------------------
+# Tests for save / load
+# ---------------------------------------------------------------------------
+class TestSaveLoad(unittest.TestCase):
+    """Tests for :meth:`CancerDetectorClassifier.save` and
+    :meth:`CancerDetectorClassifier.load`."""
+
+    def setUp(self):
+        """Fit a classifier and create a temp directory for pickle files."""
+        self.clf, self.train_df = _fitted_classifier()
+        self.tmp_dir = tempfile.mkdtemp(prefix="cancer_det_test_")
+        self.pkl_path = os.path.join(self.tmp_dir, "model.pkl")
+
+    def tearDown(self):
+        """Remove temp files created during the test."""
+        if os.path.exists(self.pkl_path):
+            os.remove(self.pkl_path)
+        os.rmdir(self.tmp_dir)
+
+    def test_save_creates_file(self):
+        """``save()`` should create a non-empty .pkl file on disk."""
+        self.clf.save(self.pkl_path)
+        self.assertTrue(os.path.isfile(self.pkl_path))
+        self.assertGreater(os.path.getsize(self.pkl_path), 0)
+
+    def test_load_restores_all_attributes(self):
+        """Every attribute serialised by ``save()`` must be restored by ``load()``."""
+        self.clf.save(self.pkl_path)
+        loaded = CancerDetectorClassifier().load(self.pkl_path)
+
+        # Scalar / simple attributes
+        self.assertTrue(loaded.is_fitted)
+        self.assertEqual(loaded.n_markers, self.clf.n_markers)
+        self.assertEqual(loaded.n_classes, self.clf.n_classes)
+        self.assertEqual(loaded.eps_beta_fit, self.clf.eps_beta_fit)
+        self.assertEqual(loaded.class_prior_type, self.clf.class_prior_type)
+
+        # Array attributes — check values elementwise
+        np.testing.assert_array_equal(
+            loaded.param_eta_matrix, self.clf.param_eta_matrix
+        )
+        np.testing.assert_array_equal(
+            loaded.param_rho_matrix, self.clf.param_rho_matrix
+        )
+        np.testing.assert_array_equal(loaded.class_priors, self.clf.class_priors)
+        np.testing.assert_array_equal(loaded.markers, self.clf.markers)
+        np.testing.assert_array_equal(loaded.classes, self.clf.classes)
+        np.testing.assert_array_equal(
+            loaded.mask_bayesian_estimation_0, self.clf.mask_bayesian_estimation_0
+        )
+        np.testing.assert_array_equal(
+            loaded.mask_bayesian_estimation_1, self.clf.mask_bayesian_estimation_1
+        )
+        np.testing.assert_array_equal(
+            loaded.mask_insufficient_data, self.clf.mask_insufficient_data
+        )
+
+        # Dict attributes
+        self.assertEqual(loaded.marker_to_idx, self.clf.marker_to_idx)
+        self.assertEqual(loaded.class_to_idx, self.clf.class_to_idx)
+
+    def test_load_returns_self(self):
+        """``load()`` should return the classifier instance for chaining."""
+        self.clf.save(self.pkl_path)
+        new_clf = CancerDetectorClassifier()
+        result = new_clf.load(self.pkl_path)
+        self.assertIs(result, new_clf)
+
+    def test_loaded_model_predicts_identically(self):
+        """Predictions from a loaded model must match the original model exactly."""
+        self.clf.save(self.pkl_path)
+        loaded = CancerDetectorClassifier().load(self.pkl_path)
+
+        proba_orig = self.clf.predict_proba(self.train_df)
+        proba_loaded = loaded.predict_proba(self.train_df)
+        np.testing.assert_array_equal(proba_orig, proba_loaded)
+
+    def test_roundtrip_with_train_freq_priors(self):
+        """Save/load roundtrip should also work for ``train_freq`` priors."""
+        df = _make_train_df()
+        # Make priors non-uniform so we can detect corrupted values
+        extra = df[df["original_label"] == "A"]
+        df = pd.concat([df, extra], ignore_index=True)
+        clf = CancerDetectorClassifier()
+        clf.fit(df, class_prior_type="train_freq")
+
+        clf.save(self.pkl_path)
+        loaded = CancerDetectorClassifier().load(self.pkl_path)
+
+        np.testing.assert_array_equal(loaded.class_priors, clf.class_priors)
+        self.assertEqual(loaded.class_prior_type, "train_freq")
 
 
 # ---------------------------------------------------------------------------

@@ -10,6 +10,7 @@ class priors via Bayes' theorem to produce posterior class probabilities.
 from typing import Union
 
 import numpy as np
+import pickle
 import pandas as pd
 from scipy import stats
 from scipy.special import beta as beta_func  # pylint: disable=no-name-in-module
@@ -66,6 +67,8 @@ class CancerDetectorClassifier:
         self.eps_beta_fit = None
         self.markers = None
         self.classes = None
+        self.marker_to_idx = None
+        self.class_to_idx = None
         self.class_prior_type = None
         self.class_priors = None
         self.n_classes = None
@@ -175,8 +178,10 @@ class CancerDetectorClassifier:
 
         self.eps_beta_fit = eps_beta_fit
         self.class_prior_type = class_prior_type
-        self.markers = sorted(train_data[col_marker_label].unique())
-        self.classes = sorted(train_data[col_label].unique())
+        self.markers = np.array(sorted(train_data[col_marker_label].unique()))
+        self.classes = np.array(sorted(train_data[col_label].unique()))
+        self.marker_to_idx = {m: i for i, m in enumerate(self.markers)}
+        self.class_to_idx = {c: i for i, c in enumerate(self.classes)}
         self.n_markers = len(self.markers)
         self.n_classes = len(self.classes)
 
@@ -200,18 +205,14 @@ class CancerDetectorClassifier:
             (self.n_markers, self.n_classes), dtype=bool
         )
 
-        # fit beta distribution for each marker and class
-        marker_to_idx = {m: i for i, m in enumerate(self.markers)}
-        class_to_idx = {c: i for i, c in enumerate(self.classes)}
-
         # pre-group data in a single pass instead of M×C DataFrame scans
         grouped = train_data.groupby([col_marker_label, col_label])
         tasks = []
         for (marker_label, class_label), group in grouped:
             tasks.append(
                 (
-                    marker_to_idx[marker_label],
-                    class_to_idx[class_label],
+                    self.marker_to_idx[marker_label],
+                    self.class_to_idx[class_label],
                     group[col_n_meth_cpgs].to_numpy(),
                     group[col_n_unmeth_cpgs].to_numpy(),
                     eps_beta_fit,
@@ -260,7 +261,7 @@ class CancerDetectorClassifier:
             # if there are no CpGs, we cannot compute a likelihood, return uniform likelihoods
             return np.ones(self.n_classes) / self.n_classes
 
-        marker_idx = self.markers.index(marker_label)
+        marker_idx = self.marker_to_idx[marker_label]
         eta = self.param_eta_matrix[marker_idx, :]
         rho = self.param_rho_matrix[marker_idx, :]
         likelihoods = (
@@ -375,3 +376,67 @@ class CancerDetectorClassifier:
         if return_likelihoods:
             return posterior_probas, likelihoods
         return posterior_probas
+
+    def save(self, path: str) -> None:
+        """Save the fitted model parameters to a .pkl file.
+
+        Args:
+            path: Path to the .pkl file where the model parameters will be saved.
+        """
+        with open(path, "wb") as f:
+            pickle.dump(
+                {
+                    "param_eta_matrix": self.param_eta_matrix,
+                    "param_rho_matrix": self.param_rho_matrix,
+                    "eps_beta_fit": self.eps_beta_fit,
+                    "markers": self.markers,
+                    "classes": self.classes,
+                    "marker_to_idx": self.marker_to_idx,
+                    "class_to_idx": self.class_to_idx,
+                    "class_priors": self.class_priors,
+                    "class_prior_type": self.class_prior_type,
+                    "n_classes": self.n_classes,
+                    "n_markers": self.n_markers,
+                    "mask_bayesian_estimation_0": self.mask_bayesian_estimation_0,
+                    "mask_bayesian_estimation_1": self.mask_bayesian_estimation_1,
+                    "mask_insufficient_data": self.mask_insufficient_data,
+                },
+                f,
+            )
+
+    def load(self, path: str) -> "CancerDetectorClassifier":
+        """Load model parameters from a .pkl file.
+
+        Args:
+            path: Path to the .pkl file from which to load the model parameters.
+
+        Returns:
+            An instance of ``CancerDetectorClassifier`` with the loaded parameters.
+        """
+        with open(path, "rb") as f:
+            data = pickle.load(f)
+        self.param_eta_matrix = data["param_eta_matrix"]
+        self.param_rho_matrix = data["param_rho_matrix"]
+        self.eps_beta_fit = data["eps_beta_fit"]
+        self.markers = data["markers"]
+        self.classes = data["classes"]
+        self.class_priors = data["class_priors"]
+        self.class_prior_type = data["class_prior_type"]
+        self.n_classes = data["n_classes"]
+        self.n_markers = data["n_markers"]
+        self.mask_bayesian_estimation_0 = data["mask_bayesian_estimation_0"]
+        self.mask_bayesian_estimation_1 = data["mask_bayesian_estimation_1"]
+        self.mask_insufficient_data = data["mask_insufficient_data"]
+        self.marker_to_idx = data["marker_to_idx"]
+        self.class_to_idx = data["class_to_idx"]
+        self.is_fitted = True
+        return self
+
+    def __str__(self) -> str:
+        """String representation of the model, showing key attributes."""
+        return (
+            f"CancerDetectorClassifier(n_markers={self.n_markers}, "
+            f"n_classes={self.n_classes}, "
+            f"class_prior_type='{self.class_prior_type}', "
+            f"is_fitted={self.is_fitted})"
+        )
