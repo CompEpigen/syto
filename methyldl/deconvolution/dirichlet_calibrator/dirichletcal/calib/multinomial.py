@@ -74,9 +74,8 @@ class MultinomialRegression(BaseEstimator, RegressorMixin):
 
         X_ = np.hstack((X, np.ones((len(X), 1))))
 
-        self.classes = raw_np.unique(y)
-
-        k = len(self.classes)
+        k = X.shape[1]
+        self.classes = raw_np.arange(k)
 
         if self.reg_norm:
             if self.reg_mu is None:

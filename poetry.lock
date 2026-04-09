@@ -1536,6 +1536,7 @@ files = [
 ]
 
 [package.dependencies]
+jax-cuda12-plugin = {version = "0.9.2", optional = true, markers = "extra == \"cuda12-local\""}
 jaxlib = "0.9.2"
 ml_dtypes = ">=0.5.0"
 numpy = ">=2.0"
@@ -1554,6 +1555,46 @@ minimum-jaxlib = ["jaxlib (==0.9.2)"]
 rocm7-local = ["jax-rocm7-plugin (==0.9.2.*)", "jaxlib (==0.9.2)"]
 tpu = ["jaxlib (==0.9.2)", "libtpu (==0.0.37.*)", "requests"]
 xprof = ["xprof"]
+
+[[package]]
+name = "jax-cuda12-pjrt"
+version = "0.9.2"
+description = "JAX XLA PJRT Plugin for NVIDIA GPUs"
+optional = false
+python-versions = "*"
+groups = ["main"]
+files = [
+    {file = "jax_cuda12_pjrt-0.9.2-py3-none-manylinux_2_27_aarch64.whl", hash = "sha256:56f4a27e5f19ca914c0f4402539469aa92d01bf71336acd0ed8fddc20a91bc8d"},
+    {file = "jax_cuda12_pjrt-0.9.2-py3-none-manylinux_2_27_x86_64.whl", hash = "sha256:536a305292276c5745efbba7eb57576849c5a7c77398a3a9e61fd31baf5102f0"},
+]
+
+[[package]]
+name = "jax-cuda12-plugin"
+version = "0.9.2"
+description = "JAX Plugin for NVIDIA GPUs"
+optional = false
+python-versions = ">=3.11"
+groups = ["main"]
+files = [
+    {file = "jax_cuda12_plugin-0.9.2-cp311-cp311-manylinux_2_27_aarch64.whl", hash = "sha256:b3955f375d17902f0d27e7059672cd1963a55345953a42699e4e078cec725adc"},
+    {file = "jax_cuda12_plugin-0.9.2-cp311-cp311-manylinux_2_27_x86_64.whl", hash = "sha256:d5577cd867bd9267769e453bad850d4807a84396bc976f632a515edbd77e484b"},
+    {file = "jax_cuda12_plugin-0.9.2-cp312-cp312-manylinux_2_27_aarch64.whl", hash = "sha256:b28ccf05bcc0bc7ccbcbd326d802846574cf6da039158e76147bd96f5c6f1189"},
+    {file = "jax_cuda12_plugin-0.9.2-cp312-cp312-manylinux_2_27_x86_64.whl", hash = "sha256:88a55908d775b06dda92a8c4f4c015778e25ba5c3605b57f84b00052f66e8ef1"},
+    {file = "jax_cuda12_plugin-0.9.2-cp313-cp313-manylinux_2_27_aarch64.whl", hash = "sha256:b9a27085d893cc59c2b286b1789755f91cf3eab1dea1b5be9e632f4c9739a20e"},
+    {file = "jax_cuda12_plugin-0.9.2-cp313-cp313-manylinux_2_27_x86_64.whl", hash = "sha256:bd7dfed17bfa9d0e3016f8c2a6767c7479d91e1bdfdf7916eb2b07435cc4658e"},
+    {file = "jax_cuda12_plugin-0.9.2-cp313-cp313t-manylinux_2_27_aarch64.whl", hash = "sha256:8965073b811dbf2ea7ce11612c845498d0e900089c86dcca21219ae7b8f7996e"},
+    {file = "jax_cuda12_plugin-0.9.2-cp313-cp313t-manylinux_2_27_x86_64.whl", hash = "sha256:e03fba42374a469f856b236db65727a15923efe6778128feedfc5497aded85e7"},
+    {file = "jax_cuda12_plugin-0.9.2-cp314-cp314-manylinux_2_27_aarch64.whl", hash = "sha256:33212699e1bbb1bed5d2ae14ae9ff72a1eed2d092a51e6abcc0278a6b2b82874"},
+    {file = "jax_cuda12_plugin-0.9.2-cp314-cp314-manylinux_2_27_x86_64.whl", hash = "sha256:5351742c0fcb21da9e094a1965ab20fde525862877f76918a490b1b56664d53a"},
+    {file = "jax_cuda12_plugin-0.9.2-cp314-cp314t-manylinux_2_27_aarch64.whl", hash = "sha256:918af0e625be922b1da105993f21482add3fad392a6b621d88b58557fa84090d"},
+    {file = "jax_cuda12_plugin-0.9.2-cp314-cp314t-manylinux_2_27_x86_64.whl", hash = "sha256:cd9a18876f900535c63244cb072944076a39526587582f78de333502135dd42a"},
+]
+
+[package.dependencies]
+jax-cuda12-pjrt = "0.9.2"
+
+[package.extras]
+with-cuda = ["nvidia-cublas-cu12 (>=12.1.3.1) ; sys_platform == \"linux\"", "nvidia-cuda-cupti-cu12 (>=12.1.105) ; sys_platform == \"linux\"", "nvidia-cuda-nvcc-cu12 (>=12.6.85) ; sys_platform == \"linux\"", "nvidia-cuda-nvrtc-cu12 (>=12.1.55) ; sys_platform == \"linux\"", "nvidia-cuda-runtime-cu12 (>=12.1.105) ; sys_platform == \"linux\"", "nvidia-cudnn-cu12 (>=9.8,<10.0) ; sys_platform == \"linux\"", "nvidia-cufft-cu12 (>=11.0.2.54) ; sys_platform == \"linux\"", "nvidia-cusolver-cu12 (>=11.4.5.107) ; sys_platform == \"linux\"", "nvidia-cusparse-cu12 (>=12.1.0.106) ; sys_platform == \"linux\"", "nvidia-nccl-cu12 (>=2.18.1) ; sys_platform == \"linux\"", "nvidia-nvjitlink-cu12 (>=12.1.105) ; sys_platform == \"linux\"", "nvidia-nvshmem-cu12 (>=3.2.5) ; sys_platform == \"linux\""]
 
 [[package]]
 name = "jaxlib"
@@ -4633,4 +4674,4 @@ eda = []
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.11"
-content-hash = "1ae60258f6fa33866a46070513cabb34cd704b763e1b396a581af0e5a700dc44"
+content-hash = "c0beffa5475dba87953df87383736be13e3306c59e790795891d1f998f70168f"

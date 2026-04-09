@@ -50,7 +50,8 @@ class FullDirichletCalibrator(BaseEstimator, RegressorMixin):
             reg_norm=self.reg_norm, ref_row=self.ref_row,
             optimizer=self.optimizer)
         self.calibrator_.fit(_X, y, *args, **kwargs)
-        self.final_loss = log_loss(y_val, self.calibrator_.predict_proba(_X_val))
+        self.final_loss = log_loss(y_val, self.calibrator_.predict_proba(_X_val),
+                                   labels=self.calibrator_.classes)
 
         return self
 
