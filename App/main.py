@@ -68,6 +68,12 @@ def validate_config(config: Dict[str, Any], task: str) -> None:
             "output_dir",
             "labels_dict_path",
         ],
+        "fit_deconvolution": [
+            "predicted_splits",
+            "ios_full_matrices_path",
+            "output_dir",
+            "labels_dict_path",
+        ],
     }
 
     if task not in required_fields:
@@ -77,8 +83,8 @@ def validate_config(config: Dict[str, Any], task: str) -> None:
         if field not in config:
             raise ValueError(f"Missing required field '{field}' for task '{task}'")
 
-    # Validate model-specific configuration (not needed for generate_pseudobulk)
-    if task != "generate_pseudobulk":
+    # Validate model-specific configuration (not needed for generate_pseudobulk or fit_deconvolution)
+    if task not in ("generate_pseudobulk", "fit_deconvolution"):
         model = config["model"]["architecture"].lower()
         if model not in ["dismir", "epigenbert2", "methylbert"]:
             raise ValueError(f"Unknown model architecture: {model}")
@@ -254,6 +260,15 @@ def run_pseudobulk_generation(config: Dict[str, Any], logger: logging.Logger) ->
     logger.info("=" * 60)
 
 
+def run_deconvolution_fitting(config: Dict[str, Any], logger: logging.Logger) -> None:
+    """Run deconvolution model fitting based on configuration."""
+    from deconvolution_pipeline import DeconvolutionFittingPipeline
+
+    logger.info("Starting deconvolution fitting pipeline")
+    pipeline = DeconvolutionFittingPipeline(config=config, logger=logger)
+    pipeline.run()
+
+
 def main():
     """Main entry point for the application."""
     parser = argparse.ArgumentParser(
@@ -276,7 +291,7 @@ Examples:
     # Required arguments
     parser.add_argument(
         "--task",
-        choices=["pretrain", "fine_tune", "inference", "generate_pseudobulk"],
+        choices=["pretrain", "fine_tune", "inference", "generate_pseudobulk", "fit_deconvolution"],
         required=True,
         help="Task to perform",
     )
@@ -416,6 +431,8 @@ Examples:
             run_pretraining(config, logger)
         elif args.task == "generate_pseudobulk":
             run_pseudobulk_generation(config, logger)
+        elif args.task == "fit_deconvolution":
+            run_deconvolution_fitting(config, logger)
 
         logger.info("Task completed successfully")
         return 0
