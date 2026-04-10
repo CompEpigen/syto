@@ -233,7 +233,7 @@ class ClassifierAdapter:
                 flavour=self.dismir_flavor,
                 num_labels=self.num_labels,
                 classifier_type=self.classifier_head_implementation,
-                num_dmr_labels=self.num_labels
+                num_dmr_labels= self.num_labels if self.soft_labels else self.num_labels-1
                 if self.classifier_head_implementation == "dmr_attention_based"
                 else None,
                 dmr_label_col=self.dmr_label_column
@@ -269,7 +269,7 @@ class ClassifierAdapter:
             methylation_sequences=methylation_sequences,
             dmr_ids=dmr_ids,
             batch_size=self.batch_size,
-        )[:2]
+        )
 
         # Build predictions DataFrame
         pred_cols = [
