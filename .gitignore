@@ -179,6 +179,7 @@ cython_debug/
 /Experiments
 /Tutorials/mlruns
 /Tutorials/output
+/Tutorials/uxm_results_pseudobulk
 /mlartifacts
 /EDA/mlruns
 /EDA/output
