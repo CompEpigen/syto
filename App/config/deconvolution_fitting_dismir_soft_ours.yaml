@@ -7,27 +7,27 @@
 # ── Input data ──────────────────────────────────────────────────
 # Paths to predicted splits (output of pseudobulk pipeline stage 3)
 predicted_splits:
-  train: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/pseudobulk/Dismir_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_hard_labels/pseudobulk/train_predicted.pkl
-  valid: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/pseudobulk/Dismir_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_hard_labels/pseudobulk/valid_predicted.pkl
-  test: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/pseudobulk/Dismir_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_hard_labels/pseudobulk/test_predicted.pkl
+  train: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/pseudobulk/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels_pooled_jakkard_no_data_leak_d041/pseudobulk/train_predicted.pkl
+  valid: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/pseudobulk/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels_pooled_jakkard_no_data_leak_d041/pseudobulk/valid_predicted.pkl
+  test: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/pseudobulk/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels_pooled_jakkard_no_data_leak_d041/pseudobulk/test_predicted.pkl
 
 # Full IO matrices from pseudobulk generation (stage 5 output)
-ios_full_matrices_path: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/pseudobulk/Dismir_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_hard_labels/pseudobulk/ios_full_matrices.npz
+ios_full_matrices_path: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/pseudobulk/Dismir_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels_pooled_jakkard_no_data_leak_d041/pseudobulk/ios_full_matrices.npz
 
 # ── Labels ──────────────────────────────────────────────────────
 labels_dict_path: App/labels_dict.json
-num_input_labels: 40
+num_input_labels: 39
 num_output_labels: 39
 
 # ── Pure profile generation (Stage 1) ──────────────────────────
 # If set, Stage 1 is skipped and profiles are loaded from this path
-pure_profiles_path: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/pseudobulk/Dismir_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_hard_labels/pseudobulk/pure_profiles.pkl
+# pure_profiles_path: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/pseudobulk/Dismir_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels_pooled_jakkard_no_data_leak_d041/pseudobulk/pure_profiles.pkl
 # Number of reads to sample per split per pure profile
 n_read_per_split: 475000
 
 # ── Feature selection (Stage 2) ────────────────────────────────
 # Cutoff for selecting discriminative features (max/mean ratio)
-feature_cutoff: 6.33
+feature_cutoff: 1.0938
 guarantee_diagonal_selection: true
 #guarantee_columns_selection: [39]
 
@@ -82,14 +82,14 @@ deconvolvers:
       scheduler_type: plateau
       device: cuda
 
-  # - name: nnls
-  #   calibrate: true
+  - name: nnls
+    calibrate: true
 
-  # - name: psls
-  #   calibrate: true
-  #   params:
-  #     solver_type: cvxpy
-  #     n_workers: 2
+  - name: psls
+    calibrate: true
+    params:
+      solver_type: cvxpy
+      n_workers: 2
 
 # ── Output ──────────────────────────────────────────────────────
-output_dir: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/pseudobulk/Dismir_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_hard_labels/pseudobulk/
+output_dir: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/pseudobulk/Dismir_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels_pooled_jakkard_no_data_leak_d041/pseudobulk/
