@@ -264,7 +264,7 @@ class DeconvolutionFittingPipeline:
                     )
                 elif name in ("nnls", "psls"):
                     model, metrics = self._fit_ls(
-                        name, deconv_cfg, pure_profiles, mask, features_dict, proportions
+                        name, deconv_cfg, pure_profiles, mask, features_dict, proportions, self.splits
                     )
                 else:
                     self.logger.warning(
@@ -478,6 +478,7 @@ class DeconvolutionFittingPipeline:
         mask: np.ndarray,
         features: Dict[str, np.ndarray],
         y: np.ndarray,
+        splits: List
     ) -> Tuple[Any, dict]:
         """Fit NNLS or PSLS deconvolver.
 
@@ -489,7 +490,7 @@ class DeconvolutionFittingPipeline:
 
         # Build reference matrix from train-split pure profiles
         pure_train = extract_pure_feature_matrix(
-            pure_profiles, self.num_input_labels, self.num_output_labels, split_idx=0
+            pure_profiles, self.num_input_labels, self.num_output_labels, split_idx=0, splits=splits
         )
         # pure_train shape: (n_cell_types, n_dmr_groups, n_pred_classes)
         # Apply mask to each cell type's profile
