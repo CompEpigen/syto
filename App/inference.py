@@ -505,7 +505,9 @@ class InferencePipeline:
                 if method_cfg.get("use_callibration", False):
                     calibrator = LinearCalibrator()
                     calibrator.load_calibration_parameters(method_cfg["callibrator_path"])
-                    calib_proportions = calibrator.predict(np.expand_dims(proportions, 0))
+                    if proportions.ndim == 1:
+                        proportions = np.expand_dims(proportions, 0)
+                    calib_proportions = calibrator.predict(proportions)
                     calib_proportions = np.round(calib_proportions, 4)
                     results[f"{base_name}_callibrated"] = calib_proportions
 
