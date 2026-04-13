@@ -1,4 +1,11 @@
-"""Dirichlet calibration for multiclass probability predictions.
+"""
+THIS MODULE IS EXPERIMENTAL, IT IS ONLY USED FOR PROOF OF CONCEPTS IN THE NOTEBOOKS.
+IT SHOULD **NOT** BE CONSIDERED PRODUCTION-READY CODE, ESPECIALLY IN TERMS OF API STABILITY
+AND TESTING (THERE ARE NO TESTS FOR THIS MODULE).
+
+
+
+Dirichlet calibration for multiclass probability predictions.
 
 Implements the method from Kull et al. (NeurIPS 2019):
 "Beyond temperature scaling: Obtaining well-calibrated multiclass
@@ -16,7 +23,6 @@ This implementation uses PyTorch for optimization and supports:
 - Mini-batch training for large datasets
 """
 
-import logging
 from enum import Enum
 from typing import Optional
 
@@ -24,8 +30,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from sklearn.base import BaseEstimator, RegressorMixin
-
-logger = logging.getLogger(__name__)
+from entmax import sparsemax, entmax15
 
 
 class CalibrationMethod(Enum):
@@ -47,83 +52,127 @@ class CalibrationMethod(Enum):
 
 
 class _DirichletCalibrationModel(nn.Module):
-    """Learnable calibration map: softmax(W @ ln(q) + b).
+    """Learnable calibration map with residual parametrisation.
 
-    This is the "linear parametrisation" from Kull et al. (2019), Eq. 7.
-    The model takes log-transformed probability vectors as input and
-    produces calibrated probability vectors via a linear layer + softmax.
+    Uses a residual connection around the identity map so that the
+    learnable parameters represent the *deviation* from the identity:
 
-    All parameters are initialised to the identity map (W=I, b=0) so that
-    the uncalibrated model is the starting point of optimisation.
+    - Full:        logits = (I + W_delta) @ x + b
+    - Diagonal:    logits = (1 + diag_delta) * x + b
+    - Temperature: logits = (1 + t_delta) * x
+
+    All delta parameters are initialised to zero, so the starting point
+    is the identity calibration map (no-op). This makes L2 regularisation
+    directly penalise deviation from identity, without needing the ODIR
+    workaround of excluding diagonal elements.
 
     Args:
         n_classes: Number of classes (k).
         method: Which parametrisation to use for the weight matrix.
+        init_noise_std: Standard deviation of Gaussian noise added to the
+            zero-initialised delta parameters. Default 0.0 (no noise).
     """
 
-    def __init__(self, n_classes: int, method: CalibrationMethod):
+    def __init__(
+        self,
+        n_classes: int,
+        method: CalibrationMethod,
+        init_noise_std: float = 0.0,
+        normalization: str = "softmax",
+    ):
         super().__init__()
         self.n_classes = n_classes
         self.method = method
+        self.normalization = normalization
+        assert normalization in {
+            "softmax",
+            "sparsemax",
+            "entmax15",
+        }, "Unsupported normalization"
 
-        # Initialise to the identity calibration map (no-op):
-        # Full: W = I, b = 0  =>  softmax(I @ ln(q) + 0) = softmax(ln(q)) = q
-        # Diagonal: diag = 1, b = 0  =>  same as above
-        # Temperature: t = 1  =>  softmax(1 * ln(q)) = q
+        # All deltas are zero-initialised => identity map at start:
+        # Full:        (I + 0) @ x + 0 = x  =>  softmax(x) = q
+        # Diagonal:    (1 + 0) * x + 0 = x  =>  softmax(x) = q
+        # Temperature: (1 + 0) * x     = x  =>  softmax(x) = q
         if method == CalibrationMethod.FULL:
-            self.W = nn.Parameter(torch.eye(n_classes, dtype=torch.float64))
+            self.W_delta = nn.Parameter(
+                torch.zeros(n_classes, n_classes, dtype=torch.float64)
+            )
             self.b = nn.Parameter(torch.zeros(n_classes, dtype=torch.float64))
         elif method == CalibrationMethod.DIAGONAL:
-            self.diag = nn.Parameter(torch.ones(n_classes, dtype=torch.float64))
+            self.diag_delta = nn.Parameter(torch.zeros(n_classes, dtype=torch.float64))
             self.b = nn.Parameter(torch.zeros(n_classes, dtype=torch.float64))
         elif method == CalibrationMethod.TEMPERATURE:
-            self.temperature = nn.Parameter(torch.ones(1, dtype=torch.float64))
+            self.t_delta = nn.Parameter(torch.zeros(1, dtype=torch.float64))
         else:
             raise ValueError(f"Unknown method: {method}")
 
-    def forward(self, log_probs: torch.Tensor) -> torch.Tensor:
-        """Apply calibration map to log-transformed probabilities.
+        # Add Gaussian noise to break symmetry around zero init
+        if init_noise_std > 0.0:
+            with torch.no_grad():
+                for param in self.parameters():
+                    param.add_(torch.randn_like(param) * init_noise_std)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Compute calibration logits (before normalization).
 
         Args:
-            log_probs: (N, K) tensor of log(clipped probabilities).
+            x: (N, K) tensor of (log-)transformed input probabilities.
+
+        Returns:
+            (N, K) tensor of logits.
+        """
+        if self.method == CalibrationMethod.FULL:
+            # Residual: logits = (I + W_delta) @ x + b = x + W_delta @ x + b
+            return x + x @ self.W_delta.T + self.b
+        elif self.method == CalibrationMethod.DIAGONAL:
+            # Residual: logits = (1 + diag_delta) * x + b = x + diag_delta * x + b
+            return x + x * self.diag_delta + self.b
+        elif self.method == CalibrationMethod.TEMPERATURE:
+            # Residual: logits = (1 + t_delta) * x
+            return x + x * self.t_delta
+        else:
+            raise ValueError(f"Unknown method: {self.method}")
+
+    def activate(self, logits: torch.Tensor) -> torch.Tensor:
+        """Apply the normalization function to logits.
+
+        Args:
+            logits: (N, K) tensor of logits from :meth:`forward`.
 
         Returns:
             (N, K) tensor of calibrated probabilities.
         """
-        if self.method == CalibrationMethod.FULL:
-            # Full matrix multiply: logits_i = sum_j W_ij * ln(q_j) + b_i
-            logits = log_probs @ self.W.T + self.b
-        elif self.method == CalibrationMethod.DIAGONAL:
-            # Element-wise scaling: logits_i = diag_i * ln(q_i) + b_i
-            logits = log_probs * self.diag + self.b
-        elif self.method == CalibrationMethod.TEMPERATURE:
-            # Single scalar scaling with no bias: logits = t * ln(q)
-            logits = log_probs * self.temperature
+        if self.normalization == "softmax":
+            return torch.softmax(logits, dim=1)
+        elif self.normalization == "sparsemax":
+            return sparsemax(logits, dim=1)
+        elif self.normalization == "entmax15":
+            return entmax15(logits, dim=1)
         else:
-            raise ValueError(f"Unknown method: {self.method}")
-
-        return torch.softmax(logits, dim=1)
+            raise ValueError(f"Unknown normalization: {self.normalization}")
 
     def get_W_matrix(self) -> torch.Tensor:
-        """Return the full (k x k) weight matrix W.
+        """Return the full (k x k) effective weight matrix W = I + delta.
 
         For diagonal and temperature methods, this reconstructs the
-        equivalent full matrix (diagonal or scalar * identity) so that
-        regularisation and inspection code can treat all methods uniformly.
+        equivalent full matrix so that inspection code can treat all
+        methods uniformly.
 
         Returns:
             (k, k) tensor representing the calibration weight matrix.
         """
+        I = torch.eye(
+            self.n_classes,
+            dtype=torch.float64,
+            device=next(self.parameters()).device,
+        )
         if self.method == CalibrationMethod.FULL:
-            return self.W
+            return I + self.W_delta
         elif self.method == CalibrationMethod.DIAGONAL:
-            return torch.diag(self.diag)
+            return I + torch.diag(self.diag_delta)
         elif self.method == CalibrationMethod.TEMPERATURE:
-            return self.temperature * torch.eye(
-                self.n_classes,
-                dtype=self.temperature.dtype,
-                device=self.temperature.device,
-            )
+            return (1.0 + self.t_delta) * I
         else:
             raise ValueError(f"Unknown method: {self.method}")
 
@@ -137,6 +186,9 @@ class DirichletCalibrator(BaseEstimator, RegressorMixin):
 
     Args:
         method: Calibration method - "full", "diagonal", or "temperature".
+        log_transform: If True (default), fit on log-transformed probabilities
+            (Dirichlet calibration: softmax(W @ ln(q) + b)). If False, fit
+            on raw probabilities (softmax(W @ q + b)).
         reg_lambda: L2 regularisation strength for off-diagonal elements
             (ODIR) or all elements (when reg_mu is None).
         reg_mu: Separate regularisation strength for the intercept (bias)
@@ -155,11 +207,17 @@ class DirichletCalibrator(BaseEstimator, RegressorMixin):
             improvement before stopping).
         tol: Minimum improvement in loss to reset patience counter.
         device: Torch device string ("cpu", "cuda", etc.).
+        verbose: If True (default), print training progress. Set to False
+            to silence all output during fitting.
+        init_noise_std: Standard deviation of Gaussian noise added to the
+            zero-initialised delta parameters. Helps break symmetry.
+            Default 0.0 (no noise).
     """
 
     def __init__(
         self,
         method: str = "full",
+        log_transform: bool = True,
         reg_lambda: float = 0.0,
         reg_mu: Optional[float] = None,
         optimizer: str = "adam",
@@ -170,8 +228,20 @@ class DirichletCalibrator(BaseEstimator, RegressorMixin):
         patience: int = 50,
         tol: float = 1e-7,
         device: str = "cpu",
+        verbose: bool = True,
+        init_noise_std: float = 0.0,
+        normalization: str = "softmax",
     ):
+        assert method in {"full", "diagonal", "temperature"}, "Unsupported method"
+        assert optimizer in {"adam", "sgd"}, "Unsupported optimizer"
+        assert scheduler in {"constant", "linear", "cosine"}, "Unsupported scheduler"
+        assert normalization in {
+            "softmax",
+            "sparsemax",
+            "entmax15",
+        }, "Unsupported normalization"
         self.method = method
+        self.log_transform = log_transform
         self.reg_lambda = reg_lambda
         self.reg_mu = reg_mu
         self.optimizer = optimizer
@@ -182,11 +252,16 @@ class DirichletCalibrator(BaseEstimator, RegressorMixin):
         self.patience = patience
         self.tol = tol
         self.device = device
+        self.verbose = verbose
+        self.init_noise_std = init_noise_std
+        self.normalization = normalization
 
         # Fitted attributes (set by fit())
         self.model_: Optional[_DirichletCalibrationModel] = None
         self.n_classes_: int = 0
         self.final_loss_: float = float("inf")
+        self.best_epoch_: int = -1
+        self.best_metrics_: dict[str, float] = {}
         self.history_: dict[str, list] = {}
 
     def _to_method_enum(self) -> CalibrationMethod:
@@ -223,16 +298,82 @@ class DirichletCalibrator(BaseEstimator, RegressorMixin):
         eps = np.finfo(X.dtype).tiny
         return np.log(np.clip(X, eps, 1.0 - eps))
 
+    def _prepare_input(self, X: np.ndarray) -> np.ndarray:
+        """Prepare input probabilities: log-transform or pass through raw.
+
+        Args:
+            X: Probability array of shape (n_samples, n_classes).
+
+        Returns:
+            Transformed array with the same shape.
+        """
+        if self.log_transform:
+            return self._clip_and_log(X)
+        return X.copy()
+
+    @staticmethod
+    def _fenchel_young_loss(
+        logits: torch.Tensor,
+        p_star: torch.Tensor,
+        targets: torch.Tensor,
+        normalization: str,
+    ) -> torch.Tensor:
+        """Fenchel-Young loss for all normalizations, supporting soft targets.
+
+        Computes the proper Fenchel-Young loss (Blondel et al. 2020):
+            L_FY(z, y) = -Omega(p*) + <p* - y, z> + Omega(y)  >= 0
+
+        where Omega is the negative Tsallis entropy and p* = mapping(z).
+        The loss is always non-negative and equals 0 iff p* = y.
+
+        - softmax (alpha -> 1): reduces to KL divergence D_KL(y || p*).
+        - sparsemax (alpha=2): Omega(p) = (||p||^2 - 1) / 2
+        - entmax-1.5 (alpha=1.5): Omega(p) = (sum(p^1.5) - 1) / (1.5 * 0.5)
+
+        Args:
+            logits: (N, K) pre-activation logits.
+            p_star: (N, K) activated probabilities (softmax/sparsemax/entmax output).
+            targets: (N, K) target distributions (soft labels).
+            normalization: One of "softmax", "sparsemax", "entmax15".
+
+        Returns:
+            Scalar mean loss (non-negative).
+        """
+        if normalization == "softmax":
+            # KL divergence: sum y_i * log(y_i / p_i)
+            # Using xlogy to handle y_i = 0 correctly (0 * log(0) = 0)
+            p_clamped = torch.clamp(p_star, min=1e-20)
+            return torch.mean(
+                torch.sum(
+                    torch.xlogy(targets, targets) - targets * torch.log(p_clamped),
+                    dim=1,
+                )
+            )
+        elif normalization == "sparsemax":
+            # -Omega(p*) = (1 - ||p*||^2) / 2;  Omega(y) = (||y||^2 - 1) / 2
+            neg_omega_p = (1.0 - torch.sum(p_star**2, dim=1)) / 2.0
+            omega_y = (torch.sum(targets**2, dim=1) - 1.0) / 2.0
+            inner = torch.sum((p_star - targets) * logits, dim=1)
+            return torch.mean(neg_omega_p + inner + omega_y)
+        elif normalization == "entmax15":
+            # -Omega(p*) = (1 - sum p^1.5) * 4/3;  Omega(y) = (sum y^1.5 - 1) * 4/3
+            neg_omega_p = (1.0 - torch.sum(p_star**1.5, dim=1)) * (4.0 / 3.0)
+            omega_y = (torch.sum(targets**1.5, dim=1) - 1.0) * (4.0 / 3.0)
+            inner = torch.sum((p_star - targets) * logits, dim=1)
+            return torch.mean(neg_omega_p + inner + omega_y)
+        else:
+            raise ValueError(f"Unknown normalization: {normalization}")
+
     def _compute_loss(
         self,
         model: _DirichletCalibrationModel,
-        log_probs: torch.Tensor,
+        inputs: torch.Tensor,
         targets: torch.Tensor,
     ) -> torch.Tensor:
-        """Compute the calibration loss: cross-entropy + regularisation.
+        """Compute the calibration loss + regularisation.
 
-        The cross-entropy is computed as -mean(sum(y * log(p_cal))) which
-        generalises to soft targets (y can be any probability vector).
+        Uses cross-entropy for softmax and Fenchel-Young loss for
+        sparsemax/entmax, all supporting soft targets.
 
         Two regularisation modes are supported:
 
@@ -245,23 +386,18 @@ class DirichletCalibrator(BaseEstimator, RegressorMixin):
 
         Args:
             model: The calibration model.
-            log_probs: (N, K) log-transformed input probabilities.
+            inputs: (N, K) transformed input probabilities.
             targets: (N, K) target distributions (hard or soft labels).
 
         Returns:
             Scalar loss tensor.
         """
-        calibrated = model(log_probs)
-        # Clamp to avoid log(0) which would give -inf and corrupt the loss
-        calibrated = torch.clamp(calibrated, min=1e-20)
-        # Cross-entropy: works with both hard (one-hot) and soft label targets
-        nll = -torch.mean(torch.sum(targets * torch.log(calibrated), dim=1))
+        logits = model(inputs)
+        p_star = model.activate(logits)
+        loss = self._fenchel_young_loss(logits, p_star, targets, model.normalization)
 
         # --- Regularisation ---
         if self.reg_mu is not None:
-            # ODIR (Off-Diagonal and Intercept Regularisation):
-            # Penalise off-diagonal W entries (class interactions) and bias
-            # separately, leaving diagonal entries (per-class scaling) free.
             W = model.get_W_matrix()
             k = W.shape[0]
             off_diag_mask = ~torch.eye(k, dtype=torch.bool, device=W.device)
@@ -270,15 +406,14 @@ class DirichletCalibrator(BaseEstimator, RegressorMixin):
                 reg_intercept = self.reg_mu * torch.mean(model.b**2)
             else:
                 reg_intercept = 0.0
-            nll = nll + reg_off_diag + reg_intercept
+            loss = loss + reg_off_diag + reg_intercept
         elif self.reg_lambda > 0:
-            # Standard L2 penalty on all learnable parameters
-            reg = torch.tensor(0.0, dtype=torch.float64, device=log_probs.device)
+            reg = torch.tensor(0.0, dtype=torch.float64, device=inputs.device)
             for param in model.parameters():
                 reg = reg + torch.sum(param**2)
-            nll = nll + self.reg_lambda * reg
+            loss = loss + self.reg_lambda * reg
 
-        return nll
+        return loss
 
     @staticmethod
     def _prepare_targets(y: np.ndarray, n_samples: int, n_classes: int) -> np.ndarray:
@@ -334,10 +469,10 @@ class DirichletCalibrator(BaseEstimator, RegressorMixin):
 
         targets = self._prepare_targets(y, n_samples, n_classes)
 
-        log_probs_np = self._clip_and_log(X)
+        input_np = self._prepare_input(X)
 
         dev = torch.device(self.device)
-        log_probs_all = torch.as_tensor(log_probs_np, dtype=torch.float64, device=dev)
+        input_all = torch.as_tensor(input_np, dtype=torch.float64, device=dev)
         targets_all = torch.as_tensor(targets, dtype=torch.float64, device=dev)
 
         # Prepare validation tensors if provided
@@ -346,14 +481,19 @@ class DirichletCalibrator(BaseEstimator, RegressorMixin):
             X_val = np.asarray(X_val, dtype=np.float64)
             n_val = X_val.shape[0]
             val_targets = self._prepare_targets(y_val, n_val, n_classes)
-            log_probs_val = torch.as_tensor(
-                self._clip_and_log(X_val), dtype=torch.float64, device=dev
+            input_val = torch.as_tensor(
+                self._prepare_input(X_val), dtype=torch.float64, device=dev
             )
             targets_val = torch.as_tensor(val_targets, dtype=torch.float64, device=dev)
 
         # Build calibration model and optimiser
         method_enum = self._to_method_enum()
-        model = _DirichletCalibrationModel(n_classes, method_enum).to(dev)
+        model = _DirichletCalibrationModel(
+            n_classes,
+            method_enum,
+            init_noise_std=self.init_noise_std,
+            normalization=self.normalization,
+        ).to(dev)
 
         if self.optimizer == "adam":
             optim = torch.optim.Adam(model.parameters(), lr=self.lr)
@@ -385,8 +525,6 @@ class DirichletCalibrator(BaseEstimator, RegressorMixin):
         # batch_size=0 means full-batch: use the entire dataset each epoch
         effective_bs = self.batch_size if self.batch_size else n_samples
 
-        best_loss = float("inf")
-        best_state = None
         no_improve = 0
 
         # History: store metrics for every epoch
@@ -400,6 +538,50 @@ class DirichletCalibrator(BaseEstimator, RegressorMixin):
             history["val_loss"] = []
             history["val_mse"] = []
 
+        # --- Epoch -1: metrics for the untrained (identity) model ---
+        model.eval()
+        with torch.no_grad():
+            train_logits = model(input_all)
+            train_calibrated = model.activate(train_logits)
+            init_train_loss = self._fenchel_young_loss(
+                train_logits, train_calibrated, targets_all, model.normalization
+            ).item()
+            init_train_mse = torch.mean((train_calibrated - targets_all) ** 2).item()
+
+            history["epoch"].append(-1)
+            history["lr"].append(self.lr)
+            history["train_loss"].append(init_train_loss)
+            history["train_mse"].append(init_train_mse)
+
+            if has_val:
+                val_logits = model(input_val)
+                val_calibrated = model.activate(val_logits)
+                init_val_loss = self._fenchel_young_loss(
+                    val_logits, val_calibrated, targets_val, model.normalization
+                ).item()
+                init_val_mse = torch.mean((val_calibrated - targets_val) ** 2).item()
+                history["val_loss"].append(init_val_loss)
+                history["val_mse"].append(init_val_mse)
+                selection_loss_init = init_val_loss
+            else:
+                selection_loss_init = init_train_loss
+
+            best_loss = selection_loss_init
+            best_state = {k: v.clone() for k, v in model.state_dict().items()}
+            best_epoch_idx = 0  # index into history lists
+        if self.verbose:
+            if has_val:
+                print(
+                    f"Epoch -1: train_loss = {init_train_loss:.7e}, "
+                    f"val_loss = {init_val_loss:.7e}, "
+                    f"train_mse = {init_train_mse:.7e}, val_mse = {init_val_mse:.7e}"
+                )
+            else:
+                print(
+                    f"Epoch -1: train_loss = {init_train_loss:.7e}, "
+                    f"train_mse = {init_train_mse:.7e}"
+                )
+
         for epoch in range(self.max_iter):
             # --- Training step ---
             model.train()
@@ -409,11 +591,11 @@ class DirichletCalibrator(BaseEstimator, RegressorMixin):
             n_batches = 0
             for start in range(0, n_samples, effective_bs):
                 idx = perm[start : start + effective_bs]
-                batch_log = log_probs_all[idx]
+                batch_input = input_all[idx]
                 batch_tgt = targets_all[idx]
 
                 optim.zero_grad()
-                loss = self._compute_loss(model, batch_log, batch_tgt)
+                loss = self._compute_loss(model, batch_input, batch_tgt)
                 loss.backward()
                 optim.step()
                 epoch_loss += loss.item()
@@ -431,17 +613,19 @@ class DirichletCalibrator(BaseEstimator, RegressorMixin):
             model.eval()
             with torch.no_grad():
                 # Train MSE: mean squared error between calibrated probs and targets
-                train_calibrated = model(log_probs_all)
+                train_logits = model(input_all)
+                train_calibrated = model.activate(train_logits)
                 train_mse = torch.mean((train_calibrated - targets_all) ** 2).item()
 
                 if has_val:
                     # Validation loss without regularisation for clean selection
-                    val_calibrated = model(log_probs_val)
-                    val_calibrated_clamped = torch.clamp(val_calibrated, min=1e-20)
-                    selection_loss = -torch.mean(
-                        torch.sum(
-                            targets_val * torch.log(val_calibrated_clamped), dim=1
-                        )
+                    val_logits = model(input_val)
+                    val_calibrated = model.activate(val_logits)
+                    selection_loss = self._fenchel_young_loss(
+                        val_logits,
+                        val_calibrated,
+                        targets_val,
+                        model.normalization,
                     ).item()
                     val_mse = torch.mean((val_calibrated - targets_val) ** 2).item()
                 else:
@@ -460,15 +644,19 @@ class DirichletCalibrator(BaseEstimator, RegressorMixin):
             if selection_loss < best_loss - self.tol:
                 best_loss = selection_loss
                 best_state = {k: v.clone() for k, v in model.state_dict().items()}
+                best_epoch_idx = len(history["epoch"]) - 1
                 no_improve = 0
             else:
                 no_improve += 1
 
             if no_improve >= self.patience:
-                print(f"Early stopping at epoch {epoch} (best loss: {best_loss:.7e})")
+                if self.verbose:
+                    print(
+                        f"Early stopping at epoch {epoch} (best loss: {best_loss:.7e})"
+                    )
                 break
 
-            if epoch % report_every == 0:
+            if self.verbose and epoch % report_every == 0:
                 if has_val:
                     print(
                         f"Epoch {epoch}: train_loss = {train_loss:.7e}, "
@@ -488,6 +676,10 @@ class DirichletCalibrator(BaseEstimator, RegressorMixin):
         self.model_ = model
         self.final_loss_ = best_loss
         self.history_ = history
+        self.best_epoch_ = history["epoch"][best_epoch_idx]
+        self.best_metrics_ = {
+            key: values[best_epoch_idx] for key, values in history.items()
+        }
 
         return self
 
@@ -501,13 +693,14 @@ class DirichletCalibrator(BaseEstimator, RegressorMixin):
             Calibrated probabilities, shape (n_samples, n_classes).
         """
         X = np.asarray(X, dtype=np.float64)
-        log_probs_np = self._clip_and_log(X)
+        input_np = self._prepare_input(X)
 
         dev = next(self.model_.parameters()).device
-        log_probs_t = torch.as_tensor(log_probs_np, dtype=torch.float64, device=dev)
+        input_t = torch.as_tensor(input_np, dtype=torch.float64, device=dev)
 
         with torch.no_grad():
-            calibrated = self.model_(log_probs_t)
+            logits = self.model_(input_t)
+            calibrated = self.model_.activate(logits)
 
         return calibrated.cpu().numpy()
 

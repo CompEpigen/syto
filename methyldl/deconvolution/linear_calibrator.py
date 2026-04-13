@@ -91,7 +91,8 @@ class LinearCalibrator(BaseEstimator, RegressorMixin):
         return result
 
     _VALID_NORM_METHODS = (
-        "clip-normalize",
+        "clip01-normalize",
+        "clip0-normalize",
         "softmax",
         "simplex-projection",
         "shift-normalize",
@@ -101,16 +102,14 @@ class LinearCalibrator(BaseEstimator, RegressorMixin):
     def predict(
         self,
         X: np.ndarray,
-        upper_clip=True,
-        norm_method="clip-normalize",
+        norm_method="clip01-normalize",
         entmax_alpha=1.5,
     ) -> np.ndarray:
         """Apply the learned calibration and return corrected predictions.
 
         Args:
             X: Raw predicted proportions with shape ``(n_samples, n_cell_types)``.
-            upper_clip: When using ``clip-normalize``, whether to clip above at 1.
-            norm_method: One of ``"clip-normalize"``, ``"softmax"``,
+            norm_method: One of ``"clip01-normalize"``, ``"clip0-normalize"``, ``"softmax"``,
                 ``"simplex-projection"``, ``"shift-normalize"``,
                 or ``"entmax"``.
             entmax_alpha: Alpha parameter for entmax (only used when
@@ -138,9 +137,13 @@ class LinearCalibrator(BaseEstimator, RegressorMixin):
         # Linear correction can push some values slightly outside the simplex.
         # Project back onto the simplex using the chosen method.
         final_predictions = None
-        if norm_method == "clip-normalize":
-            upper_lim = 1.0 if upper_clip else None
-            clipped = np.clip(adjusted_predictions, 0, upper_lim)
+        if norm_method == "clip01-normalize":
+            clipped = np.clip(adjusted_predictions, 0, 1)
+            final_predictions = clipped / np.clip(
+                clipped.sum(axis=1, keepdims=True), 1e-8, None
+            )
+        elif norm_method == "clip0-normalize":
+            clipped = np.clip(adjusted_predictions, 0, None)
             final_predictions = clipped / np.clip(
                 clipped.sum(axis=1, keepdims=True), 1e-8, None
             )
