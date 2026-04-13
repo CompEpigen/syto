@@ -36,9 +36,7 @@ def generate_pseudo_bulk(
     total_samples,
     labels,
     proportions,
-    train_data,
-    valid_data,
-    test_data,
+    splits,
     atlas,
     ref_cells,
     labels_dict_reversed,
@@ -62,12 +60,10 @@ def generate_pseudo_bulk(
         Cell-type labels to include in the pseudo-bulk mixture.
     proportions : list[float]
         Mixture proportions associated with ``labels``. They must sum to 1.
-    train_data : pd.DataFrame
-        Read-level prediction dataframe for the training split.
-    valid_data : pd.DataFrame
-        Read-level prediction dataframe for the validation split.
-    test_data : pd.DataFrame
-        Read-level prediction dataframe for the test split.
+    proportions : list[float]
+        Mixture proportions associated with ``labels``. They must sum to 1.
+    splits : dict
+        Dict of read-level prediction dataframe for the splits.
     atlas : pd.DataFrame
         UXM atlas used to deconvolve the pseudo-bulk sample.
     ref_cells : list[str]
@@ -88,8 +84,8 @@ def generate_pseudo_bulk(
 
         ``proportions_full`` is a dense length-``num_labels`` proportion vector
         aligned to all labels, ``subs`` contains one aggregated pseudo-bulk
-        dataframe per split, and ``uxm_data`` contains one tuple per split with
-        the UXM inputs and deconvolution outputs.
+        dataframe per split as a dictionary, and ``uxm_data`` contains one tuple per split with
+        the UXM inputs and deconvolution outputs as a dictionary.
 
     Notes
     -----
@@ -101,16 +97,12 @@ def generate_pseudo_bulk(
     assert np.round(np.sum(proportions), 4) == 1, "Proportions must sum up to one"
     n_samples_list = [int(total_samples * x) for x in proportions]
     target_columns = _build_target_columns(num_labels)
-    subs = []
-    uxm_data = []
-    reads = []
+    subs = {}
+    uxm_data = {}
+    reads = {}
     sample_name = "pseudo_bulk_sample"
 
-    for df in [
-        train_data,
-        valid_data,
-        test_data,
-    ]:  # for each dataset (with predictions)
+    for split_name, df in splits.items():  # for each dataset (with predictions)
         df["total_marked_cpgs"] = df["NCPGS"]
         df["methylation_level"] = df["M_rate"]
         df.rename(columns={"chr": "chromosome"}, inplace=True)
@@ -130,7 +122,7 @@ def generate_pseudo_bulk(
             sub, group_cols=["dmr_ctype_label", "dmr_ctype"]
         )
         sub_aggregated = sub_aggregated[target_columns]
-        subs.append(sub_aggregated)
+        subs[split_name] = sub_aggregated
 
         # compute UXM deconvolution inputs before aggregation
         results = sub
@@ -157,10 +149,10 @@ def generate_pseudo_bulk(
         uxm_deconv_results_alligned = rearange_uxm_deconvolution_results(
             labels_dict_reversed, uxm_proportions, ref_cells
         )
-        uxm_data.append((sf, counts, uxm_deconv_results, uxm_deconv_results_alligned))
+        uxm_data[split_name] = (sf, counts, uxm_deconv_results, uxm_deconv_results_alligned)
 
         if return_reads:
-            reads.append(sub)
+            reads[split_name] = sub
 
     # ensure that we have a proportion for each of the num_labels labels, filling in 0 for any missing ones
     proportions_dict = {x: y for x, y in zip(labels, proportions)}
@@ -172,9 +164,7 @@ def generate_pseudo_bulk(
 
 
 def init_worker(
-    train_data,
-    valid_data,
-    test_data,
+    splits,
     allowed_labels,
     n_cells_max,
     n_read_per_split,
@@ -186,8 +176,8 @@ def init_worker(
 
     Parameters
     ----------
-    train_data, valid_data, test_data : pd.DataFrame
-        Per-split read-level DataFrames.
+    splits : dict
+        Dict of per-split read-level DataFrames.
     allowed_labels : list[int]
         Labels allowed in random selection mode.
     n_cells_max : int
@@ -209,24 +199,18 @@ def init_worker(
     random.seed(seed)
     np.random.seed(seed)
 
-    for df in [train_data, valid_data, test_data]:
+    grouped_splits = {}
+    for name, df in splits.items():
         df["total_marked_cpgs"] = df["NCPGS"]
         df["methylation_level"] = df["M_rate"]
         df.rename(columns={"chr": "chromosome"}, inplace=True)
         df["direction"] = "U"
-    # Pre-compute grouped dataframes (expensive operation done once per worker)
+        # Pre-compute grouped dataframes (expensive operation done once per worker)
+        grouped_splits[name] = df.groupby(
+            ["original_label", "dmr_ctype_label"], sort=False
+        )
 
-    _worker_data["grouped_train"] = train_data.groupby(
-        ["original_label", "dmr_ctype_label"], sort=False
-    )
-
-    _worker_data["grouped_valid"] = valid_data.groupby(
-        ["original_label", "dmr_ctype_label"], sort=False
-    )
-
-    _worker_data["grouped_test"] = test_data.groupby(
-        ["original_label", "dmr_ctype_label"], sort=False
-    )
+    _worker_data["grouped_splits"] = grouped_splits
 
     _worker_data["allowed_labels"] = allowed_labels
     _worker_data["n_cells_max"] = n_cells_max
@@ -274,9 +258,7 @@ def worker_task(batch_args):
                 _worker_data["n_read_per_split"],
                 labels,
                 proportions,
-                _worker_data["grouped_train"],
-                _worker_data["grouped_valid"],
-                _worker_data["grouped_test"],
+                _worker_data["grouped_splits"],
                 _worker_data["target_columns"],
                 num_labels=_worker_data["num_labels"],
                 generate_uxm_inputs=_worker_data["generate_uxm_inputs"],
@@ -294,9 +276,7 @@ def generate_pseudo_bulk_optimized(
     total_samples,
     labels,
     proportions,
-    grouped_train,
-    grouped_valid,
-    grouped_test,
+    grouped_splits,
     target_columns,
     num_labels=39,
     generate_uxm_inputs=True,
@@ -311,8 +291,8 @@ def generate_pseudo_bulk_optimized(
         Cell-type labels to include.
     proportions : list[float]
         Proportions for each label. Must sum to 1.
-    grouped_train, grouped_valid, grouped_test : DataFrameGroupBy
-        Pre-computed groupby objects.
+    grouped_splits : dict
+        Dict of pre-computed groupby objects.
     target_columns : list[str]
         Columns to keep in aggregated output.
     num_labels : int
@@ -325,10 +305,10 @@ def generate_pseudo_bulk_optimized(
     n_samples_list = [int(total_samples * x) for x in proportions]
     sample_name = "pseudo_bulk_sample"
 
-    subs = []
-    uxm_data = []
+    subs = {}
+    uxm_data = {}
 
-    for grouped in [grouped_train, grouped_valid, grouped_test]:
+    for split_name, grouped in grouped_splits.items():
         sub_parts = []
         samples_per_dmr = {
             label: int(n / num_labels) for label, n in zip(labels, n_samples_list)
@@ -369,16 +349,16 @@ def generate_pseudo_bulk_optimized(
                 counts = results_agg[["name", "direction", "count"]].copy()
                 counts.columns = ["name", "direction", sample_name]
 
-                uxm_data.append((sf, counts))
+                uxm_data[split_name] = (sf, counts)
             else:
-                uxm_data.append(None)
+                uxm_data[split_name] = None
 
             # Aggregate predictions
             sub = aggregate_predictions_by_dmr_optimized(
                 sub, group_cols=["dmr_ctype_label", "dmr_ctype"]
             )
             sub = sub[target_columns]
-            subs.append(sub)
+            subs[split_name] = sub
 
     proportions_dict = dict(zip(labels, proportions))
     proportions_full = [proportions_dict.get(x, 0) for x in range(num_labels)]
@@ -387,9 +367,7 @@ def generate_pseudo_bulk_optimized(
 
 
 def run_ios_generation_parallel(
-    train_data,
-    valid_data,
-    test_data,
+    splits,
     file_name,
     n_io_examples=30000,
     n_workers=None,
@@ -407,7 +385,7 @@ def run_ios_generation_parallel(
 
     Parameters
     ----------
-    train_data, valid_data, test_data : pd.DataFrame
+    splits : dict
         Per-split read-level DataFrames (with predictions).
     file_name : str
         Base path for checkpoint pickle files.
@@ -478,9 +456,7 @@ def run_ios_generation_parallel(
         max_workers=n_workers,
         initializer=init_worker,
         initargs=(
-            train_data,
-            valid_data,
-            test_data,
+            splits,
             allowed_labels,
             n_cells_max,
             n_read_per_split,
@@ -535,8 +511,8 @@ def consolidate_ios_pickles(
     """Load partial pickle checkpoints and consolidate into a single ``.npz``.
 
     Each pickle is expected to contain a list of tuples
-    ``(proportions, subs, uxm_data)`` where ``subs`` is a list of 3
-    DataFrames (train, valid, test) and ``uxm_data`` is the corresponding
+    ``(proportions, subs, uxm_data)`` where ``subs`` is a dictionary of
+    DataFrames (e.g. 'train', 'valid', 'test') and ``uxm_data`` is the corresponding
     UXM data (or ``None`` if UXM was disabled).
 
     Parameters
@@ -552,14 +528,12 @@ def consolidate_ios_pickles(
     -------
     dict
         Keys: ``proportions``, ``features_train``, ``features_valid``,
-        ``features_test`` — each a numpy array.
+        ``features_test`` (dynamically populated) — each a numpy array.
     """
     pred_cols = [f"prediction_{i}_wavg" for i in range(num_labels)]
 
     proportions_list = []
-    features_train_list = []
-    features_valid_list = []
-    features_test_list = []
+    features_lists = {}
 
     pkl_files = sorted(f for f in os.listdir(ios_dir) if f.endswith(".pkl"))
 
@@ -575,24 +549,22 @@ def consolidate_ios_pickles(
             continue
 
         for item in part_ios:
-            gt = np.reshape(item[0], (1, num_labels))
-
-            f_tr = np.expand_dims(item[1][0][pred_cols].to_numpy(), 0)
-            f_val = np.expand_dims(item[1][1][pred_cols].to_numpy(), 0)
-            f_tst = np.expand_dims(item[1][2][pred_cols].to_numpy(), 0)
-
+            gt = np.expand_dims(np.array(item[0]),0)
             proportions_list.append(gt)
-            features_train_list.append(f_tr)
-            features_valid_list.append(f_val)
-            features_test_list.append(f_tst)
+
+            subs = item[1]
+            for split_name, df in subs.items():
+                if split_name not in features_lists:
+                    features_lists[split_name] = []
+                features_lists[split_name].append(np.expand_dims(df[pred_cols].to_numpy(), 0))
 
     # Single concatenation at the end (O(n))
     result = {
         "proportions": np.concatenate(proportions_list, axis=0),
-        "features_train": np.concatenate(features_train_list, axis=0),
-        "features_valid": np.concatenate(features_valid_list, axis=0),
-        "features_test": np.concatenate(features_test_list, axis=0),
     }
+    for split_name, lst in features_lists.items():
+        if lst:
+            result[f"features_{split_name}"] = np.concatenate(lst, axis=0)
 
     np.savez_compressed(output_path, **result)
 
