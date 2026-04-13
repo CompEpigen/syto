@@ -84,68 +84,64 @@ class PseudoBulkPipeline:
         if self.config["input_type"] == "raw_splits":
             # ── Stage 1: Load splits ──────────────────────────────────
             self.logger.info("Stage 1: Loading data splits ...")
-            train, valid, test = self._load_splits()
-            self.logger.info(
-                f"  train={len(train)}, valid={len(valid)}, test={len(test)} reads"
-        )
+            splits_data = self._load_splits()
+            sizes = ", ".join(f"{name}={len(df)}" for name, df in splits_data.items())
+            self.logger.info(f"  {sizes} reads")
 
             # ── Stage 1b: Optional rebalancing ────────────────────────
             if self.config.get("rebalance_splits", False):
                 self.logger.info("Stage 1b: Rebalancing splits ...")
-                manual_labels = self.config.get("manual_common_labels", [28, 35])
-                train, valid, test = rebalance_splits(
-                    train,
-                    valid,
-                    test,
-                    manual_common_labels=manual_labels,
-                )
-                self.logger.info(
-                    f"  After rebalance: train={len(train)}, valid={len(valid)}, "
-                    f"test={len(test)}"
-                )
+                if "train" in splits_data and "valid" in splits_data and "test" in splits_data and len(splits_data) == 3:
+                    manual_labels = self.config.get("manual_common_labels", [28, 35])
+                    train, valid, test = rebalance_splits(
+                        splits_data["train"],
+                        splits_data["valid"],
+                        splits_data["test"],
+                        manual_common_labels=manual_labels,
+                    )
+                    splits_data["train"] = train
+                    splits_data["valid"] = valid
+                    splits_data["test"] = test
+                    sizes = ", ".join(f"{name}={len(df)}" for name, df in splits_data.items())
+                    self.logger.info(f"  After rebalance: {sizes}")
+                else:
+                    self.logger.warning("Rebalancing is only supported when exactly train, valid, and test splits are present. Skipping.")
 
             # ── Stage 2: Prepare reads ────────────────────────────────
             self.logger.info("Stage 2: Preparing reads ...")
             generate_uxm = self.config.get("generate_uxm_inputs", True)
             atlas_path = self.config.get("atlas_path")
 
-            train, valid, test = prepare_splits_for_pseudobulk(
-                train,
-                valid,
-                test,
+            splits_data = prepare_splits_for_pseudobulk(
+                splits_data,
                 labels_dict=self.labels_dict,
                 num_labels=self.num_labels,
                 generate_uxm_inputs=generate_uxm,
                 atlas_path=atlas_path,
                 cell_type_match_dict=self.cell_type_match_dict,
             )
-            self.logger.info(
-                f"  After preparation: train={len(train)}, valid={len(valid)}, "
-                f"test={len(test)}"
-            )
+            sizes = ", ".join(f"{name}={len(df)}" for name, df in splits_data.items())
+            self.logger.info(f"  After preparation: {sizes}")
             with open(os.path.join(self.output_dir, "uxm_prepared_reads.pkl"), "wb") as f:
-                pickle.dump((train, valid, test), f)
+                pickle.dump(splits_data, f)
         elif self.config["input_type"] == "uxm_prepared":
             self.logger.info("Skipping Stage 1 and 2: Loading uxm prepared reads ...")
             with open(os.path.join(self.output_dir, "uxm_prepared_reads.pkl"), "rb") as f:
-                train, valid, test = pickle.load(f)
-            self.logger.info(
-                f"  After loading: train={len(train)}, valid={len(valid)}, "
-                f"test={len(test)}"
-            )
+                splits_data = pickle.load(f)
+            sizes = ", ".join(f"{name}={len(df)}" for name, df in splits_data.items())
+            self.logger.info(f"  After loading: {sizes}")
         elif self.config["input_type"] == "pre_predicted":
             self.logger.info("Skipping Stage 1,2,3: Loading reads with predictions ..")
-            train, valid, test = self._load_splits()
-            self.logger.info(
-                f"  train={len(train)}, valid={len(valid)}, test={len(test)} reads"
-        )
+            splits_data = self._load_splits()
+            sizes = ", ".join(f"{name}={len(df)}" for name, df in splits_data.items())
+            self.logger.info(f"  {sizes} reads")
 
         # ── Stage 3: Classifier predictions (if needed) ───────────
         if self.config["input_type"] in ["raw_splits", "uxm_prepared"]:
             self.logger.info("Stage 3: Running classifier predictions ...")
             adapter = self._build_classifier_adapter()
 
-            for name, df in [("train", train), ("valid", valid), ("test", test)]:
+            for name, df in splits_data.items():
                 self.logger.info(f"  Predicting {name} split ({len(df)} reads) ...")
                 predicted = adapter.predict_split(df)
 
@@ -157,15 +153,10 @@ class PseudoBulkPipeline:
                     pickle.dump(predicted, f)
                 self.logger.info(f"  Saved predicted {name} to {intermediate_path}")
 
-                if name == "train":
-                    train = predicted
-                elif name == "valid":
-                    valid = predicted
-                else:
-                    test = predicted
+                splits_data[name] = predicted
 
             with open(os.path.join(self.output_dir, "predicted_reads.pkl"), "wb") as f:
-                pickle.dump((train, valid, test), f)
+                pickle.dump(splits_data, f)
         else:
             self.logger.info(
                 "Stage 3: Skipped (input already has predictions)"
@@ -177,9 +168,7 @@ class PseudoBulkPipeline:
         generate_uxm_in_ios = self.config.get("generate_uxm_inputs_in_ios", True)
 
         shared_kwargs = dict(
-            train_data=train,
-            valid_data=valid,
-            test_data=test,
+            splits=splits_data,
             file_name=self.ios_base_path,
             n_workers=self.config.get("n_workers"),
             batch_size=self.config.get("batch_size", 100),
@@ -245,31 +234,29 @@ class PseudoBulkPipeline:
 
     def _load_splits(
         self,
-    ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-        """Load train/valid/test splits from parquet or pickle."""
+    ) -> Dict[str, pd.DataFrame]:
+        """Load configured splits from parquet or pickle."""
         input_type = self.config["input_type"]
+        splits_cfg = self.config.get("splits", ["train", "valid", "test"])
+        splits_data = {}
 
         if input_type == "raw_splits":
             data_path = self.config["data_path"]
-            train = pd.read_parquet(os.path.join(data_path, "train.parquet"))
-            valid = pd.read_parquet(os.path.join(data_path, "valid.parquet"))
-            test = pd.read_parquet(os.path.join(data_path, "test.parquet"))
+            for split_name in splits_cfg:
+                splits_data[split_name] = pd.read_parquet(os.path.join(data_path, f"{split_name}.parquet"))
         elif input_type == "pre_predicted":
             pickle_paths = self.config["pickle_paths"]
-            with open(pickle_paths["train"], "rb") as f:
-                train = pickle.load(f)
-            with open(pickle_paths["valid"], "rb") as f:
-                valid = pickle.load(f)
-            with open(pickle_paths["test"], "rb") as f:
-                test = pickle.load(f)
+            for split_name in splits_cfg:
+                with open(pickle_paths[split_name], "rb") as f:
+                    splits_data[split_name] = pickle.load(f)
 
         else:
             raise ValueError(
                 f"Unknown input_type: '{input_type}'. "
-                "Must be 'parquet' or 'pickle'."
+                "Must be 'raw_splits' or 'pre_predicted'."
             )
 
-        return train, valid, test
+        return splits_data
 
     def _build_classifier_adapter(self) -> ClassifierAdapter:
         """Build a ClassifierAdapter from config."""
