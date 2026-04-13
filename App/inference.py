@@ -144,7 +144,7 @@ class InferencePipeline:
         else:
             raise ValueError(
                 f"Unknown input type: {input_cfg['type']}. "
-                "Must be 'bam' or 'processed_reads'."
+                "Must be 'bam' or 'parsed_reads' or 'predicted_reads'."
             )
         if not self.processed_reads is None:
             if not self.skip_classification:
@@ -256,10 +256,24 @@ class InferencePipeline:
         """Load pre-parsed reads from a pickle file."""
         path = self.config["input"]["parsed_reads_path"]
         self.logger.info(f"Loading pre-parsed reads from {path}")
-        with open(path, "rb") as f:
-            df = pickle.load(f)
-        if not isinstance(df, pd.DataFrame):
-            raise TypeError(f"Expected a pandas DataFrame in {path}, got {type(df)}")
+        if ".csv" in path:
+            df = pd.read_csv(path, sep="\t")
+            df.rename(columns={"ref_name": "chromosome"}, inplace=True)
+            df.rename(columns={"ref_pos": "read_start"}, inplace=True)
+            df.rename(columns={"methyl_seq": "methylation_encoding"}, inplace=True)
+            df.rename(columns={"original_seq": "seq"}, inplace=True)
+            df["read_end"] = df["read_start"] + df["seq"].apply(len)
+            df["read_name"] = range(len(df))
+            df["label"] = (
+                0  # TODO: temporary set here to avoid eval loop crashing the predict. MUST FIX IN THE FUTURE IN THE EVAL LOOP!!!
+            )
+        else:
+            with open(path, "rb") as f:
+                df = pickle.load(f)
+            if not isinstance(df, pd.DataFrame):
+                raise TypeError(
+                    f"Expected a pandas DataFrame in {path}, got {type(df)}"
+                )
         return df
 
     def _load_reads_with_predictions(self) -> pd.DataFrame:
@@ -475,19 +489,37 @@ class InferencePipeline:
             self.logger.info(f"Running deconvolution method: {name}")
 
             try:
+                base_name = name
+                if name == "ls":
+                    base_name = method_cfg["flavor"]
+
                 if name == "xgboost":
-                    results[name] = self._run_xgboost_deconvolution(method_cfg)
+                    proportions = self._run_xgboost_deconvolution(method_cfg)
                 elif name == "uxm":
-                    results[name] = self._run_uxm_deconvolution(method_cfg)
+                    proportions = self._run_uxm_deconvolution(method_cfg)
                 elif name in ["3Layer_MLP", "Shallow_Wide_Network"]:
-                    results[name] = self._run_nn_deconvolution(method_cfg)
+                    proportions = self._run_nn_deconvolution(method_cfg)
                 elif name == "ls":
-                    flavor = method_cfg["flavor"]
-                    results[flavor] = self._run_ls_deconvolution(method_cfg)
+                    proportions = self._run_ls_deconvolution(method_cfg)
                 else:
                     self.logger.warning(
                         f"Unknown deconvolution method: {name}, skipping"
                     )
+                    continue
+
+                results[base_name] = proportions
+
+                if method_cfg.get("use_callibration", False):
+                    calibrator = LinearCalibrator()
+                    calibrator.load_calibration_parameters(
+                        method_cfg["callibrator_path"]
+                    )
+                    calib_proportions = calibrator.predict(
+                        np.expand_dims(proportions, 0)
+                    )
+                    calib_proportions = np.round(calib_proportions, 4)
+                    results[f"{base_name}_callibrated"] = calib_proportions
+
             except Exception as e:
                 self.logger.error(
                     f"Deconvolution method '{name}' failed: {e}", exc_info=True
@@ -515,13 +547,8 @@ class InferencePipeline:
             proportions = deconvolver.predict_single_sample(X)
         else:
             raise ValueError(
-                "LS fabily of deconvolvers supports only two flavors: nnls and psls"
+                "LS family of deconvolvers supports only two flavors: nnls and psls"
             )
-
-        if method_cfg["use_callibration"]:
-            calibrator = LinearCalibrator()
-            calibrator.load_calibration_parameters(method_cfg["callibrator_path"])
-            proportions = calibrator.predict(np.expand_dims(proportions, 0))
 
         proportions = np.round(proportions, 4)
         self.logger.debug(f"{flavor} proportions: {proportions}")
@@ -574,7 +601,7 @@ class InferencePipeline:
             #     nn.Softmax(dim=-1)
             # )
             deconvolver = nn.Sequential(
-                nn.Linear(152, 1024),
+                nn.Linear(156, 1024),
                 nn.GELU(),
                 nn.Dropout(0.2),
                 nn.Linear(1024, 39),
@@ -595,16 +622,16 @@ class InferencePipeline:
             #     nn.Softmax(dim=-1)
             # )
             deconvolver = nn.Sequential(
-                nn.Linear(152, 512),
+                nn.Linear(156, 512),
                 nn.GELU(),
                 nn.Dropout(0.2),
                 nn.Linear(512, 256),
                 nn.GELU(),
                 nn.Dropout(0.2),
-                nn.Linear(256, 152),
+                nn.Linear(256, 156),
                 nn.GELU(),
                 nn.Dropout(0.1),
-                nn.Linear(152, 39),
+                nn.Linear(156, 39),
                 nn.Softmax(dim=-1),
             )
         else:
