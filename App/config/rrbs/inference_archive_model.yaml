@@ -1,0 +1,102 @@
+# MethylBERT Inference Configuration
+# This configuration provides settings for running the inference pipeline.
+
+# Model Configuration
+model:
+  architecture: methylbert
+  foundation_model: foundationalModels/methylbert_hg19_12l
+
+# Path to fine-tuned MethylBERT classifier checkpoint
+checkpoint_path: /data/dmytro/methyldl_models/archive/methylBertLoyferWithReject_attentionClassifier_DMRs_stratified_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels/checkpoint-1200
+
+# Labels dictionary: JSON file mapping int label -> cell type name
+# e.g. {"0": "B-cells", "1": "T-cells", ...}
+labels_dict_path: App/labels_dict.json
+
+# Features mask in npz format - used to select features from the aggregated dmr matrix to be used with deconvolution models
+features_mask_path: /data/dmytro/methyldl_models/archive/methylBertLoyferWithReject_attentionClassifier_DMRs_stratified_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels/features_mask_1.1_cutoff.npz
+
+# Optional cell type name matching dict (atlas target name -> labels_dict name)
+# If atlas uses different naming than labels_dict, this maps between them.
+# Set to null if names already match.
+cell_type_match_dict_path: null
+
+# Atlas file (TSV with columns: chr, start, end, name, target, ...)
+atlas_path: ../UXM_deconv/supplemental/Atlas.U25.l4.hg19.full.tsv
+
+# Input configuration
+input:
+  # Input type: "bam" for raw BAM files, "processed_reads" for pre-processed pickle
+  type: parsed_reads
+  # type: bam
+  # Path to input BAM file (used when type: bam)
+  bam_path: null
+  # Path to pre-processed reads pickle (used when type: processed_reads)
+  # Must match output format of process_bam_with_chunking()
+  parsed_reads_path: /data/dmytro/cfSortData/RecoveredReads/GSM7427265_GTEX-14JG1-0826-SM-L36ZF_reads.csv
+  predicted_reads_path: null
+  # Path to reference genome FASTA (required for WGBS BAMs)
+  reference_path: ../wgbs_tools/references/hg19/hg19.fa.gz
+  # Data type: null for auto-detect, or "ont" / "wgbs"
+  data_type: null
+  # Chromosomes to process: list of chromosome names, or "all"
+  chromosomes: all
+
+
+# BAM processing parameters (used when input.type: bam)
+bam_processing:
+  n_jobs: 8
+  min_mapq: 10
+  require_flags: 3
+  exclude_flags: 1796
+  min_cpgs: 1
+  merge_pairs: true
+  ont_methyl_tr: 180 #~0.7
+
+# MethylBERT prediction parameters
+max_sequence_length: 150
+prediction_batch_size: 2200
+
+# If enabled, the final dmr prediction matrix will be augmented with 0-predictions rows for every missing cell-specific region
+fill_in_missing_labels: true
+
+# Deconvolution configuration
+deconvolution:
+  methods:
+    - name: xgboost
+      enabled: true
+      use_callibration: true
+      checkpoint_path: /data/dmytro/methyldl_models/archive/methylBertLoyferWithReject_attentionClassifier_DMRs_stratified_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels/xgb_dpth15.joblib
+      callibrator_path: /data/dmytro/methyldl_models/archive/methylBertLoyferWithReject_attentionClassifier_DMRs_stratified_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels/xgb_linear_calibrator.npz
+    - name: uxm
+      enabled: true
+    - name: 3Layer_MLP
+      enabled: true
+      use_callibration: true
+      checkpoint_path: /data/dmytro/methyldl_models/archive/methylBertLoyferWithReject_attentionClassifier_DMRs_stratified_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels/mlp_best_deconvolver.pt
+      callibrator_path: /data/dmytro/methyldl_models/archive/methylBertLoyferWithReject_attentionClassifier_DMRs_stratified_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels/mlp_linear_calibrator.npz
+    - name: Shallow_Wide_Network
+      enabled: true
+      use_callibration: true
+      checkpoint_path: /data/dmytro/methyldl_models/archive/methylBertLoyferWithReject_attentionClassifier_DMRs_stratified_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels/swn_mlp_best_deconvolver.pt
+      callibrator_path: /data/dmytro/methyldl_models/archive/methylBertLoyferWithReject_attentionClassifier_DMRs_stratified_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels/swn_linear_calibrator.npz
+    - name: ls
+      flavor: nnls
+      enabled: true
+      use_callibration: true
+      checkpoint_path: /data/dmytro/methyldl_models/archive/methylBertLoyferWithReject_attentionClassifier_DMRs_stratified_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels/nnls_deconvolver.joblib
+      callibrator_path: /data/dmytro/methyldl_models/archive/methylBertLoyferWithReject_attentionClassifier_DMRs_stratified_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels/nnls_linear_calibrator.npz
+    - name: ls
+      flavor: psls
+      enabled: true
+      use_callibration: true
+      checkpoint_path: /data/dmytro/methyldl_models/archive/methylBertLoyferWithReject_attentionClassifier_DMRs_stratified_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels/psls_deconvolver.joblib
+      callibrator_path: /data/dmytro/methyldl_models/archive/methylBertLoyferWithReject_attentionClassifier_DMRs_stratified_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels/psls_linear_calibrator.npz
+ 
+
+# Output configuration
+output:
+  output_dir: /data/dmytro/methyldl_models/archive/methylBertLoyferWithReject_attentionClassifier_DMRs_stratified_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels/deconvolutions/GSM7427265_GTEX-14JG1-0826-SM-L36ZF
+  save_processed_reads: true   # Save processed reads as pickle
+  save_predictions: true       # Save MethylBERT predictions as pickle
+  save_deconvolution: true     # Save deconvolution proportions as CSV
