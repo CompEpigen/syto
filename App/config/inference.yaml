@@ -27,7 +27,7 @@ atlas_path: ../UXM_deconv/supplemental/Atlas.U25.l4.hg38.full.tsv
 # Input configuration
 input:
   # Input type: "bam" for raw BAM files, "processed_reads" for pre-processed pickle
-  type: predicted_reads
+  type: processed_reads
   # type: bam
   # Path to input BAM file (used when type: bam)
   bam_path: /data/dmytro/dimelo_antonella/DiMeLo/DiMeLo_Sample2.bam
