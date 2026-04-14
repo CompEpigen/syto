@@ -1,0 +1,100 @@
+# ──────────────────────────────────────────────────────────────────
+# Deconvolution Model Fitting Configuration
+# ──────────────────────────────────────────────────────────────────
+# Usage:
+#   python App/main.py --task fit_deconvolution --config App/config/deconvolution_fitting.yaml
+
+# ── Input data ──────────────────────────────────────────────────
+# Paths to predicted splits (output of pseudobulk pipeline stage 3)
+predicted_splits:
+  train: /staging/leuven/stg_00118/methylDL/experiments/pseudobulk/CancerDetector/train_freq_prior/pseudobulk_prior_trainfreq/train_predicted.pkl
+  valid: /staging/leuven/stg_00118/methylDL/experiments/pseudobulk/CancerDetector/train_freq_prior/pseudobulk_prior_trainfreq/valid_predicted.pkl
+  test: /staging/leuven/stg_00118/methylDL/experiments/pseudobulk/CancerDetector/train_freq_prior/pseudobulk_prior_trainfreq/test_predicted.pkl
+
+# Full IO matrices from pseudobulk generation (stage 5 output)
+ios_full_matrices_path: /staging/leuven/stg_00118/methylDL/experiments/pseudobulk/CancerDetector/train_freq_prior/pseudobulk_prior_trainfreq/ios_full_matrices.npz
+
+# ── Labels ──────────────────────────────────────────────────────
+labels_dict_path: App/labels_dict.json
+num_input_labels: 39
+num_output_labels: 39
+
+# ── Pure profile generation (Stage 1) ──────────────────────────
+# If set, Stage 1 is skipped and profiles are loaded from this path
+pure_profiles_path: /staging/leuven/stg_00118/methylDL/experiments/pseudobulk/CancerDetector/train_freq_prior/pure_profiles.pkl
+# Number of reads to sample per split per pure profile
+n_read_per_split: 475000
+
+# ── Feature selection (Stage 2) ────────────────────────────────
+# Cutoff for selecting discriminative features (max/mean ratio)
+feature_cutoff: 1.36
+# cutoff 1.312 -> 168
+# cutoff 1.4 -> 142
+# cutoff 1.32 -> 167
+# cutoff 1.35 -> 159
+# cutoff 1.36 -> 156
+guarantee_diagonal_selection: true
+#guarantee_columns_selection: [39]
+
+# Whether to generate the 2x2 heatmap comparing feature masks
+# across train/valid/test splits
+generate_feature_selection_plot: true
+
+# ── Deconvolvers (Stage 3) ─────────────────────────────────────
+# Each entry defines a deconvolver to fit.  Supported names:
+#   xgb, swn, mlp, nnls, psls
+# Set calibrate: true to also fit a linear calibrator on top.
+deconvolvers:
+  # - name: xgb
+  #   calibrate: true
+  #   params:
+  #     n_estimators: 500
+  #     max_depth: 15
+  #     learning_rate: 0.05
+  #     subsample: 0.7
+  #     colsample_bytree: 1.0
+  #     min_child_weight: 5
+  #     reg_alpha: 0.1
+  #     reg_lambda: 1.0
+  #     random_state: 42
+
+  - name: swn
+    calibrate: true
+    params:
+      hidden_dim: 1024
+      dropout: 0.2
+      n_epochs: 5000
+      batch_size: 512
+      lr: 0.00005
+      weight_decay: 0.001
+      early_stopping_metric: val_mae
+      early_stopping_patience: 1000
+      scheduler_type: none
+      device: cuda
+
+  # - name: mlp
+  #   calibrate: true
+  #   params:
+  #     hidden_dims: [512, 256]
+  #     dropout: 0.2
+  #     final_dropout: 0.1
+  #     n_epochs: 5000
+  #     batch_size: 512
+  #     lr: 0.00005
+  #     weight_decay: 0.001
+  #     early_stopping_metric: val_mae
+  #     early_stopping_patience: 1000
+  #     scheduler_type: plateau
+  #     device: cuda
+
+  # - name: nnls
+  #   calibrate: true
+
+  # - name: psls
+  #   calibrate: true
+  #   params:
+  #     solver_type: cvxpy
+  #     n_workers: 2
+
+# ── Output ──────────────────────────────────────────────────────
+output_dir: /staging/leuven/stg_00118/methylDL/experiments/pseudobulk/CancerDetector/train_freq_prior/

@@ -56,10 +56,12 @@ class ClassifierAdapter:
         # MethylBERT-specific
         foundation_model_path: str = "hanyangii/methylbert_hg19_12l",
         classifier_head_implementation: str = "dmr_attention_based",
-        # DMR label column (relevant for both MethylBERT and Dismir)
+        # DMR label column (relevant for both MethylBERT and Dismir and CancerDetector)
         dmr_label_column: str = "dmr_ctype_label",
         # Dismir-specific
         dismir_flavor: str = "lstm",
+        # CancerDetector-specific parameters
+        cancer_detector_prior_type: str = "uniform",
         # Shared
         batch_size: int = 2200,
         soft_labels: bool = True,
@@ -78,6 +80,7 @@ class ClassifierAdapter:
         self.foundation_model_path = foundation_model_path
         self.classifier_head_implementation = classifier_head_implementation
         self.dmr_label_column = dmr_label_column
+        self.cancer_detector_prior_type = cancer_detector_prior_type
         self.dismir_flavor = dismir_flavor
         self.batch_size = batch_size
         self.soft_labels = soft_labels
@@ -93,14 +96,13 @@ class ClassifierAdapter:
         elif self.classifier_type == "dismir":
             self._load_dismir()
         elif self.classifier_type == "cancer_detector":
-            raise NotImplementedError(
-                "CancerDetector prediction is not yet implemented."
-            )
+            self._load_cancer_detector()
 
     # ─── MethylBERT ─────────────────────────────────────────────────
 
     def _load_methylbert(self):
         from methyldl.modelling.classifiers.methylbert import MethylBert
+
         if self.soft_labels:
             loss = "cwce"
         else:
@@ -164,7 +166,7 @@ class ClassifierAdapter:
             dmr_label_column=self.dmr_label_column,
             seq_length=self.seq_length,
             stride=int(self.seq_length / 2),
-            soft_labels=self.soft_labels
+            soft_labels=self.soft_labels,
         )
 
         dataset = MethylBertFinetuneDataset(
@@ -176,21 +178,13 @@ class ClassifierAdapter:
         )
 
         # Run predictions
-        predictions = self._model.predict(
-            dataset, batch_size=self.batch_size
-        )
+        predictions = self._model.predict(dataset, batch_size=self.batch_size)
 
         # Build predictions DataFrame
-        pred_cols = [
-            f"prediction_{i}" for i in range(self.num_labels)
-        ]
+        pred_cols = [f"prediction_{i}" for i in range(self.num_labels)]
         pred_df = pd.DataFrame(predictions[0], columns=pred_cols)
-        pred_df["read_name"] = [
-            data_list[i][-3] for i in range(1, len(data_list))
-        ]
-        pred_df["ncpgs_marked"] = [
-            data_list[i][-2] for i in range(1, len(data_list))
-        ]
+        pred_df["read_name"] = [data_list[i][-3] for i in range(1, len(data_list))]
+        pred_df["ncpgs_marked"] = [data_list[i][-2] for i in range(1, len(data_list))]
 
         # Aggregate chunked predictions by read
         pred_df = aggregate_chuncked_predictions_weighted(pred_df)
@@ -249,11 +243,7 @@ class ClassifierAdapter:
 
         # Extract DNA and methylation sequences
         dna_col = "seq" if "seq" in split_df.columns else "input_ids"
-        meth_col = (
-            "pattern"
-            if "pattern" in split_df.columns
-            else "methylation_ids"
-        )
+        meth_col = "pattern" if "pattern" in split_df.columns else "methylation_ids"
 
         dna_sequences = split_df[dna_col].tolist()
         methylation_sequences = split_df[meth_col].tolist()
@@ -272,9 +262,7 @@ class ClassifierAdapter:
         )
 
         # Build predictions DataFrame
-        pred_cols = [
-            f"prediction_{i}" for i in range(self.num_labels)
-        ]
+        pred_cols = [f"prediction_{i}" for i in range(self.num_labels)]
         pred_df = pd.DataFrame(probabilities, columns=pred_cols)
 
         # Merge with original DataFrame
@@ -282,6 +270,40 @@ class ClassifierAdapter:
         for col in pred_cols:
             result[col] = pred_df[col].values
 
+        return result
+
+    # ─── CancerDetector ─────────────────────────────────────────────
+
+    def _load_cancer_detector(self):
+        from methyldl.modelling.classifiers.cancer_detector import (
+            CancerDetectorClassifier,
+        )
+
+        self._cancer_detector_instance = CancerDetectorClassifier()
+        self._cancer_detector_instance.load(self.checkpoint_path)
+        logger.info(
+            "CancerDetector model loaded with checkpoint: %s", self.checkpoint_path
+        )
+        logger.info("CancerDetector model loaded: %s", self._cancer_detector_instance)
+
+    def _predict_cancer_detector(self, split_df: pd.DataFrame) -> pd.DataFrame:
+        """Run CancerDetector prediction on a single split."""
+        if self._cancer_detector_instance is None:
+            raise ValueError("CancerDetector model is not loaded.")
+
+        probabilities = self._cancer_detector_instance.predict_proba(
+            test_data=split_df,
+            col_n_meth_cpgs="M",
+            col_n_unmeth_cpgs="U",
+            col_marker_label=self.dmr_label_column,
+            return_likelihoods=False,
+            verbose=False,
+        )
+        pred_cols = [f"prediction_{i}" for i in range(self.num_labels)]
+        pred_df = pd.DataFrame(probabilities, columns=pred_cols)
+        result = split_df.copy()
+        for col in pred_cols:
+            result[col] = pred_df[col].values
         return result
 
     # ─── Public API ─────────────────────────────────────────────────
@@ -310,6 +332,4 @@ class ClassifierAdapter:
         elif self.classifier_type == "dismir":
             return self._predict_dismir(split_df)
         elif self.classifier_type == "cancer_detector":
-            raise NotImplementedError(
-                "CancerDetector prediction is not yet implemented."
-            )
+            return self._predict_cancer_detector(split_df)

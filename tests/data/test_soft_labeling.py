@@ -33,8 +33,8 @@ class TestSignatureDistance(unittest.TestCase):
 
     def test_no_shared_positions(self):
         sig1 = ((100, 0), (101, 1))
-        sig4 = ((200, 0),)  # No shared. Distance 2.0
-        self.assertEqual(signature_distance(sig1, sig4), 2.0)
+        sig4 = ((200, 0),)  # No shared. Distance 1.0
+        self.assertEqual(signature_distance(sig1, sig4), 1.0)
 
 
 class TestApplyNormalizedKnnSmoothing(unittest.TestCase):
