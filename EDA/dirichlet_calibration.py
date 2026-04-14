@@ -198,8 +198,9 @@ class DirichletCalibrator(BaseEstimator, RegressorMixin):
         optimizer: Optimizer to use - "adam" or "sgd".
         lr: Learning rate for the optimizer.
         scheduler: Learning rate schedule - "constant" (default), "linear",
-            or "cosine". Linear decays lr to 0 over max_iter epochs.
-            Cosine uses cosine annealing to 0.
+            "cosine", or "plateau". Linear decays lr to 0 over max_iter
+            epochs. Cosine uses cosine annealing to 0. Plateau reduces lr
+            when the selection loss stops improving.
         max_iter: Maximum number of optimization epochs.
         batch_size: Mini-batch size. Use 0 or None for full-batch
             (entire dataset as one batch per epoch).
@@ -212,6 +213,11 @@ class DirichletCalibrator(BaseEstimator, RegressorMixin):
         init_noise_std: Standard deviation of Gaussian noise added to the
             zero-initialised delta parameters. Helps break symmetry.
             Default 0.0 (no noise).
+        plateau_factor: Factor by which the learning rate is reduced when
+            using the "plateau" scheduler. New lr = old lr * factor.
+            Default 0.5.
+        plateau_patience: Number of epochs with no improvement after which
+            the "plateau" scheduler reduces the learning rate. Default 10.
     """
 
     def __init__(
@@ -231,10 +237,12 @@ class DirichletCalibrator(BaseEstimator, RegressorMixin):
         verbose: bool = True,
         init_noise_std: float = 0.0,
         normalization: str = "softmax",
+        plateau_factor: float = 0.5,
+        plateau_patience: int = 10,
     ):
         assert method in {"full", "diagonal", "temperature"}, "Unsupported method"
         assert optimizer in {"adam", "sgd"}, "Unsupported optimizer"
-        assert scheduler in {"constant", "linear", "cosine"}, "Unsupported scheduler"
+        assert scheduler in {"constant", "linear", "cosine", "plateau"}, "Unsupported scheduler"
         assert normalization in {
             "softmax",
             "sparsemax",
@@ -255,6 +263,8 @@ class DirichletCalibrator(BaseEstimator, RegressorMixin):
         self.verbose = verbose
         self.init_noise_std = init_noise_std
         self.normalization = normalization
+        self.plateau_factor = plateau_factor
+        self.plateau_patience = plateau_patience
 
         # Fitted attributes (set by fit())
         self.model_: Optional[_DirichletCalibrationModel] = None
@@ -369,6 +379,7 @@ class DirichletCalibrator(BaseEstimator, RegressorMixin):
         model: _DirichletCalibrationModel,
         inputs: torch.Tensor,
         targets: torch.Tensor,
+        with_regularization: bool = True,
     ) -> torch.Tensor:
         """Compute the calibration loss + regularisation.
 
@@ -388,30 +399,39 @@ class DirichletCalibrator(BaseEstimator, RegressorMixin):
             model: The calibration model.
             inputs: (N, K) transformed input probabilities.
             targets: (N, K) target distributions (hard or soft labels).
+            with_regularization: If False, skip adding the regularisation term
 
         Returns:
             Scalar loss tensor.
         """
         logits = model(inputs)
-        p_star = model.activate(logits)
-        loss = self._fenchel_young_loss(logits, p_star, targets, model.normalization)
+        if self.normalization == "softmax":
+            probs = model.activate(logits)
+            # Clamp to avoid log(0) which would give -inf and corrupt the loss
+            probs = torch.clamp(probs, min=1e-20)
+            # NLL: works with both hard (one-hot) and soft label targets
+            loss = -torch.mean(torch.sum(targets * torch.log(probs), dim=1))
+        else:
+            p_star = model.activate(logits)
+            loss = self._fenchel_young_loss(logits, p_star, targets, model.normalization)
 
         # --- Regularisation ---
-        if self.reg_mu is not None:
-            W = model.get_W_matrix()
-            k = W.shape[0]
-            off_diag_mask = ~torch.eye(k, dtype=torch.bool, device=W.device)
-            reg_off_diag = self.reg_lambda * torch.mean(W[off_diag_mask] ** 2)
-            if hasattr(model, "b"):
-                reg_intercept = self.reg_mu * torch.mean(model.b**2)
-            else:
-                reg_intercept = 0.0
-            loss = loss + reg_off_diag + reg_intercept
-        elif self.reg_lambda > 0:
-            reg = torch.tensor(0.0, dtype=torch.float64, device=inputs.device)
-            for param in model.parameters():
-                reg = reg + torch.sum(param**2)
-            loss = loss + self.reg_lambda * reg
+        if with_regularization:
+            if self.reg_mu is not None:
+                W = model.get_W_matrix()
+                k = W.shape[0]
+                off_diag_mask = ~torch.eye(k, dtype=torch.bool, device=W.device)
+                reg_off_diag = self.reg_lambda * torch.mean(W[off_diag_mask] ** 2)
+                if hasattr(model, "b"):
+                    reg_intercept = self.reg_mu * torch.mean(model.b**2)
+                else:
+                    reg_intercept = 0.0
+                loss = loss + reg_off_diag + reg_intercept
+            elif self.reg_lambda > 0:
+                reg = torch.tensor(0.0, dtype=torch.float64, device=inputs.device)
+                for param in model.parameters():
+                    reg = reg + torch.sum(param**2)
+                loss = loss + self.reg_lambda * reg
 
         return loss
 
@@ -516,10 +536,17 @@ class DirichletCalibrator(BaseEstimator, RegressorMixin):
             sched = torch.optim.lr_scheduler.CosineAnnealingLR(
                 optim, T_max=self.max_iter, eta_min=0.0
             )
+        elif self.scheduler == "plateau":
+            sched = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                optim,
+                mode="min",
+                factor=self.plateau_factor,
+                patience=self.plateau_patience,
+            )
         else:
             raise ValueError(
                 f"Unknown scheduler '{self.scheduler}'. "
-                "Choose 'constant', 'linear', or 'cosine'."
+                "Choose 'constant', 'linear', 'cosine', or 'plateau'."
             )
 
         # batch_size=0 means full-batch: use the entire dataset each epoch
@@ -543,8 +570,8 @@ class DirichletCalibrator(BaseEstimator, RegressorMixin):
         with torch.no_grad():
             train_logits = model(input_all)
             train_calibrated = model.activate(train_logits)
-            init_train_loss = self._fenchel_young_loss(
-                train_logits, train_calibrated, targets_all, model.normalization
+            init_train_loss = self._compute_loss(
+                model, train_logits, targets_all, with_regularization=False
             ).item()
             init_train_mse = torch.mean((train_calibrated - targets_all) ** 2).item()
 
@@ -556,8 +583,8 @@ class DirichletCalibrator(BaseEstimator, RegressorMixin):
             if has_val:
                 val_logits = model(input_val)
                 val_calibrated = model.activate(val_logits)
-                init_val_loss = self._fenchel_young_loss(
-                    val_logits, val_calibrated, targets_val, model.normalization
+                init_val_loss = self._compute_loss(
+                    model, val_logits, targets_val, with_regularization=False
                 ).item()
                 init_val_mse = torch.mean((val_calibrated - targets_val) ** 2).item()
                 history["val_loss"].append(init_val_loss)
@@ -595,18 +622,11 @@ class DirichletCalibrator(BaseEstimator, RegressorMixin):
                 batch_tgt = targets_all[idx]
 
                 optim.zero_grad()
-                loss = self._compute_loss(model, batch_input, batch_tgt)
+                loss = self._compute_loss(model, batch_input, batch_tgt, with_regularization=True)
                 loss.backward()
                 optim.step()
                 epoch_loss += loss.item()
                 n_batches += 1
-
-            # Step the learning rate scheduler after each epoch
-            if sched is not None:
-                sched.step()
-
-            # Current learning rate (first param group)
-            current_lr = optim.param_groups[0]["lr"]
 
             # --- Selection loss: use val set if available, else train loss ---
             train_loss = epoch_loss / n_batches
@@ -621,15 +641,22 @@ class DirichletCalibrator(BaseEstimator, RegressorMixin):
                     # Validation loss without regularisation for clean selection
                     val_logits = model(input_val)
                     val_calibrated = model.activate(val_logits)
-                    selection_loss = self._fenchel_young_loss(
-                        val_logits,
-                        val_calibrated,
-                        targets_val,
-                        model.normalization,
+                    selection_loss = self._compute_loss(
+                        model, val_logits, targets_val, with_regularization=False
                     ).item()
                     val_mse = torch.mean((val_calibrated - targets_val) ** 2).item()
                 else:
                     selection_loss = train_loss
+
+            # Step the learning rate scheduler after computing selection_loss
+            if sched is not None:
+                if self.scheduler == "plateau":
+                    sched.step(selection_loss)
+                else:
+                    sched.step()
+
+            # Current learning rate (first param group)
+            current_lr = optim.param_groups[0]["lr"]
 
             # Record metrics for this epoch
             history["epoch"].append(epoch)
