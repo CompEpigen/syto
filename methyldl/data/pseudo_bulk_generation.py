@@ -1,8 +1,10 @@
 import multiprocessing as mp
+import os
 import pickle
 import random
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from copy import deepcopy
+from typing import List, Optional
 
 import numpy as np
 import pandas as pd
@@ -21,6 +23,14 @@ from methyldl.modelling.prediction_aggregation import (
 _worker_data = {}
 
 
+def _build_target_columns(num_labels: int = 39) -> list:
+    """Build the default list of target columns for DMR-aggregated output."""
+    cols = ["dmr_ctype_label", "dmr_ctype"]
+    cols += [f"prediction_{i}_wavg" for i in range(num_labels)]
+    cols += ["methylation_level_wavg", "total_weight", "n_reads", "chromosome", "label"]
+    return cols
+
+
 # TODO: make sure that reference cells are matching labels --> probably need to be reordered
 def generate_pseudo_bulk(
     total_samples,
@@ -33,12 +43,13 @@ def generate_pseudo_bulk(
     ref_cells,
     labels_dict_reversed,
     return_reads=False,
+    num_labels=39,
 ):
     """Generate pseudo-bulk mixtures for the train, validation, and test splits.
 
     The function samples read-level predictions according to the requested cell-type
     proportions, distributing each selected cell type's reads uniformly across the
-    39 DMR cell-type groups. For each input split, it returns both an aggregated
+    DMR cell-type groups. For each input split, it returns both an aggregated
     DMR-level pseudo-bulk representation and the UXM deconvolution inputs/results
     computed from the sampled reads.
 
@@ -65,6 +76,8 @@ def generate_pseudo_bulk(
         Mapping from reference cell names to label ids used to align the UXM output.
     return_reads : bool, default=False
         If True, also return the sampled read-level pseudo-bulk dataframes.
+    num_labels : int, default=39
+        Number of cell-type labels.
 
     Returns
     -------
@@ -73,69 +86,21 @@ def generate_pseudo_bulk(
         uxm_data)``. If ``return_reads`` is True, returns ``(labels,
         proportions_full, subs, uxm_data, reads)``.
 
-        ``proportions_full`` is a dense length-39 proportion vector aligned to all
-        labels, ``subs`` contains one aggregated pseudo-bulk dataframe per split,
-        and ``uxm_data`` contains one tuple per split with the UXM inputs and
-        deconvolution outputs.
+        ``proportions_full`` is a dense length-``num_labels`` proportion vector
+        aligned to all labels, ``subs`` contains one aggregated pseudo-bulk
+        dataframe per split, and ``uxm_data`` contains one tuple per split with
+        the UXM inputs and deconvolution outputs.
 
     Notes
     -----
     This function assumes that every requested ``(original_label,
-    dmr_ctype_label)`` group exists in each split. It also uses ``int(n / 39)``
-    samples per DMR group, so small rounding losses are expected when distributing
-    reads across DMR types.
+    dmr_ctype_label)`` group exists in each split. It also uses
+    ``int(n / num_labels)`` samples per DMR group, so small rounding losses
+    are expected when distributing reads across DMR types.
     """
     assert np.round(np.sum(proportions), 4) == 1, "Proportions must sum up to one"
     n_samples_list = [int(total_samples * x) for x in proportions]
-    target_columns = [
-        "dmr_ctype_label",
-        "dmr_ctype",
-        "prediction_0_wavg",
-        "prediction_1_wavg",
-        "prediction_2_wavg",
-        "prediction_3_wavg",
-        "prediction_4_wavg",
-        "prediction_5_wavg",
-        "prediction_6_wavg",
-        "prediction_7_wavg",
-        "prediction_8_wavg",
-        "prediction_9_wavg",
-        "prediction_10_wavg",
-        "prediction_11_wavg",
-        "prediction_12_wavg",
-        "prediction_13_wavg",
-        "prediction_14_wavg",
-        "prediction_15_wavg",
-        "prediction_16_wavg",
-        "prediction_17_wavg",
-        "prediction_18_wavg",
-        "prediction_19_wavg",
-        "prediction_20_wavg",
-        "prediction_21_wavg",
-        "prediction_22_wavg",
-        "prediction_23_wavg",
-        "prediction_24_wavg",
-        "prediction_25_wavg",
-        "prediction_26_wavg",
-        "prediction_27_wavg",
-        "prediction_28_wavg",
-        "prediction_29_wavg",
-        "prediction_30_wavg",
-        "prediction_31_wavg",
-        "prediction_32_wavg",
-        "prediction_33_wavg",
-        "prediction_34_wavg",
-        "prediction_35_wavg",
-        "prediction_36_wavg",
-        "prediction_37_wavg",
-        "prediction_38_wavg",
-        "prediction_39_wavg",
-        "methylation_level_wavg",
-        "total_weight",
-        "n_reads",
-        "chromosome",
-        "label",
-    ]
+    target_columns = _build_target_columns(num_labels)
     subs = []
     uxm_data = []
     reads = []
@@ -155,9 +120,9 @@ def generate_pseudo_bulk(
         grouped = df.groupby(["original_label", "dmr_ctype_label"], sort=False)
         sub = []
         for n, label in zip(n_samples_list, labels):
-            for dmr_ctype_label in range(39):
+            for dmr_ctype_label in range(num_labels):
                 group = grouped.get_group((label, dmr_ctype_label))
-                sub.append(group.sample(int(n / 39), replace=True))
+                sub.append(group.sample(int(n / num_labels), replace=True))
         sub = pd.concat(sub)
 
         # aggregate predictions by DMR type and chromosome
@@ -197,9 +162,9 @@ def generate_pseudo_bulk(
         if return_reads:
             reads.append(sub)
 
-    # ensure that we have a proportion for each of the 39 labels, filling in 0 for any missing ones
+    # ensure that we have a proportion for each of the num_labels labels, filling in 0 for any missing ones
     proportions_dict = {x: y for x, y in zip(labels, proportions)}
-    proportions_full = [proportions_dict.get(x, 0) for x in range(39)]
+    proportions_full = [proportions_dict.get(x, 0) for x in range(num_labels)]
     if return_reads:
         return labels, proportions_full, subs, uxm_data, reads
 
@@ -207,14 +172,39 @@ def generate_pseudo_bulk(
 
 
 def init_worker(
-    train_data, valid_data, test_data, allowed_labels, n_cells_max, n_read_per_split
+    train_data,
+    valid_data,
+    test_data,
+    allowed_labels,
+    n_cells_max,
+    n_read_per_split,
+    num_labels=39,
+    generate_uxm_inputs=True,
+    target_proportions=None,
 ):
-    """Initialize worker process with shared data and pre-computed groups."""
+    """Initialize worker process with shared data and pre-computed groups.
+
+    Parameters
+    ----------
+    train_data, valid_data, test_data : pd.DataFrame
+        Per-split read-level DataFrames.
+    allowed_labels : list[int]
+        Labels allowed in random selection mode.
+    n_cells_max : int
+        Maximum number of cell types per mixture in random mode.
+    n_read_per_split : int
+        Total reads to sample per split per IO example.
+    num_labels : int
+        Number of cell-type labels.  Default 39.
+    generate_uxm_inputs : bool
+        Whether to compute UXM sf/counts tables.  Default True.
+    target_proportions : list, optional
+        Pre-defined proportions for target-proportion mode.
+    """
 
     global _worker_data
 
     # Set unique random seed per process
-
     seed = mp.current_process().pid
     random.seed(seed)
     np.random.seed(seed)
@@ -239,89 +229,63 @@ def init_worker(
     )
 
     _worker_data["allowed_labels"] = allowed_labels
-
     _worker_data["n_cells_max"] = n_cells_max
-
     _worker_data["n_read_per_split"] = n_read_per_split
-
-    _worker_data["target_columns"] = [
-        "dmr_ctype_label",
-        "dmr_ctype",
-        "prediction_0_wavg",
-        "prediction_1_wavg",
-        "prediction_2_wavg",
-        "prediction_3_wavg",
-        "prediction_4_wavg",
-        "prediction_5_wavg",
-        "prediction_6_wavg",
-        "prediction_7_wavg",
-        "prediction_8_wavg",
-        "prediction_9_wavg",
-        "prediction_10_wavg",
-        "prediction_11_wavg",
-        "prediction_12_wavg",
-        "prediction_13_wavg",
-        "prediction_14_wavg",
-        "prediction_15_wavg",
-        "prediction_16_wavg",
-        "prediction_17_wavg",
-        "prediction_18_wavg",
-        "prediction_19_wavg",
-        "prediction_20_wavg",
-        "prediction_21_wavg",
-        "prediction_22_wavg",
-        "prediction_23_wavg",
-        "prediction_24_wavg",
-        "prediction_25_wavg",
-        "prediction_26_wavg",
-        "prediction_27_wavg",
-        "prediction_28_wavg",
-        "prediction_29_wavg",
-        "prediction_30_wavg",
-        "prediction_31_wavg",
-        "prediction_32_wavg",
-        "prediction_33_wavg",
-        "prediction_34_wavg",
-        "prediction_35_wavg",
-        "prediction_36_wavg",
-        "prediction_37_wavg",
-        "prediction_38_wavg",
-        "prediction_39_wavg",
-        "methylation_level_wavg",
-        "total_weight",
-        "n_reads",
-        "chromosome",
-        "label",
-    ]
+    _worker_data["num_labels"] = num_labels
+    _worker_data["generate_uxm_inputs"] = generate_uxm_inputs
+    _worker_data["target_proportions"] = target_proportions
+    _worker_data["target_columns"] = _build_target_columns(num_labels)
 
 
-def worker_task(batch_indices):
-    """Process a batch of examples."""
+def worker_task(batch_args):
+    """Process a batch of examples.
+
+    Parameters
+    ----------
+    batch_args : tuple
+        ``(batch_indices, batch_proportions)`` where ``batch_proportions``
+        is either ``None`` (random mode) or a list of ``(labels, proportions)``
+        tuples for target-proportion mode.
+    """
 
     global _worker_data
+    batch_indices, batch_proportions = batch_args
     results = []
     exceptions = []
 
-    for _ in batch_indices:
-        # try:
-        labels, proportions = random_select_with_weights(
-            _worker_data["allowed_labels"], _worker_data["n_cells_max"]
-        )
-        _, proportions, subs, uxm_data = generate_pseudo_bulk_optimized(
-            _worker_data["n_read_per_split"],
-            labels,
-            proportions,
-            _worker_data["grouped_train"],
-            _worker_data["grouped_valid"],
-            _worker_data["grouped_test"],
-            _worker_data["target_columns"],
-        )
+    for i, _ in enumerate(batch_indices):
+        try:
+            if batch_proportions is not None:
+                # Target-proportion mode: use pre-assigned proportions
+                proportions_full = batch_proportions[i]
+                labels = [j for j, p in enumerate(proportions_full) if p > 0]
+                proportions = [proportions_full[j] for j in labels]
+                # Re-normalize in case of floating-point drift
+                total = sum(proportions)
+                if total > 0:
+                    proportions = [p / total for p in proportions]
+            else:
+                # Random mode
+                labels, proportions = random_select_with_weights(
+                    _worker_data["allowed_labels"], _worker_data["n_cells_max"]
+                )
 
-        results.append((proportions, subs, uxm_data))
+            _, proportions_out, subs, uxm_data = generate_pseudo_bulk_optimized(
+                _worker_data["n_read_per_split"],
+                labels,
+                proportions,
+                _worker_data["grouped_train"],
+                _worker_data["grouped_valid"],
+                _worker_data["grouped_test"],
+                _worker_data["target_columns"],
+                num_labels=_worker_data["num_labels"],
+                generate_uxm_inputs=_worker_data["generate_uxm_inputs"],
+            )
 
-    # except Exception as e:
+            results.append((proportions_out, subs, uxm_data))
 
-    #     exceptions.append((labels, proportions, str(e)))
+        except Exception as e:
+            exceptions.append((labels, proportions, str(e)))
 
     return results, exceptions
 
@@ -334,8 +298,28 @@ def generate_pseudo_bulk_optimized(
     grouped_valid,
     grouped_test,
     target_columns,
+    num_labels=39,
+    generate_uxm_inputs=True,
 ):
-    """Optimized version using pre-computed groups with UXM deconvolution."""
+    """Optimized version using pre-computed groups.
+
+    Parameters
+    ----------
+    total_samples : int
+        Total reads to sample per split.
+    labels : list[int]
+        Cell-type labels to include.
+    proportions : list[float]
+        Proportions for each label. Must sum to 1.
+    grouped_train, grouped_valid, grouped_test : DataFrameGroupBy
+        Pre-computed groupby objects.
+    target_columns : list[str]
+        Columns to keep in aggregated output.
+    num_labels : int
+        Number of cell-type labels. Default 39.
+    generate_uxm_inputs : bool
+        If True, compute UXM sf/counts tables. Default True.
+    """
     assert np.round(np.sum(proportions), 4) == 1, "Proportions must sum up to one"
 
     n_samples_list = [int(total_samples * x) for x in proportions]
@@ -347,12 +331,12 @@ def generate_pseudo_bulk_optimized(
     for grouped in [grouped_train, grouped_valid, grouped_test]:
         sub_parts = []
         samples_per_dmr = {
-            label: int(n / 39) for label, n in zip(labels, n_samples_list)
+            label: int(n / num_labels) for label, n in zip(labels, n_samples_list)
         }
 
         for label in labels:
             n_per_dmr = samples_per_dmr[label]
-            for dmr_ctype_label in range(39):
+            for dmr_ctype_label in range(num_labels):
                 try:
                     group = grouped.get_group((label, dmr_ctype_label))
                     sub_parts.append(group.sample(n_per_dmr, replace=True))
@@ -362,33 +346,33 @@ def generate_pseudo_bulk_optimized(
         if sub_parts:
             sub = pd.concat(sub_parts, ignore_index=True)
 
-            # Compute UXM deconvolution inputs before aggregation
-            results = sub
-            results_agg = (
-                results.groupby(["name", "direction"])
-                .aggregate({"record_M": "sum", "record_U": "sum", "record_X": "sum"})
-                .reset_index()
-            )
-            results_agg["count"] = (
-                results_agg["record_M"]
-                + results_agg["record_U"]
-                + results_agg["record_X"]
-            )
-            results_agg["sf"] = results_agg["record_U"] / results_agg["count"]
+            if generate_uxm_inputs:
+                # Compute UXM deconvolution inputs before aggregation
+                results = sub
+                results_agg = (
+                    results.groupby(["name", "direction"])
+                    .aggregate(
+                        {"record_M": "sum", "record_U": "sum", "record_X": "sum"}
+                    )
+                    .reset_index()
+                )
+                results_agg["count"] = (
+                    results_agg["record_M"]
+                    + results_agg["record_U"]
+                    + results_agg["record_X"]
+                )
+                results_agg["sf"] = results_agg["record_U"] / results_agg["count"]
 
-            sf = deepcopy(results_agg[["name", "direction"]])
-            sf[sample_name] = results_agg["sf"]
+                sf = deepcopy(results_agg[["name", "direction"]])
+                sf[sample_name] = results_agg["sf"]
 
-            counts = results_agg[["name", "direction", "count"]].copy()
-            counts.columns = ["name", "direction", sample_name]
+                counts = results_agg[["name", "direction", "count"]].copy()
+                counts.columns = ["name", "direction", sample_name]
 
-            # uxm_proportions = uxm_deconvolution(atlas, ref_cells, sf, counts, sample_names=[sample_name])[0]
-            # uxm_deconv_results = {x: np.round(y, 4) for (x, y) in zip(ref_cells, uxm_proportions)}
-            # uxm_deconv_results_alligned = rearange_uxm_deconvolution_results(
-            #     labels_dict_reversed, uxm_proportions, ref_cells
-            # )
-            # uxm_data.append((sf, counts, uxm_deconv_results, uxm_deconv_results_alligned))
-            uxm_data.append((sf, counts))
+                uxm_data.append((sf, counts))
+            else:
+                uxm_data.append(None)
+
             # Aggregate predictions
             sub = aggregate_predictions_by_dmr_optimized(
                 sub, group_cols=["dmr_ctype_label", "dmr_ctype"]
@@ -397,7 +381,7 @@ def generate_pseudo_bulk_optimized(
             subs.append(sub)
 
     proportions_dict = dict(zip(labels, proportions))
-    proportions_full = [proportions_dict.get(x, 0) for x in range(39)]
+    proportions_full = [proportions_dict.get(x, 0) for x in range(num_labels)]
 
     return labels, proportions_full, subs, uxm_data
 
@@ -412,27 +396,83 @@ def run_ios_generation_parallel(
     batch_size=100,
     checkpoint_interval=1000,
     start_checkpoint_idx=0,
+    allowed_labels=None,
+    n_cells_max=10,
+    n_read_per_split=None,
+    num_labels=39,
+    generate_uxm_inputs=True,
+    target_proportions=None,
 ):
-    """Main function to run parallel processing."""
+    """Parallel pseudo-bulk IO-example generation.
 
+    Parameters
+    ----------
+    train_data, valid_data, test_data : pd.DataFrame
+        Per-split read-level DataFrames (with predictions).
+    file_name : str
+        Base path for checkpoint pickle files.
+    n_io_examples : int
+        Number of IO examples to generate.  Ignored when
+        ``target_proportions`` is provided (uses its length instead).
+    n_workers : int, optional
+        Number of worker processes.  Default: ``cpu_count - 1``.
+    batch_size : int
+        Examples per worker batch.
+    checkpoint_interval : int
+        Flush to disk every ``checkpoint_interval`` completed examples.
+    start_checkpoint_idx : int
+        Starting index for checkpoint file naming (for resumption).
+    allowed_labels : list[int], optional
+        Labels allowed in random mode.  Default: ``list(range(num_labels))``.
+    n_cells_max : int
+        Max cell types per mixture in random mode.
+    n_read_per_split : int, optional
+        Reads to sample per split.  Default: ``int(4.75e5)``.
+    num_labels : int
+        Number of cell-type labels.  Default 39.
+    generate_uxm_inputs : bool
+        Compute UXM sf/counts tables.  Default True.
+    target_proportions : list of list[float], optional
+        Pre-defined proportion vectors, each of length ``num_labels``.
+        When provided, overrides ``n_io_examples`` and random selection.
+    """
     if n_workers is None:
         n_workers = max(1, mp.cpu_count() - 1)
+    if allowed_labels is None:
+        allowed_labels = list(range(num_labels))
+    if n_read_per_split is None:
+        n_read_per_split = int(4.75 * 1e5)
 
-    allowed_labels = list(range(39))
-    n_cells_max = 10
-    n_read_per_split = int(4.75 * 1e5)
+    # Determine effective number of examples
+    if target_proportions is not None:
+        n_io_examples = len(target_proportions)
 
-    # Create batches of indices
+    # Create batches of indices (and optional proportions)
     all_indices = list(range(n_io_examples))
-    # the indices themselves are not used in the worker task, they just determine how many times the task is run, so we can use a simple range of integers here
-    batches = [
-        all_indices[i : i + batch_size] for i in range(0, len(all_indices), batch_size)
+    batches_indices = [
+        all_indices[i : i + batch_size]
+        for i in range(start_checkpoint_idx, len(all_indices), batch_size)
     ]
+
+    if target_proportions is not None:
+        batches_proportions = [
+            target_proportions[i : i + batch_size]
+            for i in range(start_checkpoint_idx, len(target_proportions), batch_size)
+        ]
+    else:
+        batches_proportions = [None] * len(batches_indices)
+
+    # Zip indices with proportions for worker_task
+    batches = list(zip(batches_indices, batches_proportions))
 
     all_ios = []
     all_exceptions = []
 
     checkpoint_idx = start_checkpoint_idx
+
+    # Ensure output directory exists
+    os.makedirs(os.path.dirname(file_name) or ".", exist_ok=True)
+
     # Use ProcessPoolExecutor with initializer
     with ProcessPoolExecutor(
         max_workers=n_workers,
@@ -444,22 +484,24 @@ def run_ios_generation_parallel(
             allowed_labels,
             n_cells_max,
             n_read_per_split,
+            num_labels,
+            generate_uxm_inputs,
+            None,  # target_proportions stored per-batch, not globally
         ),
     ) as executor:
 
         # Submit all batches
         futures = {
-            executor.submit(worker_task, batch): i for i, batch in enumerate(batches)
+            executor.submit(worker_task, batch): i
+            for i, batch in enumerate(batches)
         }
 
         # Process results as they complete
-        with tqdm(total=n_io_examples, desc="Generating examples") as pbar:
-            completed = 0
+        with tqdm(total=n_io_examples, desc="Generating examples",initial=start_checkpoint_idx) as pbar:
             for future in as_completed(futures):
                 results, exceptions = future.result()
                 all_ios.extend(results)
                 all_exceptions.extend(exceptions)
-                completed += len(results) + len(exceptions)
                 pbar.update(len(results) + len(exceptions))
 
                 # Checkpoint
@@ -472,7 +514,89 @@ def run_ios_generation_parallel(
                     # Initialize from the beginning so the object is not growing in memory
                     all_ios = []
 
+    # Final flush of remaining examples
+    if all_ios:
+        checkpoint_idx += len(all_ios)
+        with open(
+            file_name.replace(".pkl", f"_{checkpoint_idx}.pkl"), "wb"
+        ) as f:
+            pickle.dump(all_ios, f)
+        all_ios = []
+
     return all_ios, all_exceptions
+
+
+def consolidate_ios_pickles(
+    ios_dir: str,
+    output_path: str,
+    num_labels: int = 39,
+):
+    """Load partial pickle checkpoints and consolidate into a single ``.npz``.
+
+    Each pickle is expected to contain a list of tuples
+    ``(proportions, subs, uxm_data)`` where ``subs`` is a list of 3
+    DataFrames (train, valid, test) and ``uxm_data`` is the corresponding
+    UXM data (or ``None`` if UXM was disabled).
+
+    Parameters
+    ----------
+    ios_dir : str
+        Directory containing the checkpoint ``.pkl`` files.
+    output_path : str
+        Path for the output ``.npz`` file.
+    num_labels : int
+        Number of cell-type labels.  Default 39.
+
+    Returns
+    -------
+    dict
+        Keys: ``proportions``, ``features_train``, ``features_valid``,
+        ``features_test`` — each a numpy array.
+    """
+    pred_cols = [f"prediction_{i}_wavg" for i in range(num_labels)]
+
+    proportions_list = []
+    features_train_list = []
+    features_valid_list = []
+    features_test_list = []
+
+    pkl_files = sorted(
+        f for f in os.listdir(ios_dir) if f.endswith(".pkl")
+    )
+
+    for pkl_name in tqdm(pkl_files, desc="Consolidating pickles"):
+        pkl_path = os.path.join(ios_dir, pkl_name)
+        try:
+            with open(pkl_path, "rb") as f:
+                part_ios = pickle.load(f)
+        except Exception:
+            import warnings
+            warnings.warn(f"{pkl_name} is corrupted and cannot be opened")
+            continue
+
+        for item in part_ios:
+            gt = np.reshape(item[0], (1, num_labels))
+
+            f_tr = np.expand_dims(item[1][0][pred_cols].to_numpy(), 0)
+            f_val = np.expand_dims(item[1][1][pred_cols].to_numpy(), 0)
+            f_tst = np.expand_dims(item[1][2][pred_cols].to_numpy(), 0)
+
+            proportions_list.append(gt)
+            features_train_list.append(f_tr)
+            features_valid_list.append(f_val)
+            features_test_list.append(f_tst)
+
+    # Single concatenation at the end (O(n))
+    result = {
+        "proportions": np.concatenate(proportions_list, axis=0),
+        "features_train": np.concatenate(features_train_list, axis=0),
+        "features_valid": np.concatenate(features_valid_list, axis=0),
+        "features_test": np.concatenate(features_test_list, axis=0),
+    }
+
+    np.savez_compressed(output_path, **result)
+
+    return result
 
 
 def random_select_with_weights(elements, n):

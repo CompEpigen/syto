@@ -3,10 +3,13 @@ Implementation of NNLS and PSLS (probability simplex least squares) deconvolutio
 """
 
 from concurrent.futures import ThreadPoolExecutor
+import os
 import threading
 
 import cvxpy as cp
+import joblib
 from sklearn.base import BaseEstimator, RegressorMixin
+from sklearn.utils.validation import check_is_fitted
 import numpy as np
 from tqdm import tqdm
 from scipy.optimize import nnls
@@ -43,6 +46,44 @@ class AbstractLSDeconvolver(BaseEstimator, RegressorMixin):
             ]
         )
         return self
+
+    def save(self, filepath: str):
+        """Save the fitted model to disk using joblib.
+
+        Args:
+            filepath: Destination path (e.g. ``'model.joblib'``).
+
+        Raises:
+            sklearn.exceptions.NotFittedError: If the model has not been fit.
+        """
+        check_is_fitted(self)
+        os.makedirs(os.path.dirname(os.path.abspath(filepath)), exist_ok=True)
+        joblib.dump(self, filepath)
+
+    @classmethod
+    def load(cls, filepath: str) -> "AbstractLSDeconvolver":
+        """Load a saved model from disk.
+
+        Args:
+            filepath: Path to the saved model file.
+
+        Returns:
+            The loaded model instance.
+
+        Raises:
+            FileNotFoundError: If *filepath* does not exist.
+            TypeError: If the loaded object is not an instance of this class.
+            sklearn.exceptions.NotFittedError: If the loaded model was not fit.
+        """
+        if not os.path.exists(filepath):
+            raise FileNotFoundError(f"Model file not found at {filepath}")
+        model = joblib.load(filepath)
+        if not isinstance(model, cls):
+            raise TypeError(
+                f"Loaded object is not of type {cls.__name__}"
+            )
+        check_is_fitted(model)
+        return model
 
     def predict_single_sample(self, x: np.ndarray) -> np.ndarray:
         raise NotImplementedError("Subclasses must implement predict_single_sample")
@@ -94,6 +135,7 @@ class NNLSDeconvolver(AbstractLSDeconvolver):
         unnorm_mixture_proportions, residual = nnls(
             self.reference_prediction_matrix_, x
         )
+        unnorm_mixture_proportions = np.array(unnorm_mixture_proportions)
         mixture_proportions_sum = unnorm_mixture_proportions.sum()
         if mixture_proportions_sum > 0:
             norm_mixture_proportions = (
@@ -279,6 +321,18 @@ class PSLSDeconvolver(AbstractLSDeconvolver):
             raise ValueError(f"Unsupported solver_type: {self.solver_type}")
 
         return self
+
+    def __getstate__(self):
+        """Exclude the unpicklable ``threading.local`` CVXPY cache."""
+        state = self.__dict__.copy()
+        state.pop("_cvxpy_thread_cache_", None)
+        return state
+
+    def __setstate__(self, state):
+        """Restore state and create a fresh thread-local CVXPY cache."""
+        self.__dict__.update(state)
+        if self.solver_type == "cvxpy":
+            self._cvxpy_thread_cache_ = threading.local()
 
     def predict_single_sample_pgd(
         self, x: np.ndarray, max_iter=1000, tol=1e-5, verbose=False

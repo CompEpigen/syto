@@ -1,8 +1,12 @@
+import os
+import tempfile
 import unittest
 from unittest.mock import patch
 
 import cvxpy as cp
+import joblib
 import numpy as np
+from sklearn.exceptions import NotFittedError
 
 from methyldl.deconvolution.least_squares_deconvolvers import (
     AbstractLSDeconvolver,
@@ -243,6 +247,55 @@ class TestNNLSDeconvolver(unittest.TestCase, LeastSquaresDeconvolverAssertions):
         for sequential_output, parallel_output in zip(sequential, parallel):
             np.testing.assert_allclose(parallel_output, sequential_output, atol=1e-10)
 
+    @patch("methyldl.deconvolution.least_squares_deconvolvers.tqdm", _passthrough_tqdm)
+    def test_save_and_load_round_trip(self):
+        """save/load should round-trip a fitted NNLS model and produce identical predictions."""
+        expected = self.deconvolver.predict(self.samples, n_workers=1)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "nnls.joblib")
+            self.deconvolver.save(path)
+            loaded = NNLSDeconvolver.load(path)
+
+        self.assertIsInstance(loaded, NNLSDeconvolver)
+        np.testing.assert_allclose(
+            loaded.reference_prediction_matrix_,
+            self.deconvolver.reference_prediction_matrix_,
+        )
+        actual = loaded.predict(self.samples, n_workers=1)
+        for exp_out, act_out in zip(expected, actual):
+            np.testing.assert_allclose(act_out, exp_out, atol=1e-10)
+
+    def test_load_raises_file_not_found(self):
+        """load should raise FileNotFoundError for a missing path."""
+        with self.assertRaises(FileNotFoundError):
+            NNLSDeconvolver.load("/definitely/not/present/model.joblib")
+
+    def test_load_raises_type_error_for_wrong_object(self):
+        """load should raise TypeError when the file does not contain this model class."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "bad.joblib")
+            joblib.dump({"not": "a model"}, path)
+            with self.assertRaises(TypeError):
+                NNLSDeconvolver.load(path)
+
+    def test_save_raises_not_fitted_error(self):
+        """save should raise NotFittedError if the model has not been fit."""
+        unfitted_model = self.make_deconvolver()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "nnls_unfitted.joblib")
+            with self.assertRaises(NotFittedError):
+                unfitted_model.save(path)
+
+    def test_load_raises_not_fitted_error(self):
+        """load should raise NotFittedError if the loaded model lacks fitted attributes."""
+        unfitted_model = self.make_deconvolver()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "nnls_unfitted.joblib")
+            # Force save the unfitted model using base joblib to test load validation
+            joblib.dump(unfitted_model, path)
+            with self.assertRaises(NotFittedError):
+                NNLSDeconvolver.load(path)
 
 class TestPSLSDeconvolverCVXPY(unittest.TestCase, LeastSquaresDeconvolverAssertions):
     """Tests covering the CVXPY-backed PSLS execution paths."""
@@ -393,6 +446,25 @@ class TestPSLSDeconvolverCVXPY(unittest.TestCase, LeastSquaresDeconvolverAsserti
 
         np.testing.assert_allclose(sequential, self.samples, atol=CVXPY_ATOL)
         np.testing.assert_allclose(parallel, self.samples, atol=CVXPY_ATOL)
+
+    @patch("methyldl.deconvolution.least_squares_deconvolvers.tqdm", _passthrough_tqdm)
+    def test_save_and_load_round_trip(self):
+        """save/load should round-trip a fitted CVXPY PSLS model and produce matching predictions."""
+        expected = self.deconvolver.predict(self.samples, n_workers=1)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "psls_cvxpy.joblib")
+            self.deconvolver.save(path)
+            loaded = PSLSDeconvolver.load(path)
+
+        self.assertIsInstance(loaded, PSLSDeconvolver)
+        self.assertEqual(loaded.solver_type, "cvxpy")
+        np.testing.assert_allclose(
+            loaded.reference_prediction_matrix_,
+            self.deconvolver.reference_prediction_matrix_,
+        )
+        actual = loaded.predict(self.samples, n_workers=1)
+        np.testing.assert_allclose(actual, expected, atol=CVXPY_ATOL)
 
 
 class TestPSLSDeconvolverPGD(unittest.TestCase, LeastSquaresDeconvolverAssertions):
@@ -561,3 +633,22 @@ class TestPSLSDeconvolverPGD(unittest.TestCase, LeastSquaresDeconvolverAssertion
 
         np.testing.assert_allclose(sequential, self.samples, atol=1e-4)
         np.testing.assert_allclose(parallel, self.samples, atol=1e-4)
+
+    @patch("methyldl.deconvolution.least_squares_deconvolvers.tqdm", _passthrough_tqdm)
+    def test_save_and_load_round_trip(self):
+        """save/load should round-trip a fitted PGD PSLS model and produce matching predictions."""
+        expected = self.deconvolver.predict(self.samples, n_workers=1)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "psls_pgd.joblib")
+            self.deconvolver.save(path)
+            loaded = PSLSDeconvolver.load(path)
+
+        self.assertIsInstance(loaded, PSLSDeconvolver)
+        self.assertEqual(loaded.solver_type, "pgd")
+        np.testing.assert_allclose(
+            loaded.reference_prediction_matrix_,
+            self.deconvolver.reference_prediction_matrix_,
+        )
+        actual = loaded.predict(self.samples, n_workers=1)
+        np.testing.assert_allclose(actual, expected, atol=1e-4)

@@ -11,6 +11,7 @@ from collections import defaultdict
 import time
 from methyldl.modelling.common import DMRAttentionClassifier
 from methyldl.modelling.loss import ConfidenceWeightedCrossEntropy
+from tqdm import tqdm
 
 
 class DISMIRConfig:
@@ -1332,7 +1333,7 @@ class Dismir:
         )
 
         with torch.no_grad():
-            for batch in loader:
+            for batch in tqdm(loader, "predicting batches"):
                 if self.classifier_type == "dmr_attention_based":
                     X_batch, dmr_batch = batch
                     X_batch = X_batch.to(self.device)

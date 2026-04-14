@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 from typing import Dict
 import torch.nn.functional as F
+import math
 
 
 class DMRAttentionClassifier(nn.Module):
@@ -45,6 +46,21 @@ class DMRAttentionClassifier(nn.Module):
             nn.Dropout(config.hidden_dropout_prob),
             nn.Linear(config.hidden_size // 2, self.num_labels),
         )
+            # Focal loss bias initialization
+        if getattr(config, "focal_init", False):
+            print("focal_init has been set to True. The biases for the final classification layer will be set such that p for target classes is focal_prior_prob/n_classes")
+            bg_index = getattr(config, "bg_class_index", 0)
+            prior_prob = getattr(config, "focal_prior_prob", 0.01)
+            num_fg = self.num_labels - 1
+
+            # bias so that softmax gives ~(1-prior_prob) to bg,
+            # ~prior_prob spread across foreground classes
+            bg_bias = math.log((1.0 - prior_prob) / prior_prob * num_fg)
+
+            final_layer = self.classifier[-1]  # last nn.Linear
+            nn.init.normal_(final_layer.weight, std=0.01)
+            nn.init.constant_(final_layer.bias, 0.0)
+            final_layer.bias.data[bg_index] = bg_bias
 
         # Scale factor for attention scores
         self.scale = config.hidden_size**-0.5

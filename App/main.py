@@ -25,17 +25,20 @@ from methyldl.modelling.classifiers.dnabert2 import (
 )  # TODO - must be different for MethylBERT
 
 
-def setup_logging(verbose: bool = False):
+def setup_logging(verbose: bool = False, log_file: str = None):
     """Configure logging for the application."""
     level = logging.DEBUG if verbose else logging.INFO
+    handlers = [logging.StreamHandler()]
+
+    if log_file:
+        os.makedirs(os.path.dirname(log_file), exist_ok=True)
+        handlers.append(logging.FileHandler(log_file))
+
     logging.basicConfig(
         level=level,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         force=True,
-        handlers=[
-            logging.StreamHandler(),
-            logging.FileHandler("test_container_tmp/App.log"),
-        ],
+        handlers=handlers,
     )
     return logging.getLogger(__name__)
 
@@ -59,6 +62,18 @@ def validate_config(config: Dict[str, Any], task: str) -> None:
             "atlas_path",
             "input",
         ],
+        "generate_pseudobulk": [
+            "classifier_type",
+            "generation_mode",
+            "output_dir",
+            "labels_dict_path",
+        ],
+        "fit_deconvolution": [
+            "predicted_splits",
+            "ios_full_matrices_path",
+            "output_dir",
+            "labels_dict_path",
+        ],
     }
 
     if task not in required_fields:
@@ -68,10 +83,11 @@ def validate_config(config: Dict[str, Any], task: str) -> None:
         if field not in config:
             raise ValueError(f"Missing required field '{field}' for task '{task}'")
 
-    # Validate model-specific configuration
-    model = config["model"]["architecture"].lower()
-    if model not in ["dismir", "epigenbert2", "methylbert"]:
-        raise ValueError(f"Unknown model architecture: {model}")
+    # Validate model-specific configuration (not needed for generate_pseudobulk or fit_deconvolution)
+    if task not in ("generate_pseudobulk", "fit_deconvolution"):
+        model = config["model"]["architecture"].lower()
+        if model not in ["dismir", "epigenbert2", "methylbert"]:
+            raise ValueError(f"Unknown model architecture: {model}")
 
 
 def create_experiment(config: Dict[str, Any], logger: logging.Logger) -> Any:
@@ -224,6 +240,35 @@ def run_pretraining(config: Dict[str, Any], logger: logging.Logger) -> None:
     raise NotImplementedError("Pretraining mode is not yet implemented")
 
 
+def run_pseudobulk_generation(config: Dict[str, Any], logger: logging.Logger) -> None:
+    """Run pseudo-bulk mixture generation based on configuration."""
+    from pseudobulk_pipeline import PseudoBulkPipeline
+
+    logger.info("Starting pseudo-bulk generation pipeline")
+    pipeline = PseudoBulkPipeline(config=config, logger=logger)
+    result = pipeline.run()
+
+    # Log summary
+    logger.info("=" * 60)
+    logger.info("PSEUDO-BULK GENERATION SUMMARY")
+    logger.info("=" * 60)
+    logger.info(f"  Total examples: {result['proportions'].shape[0]}")
+    logger.info(f"  Features shape (train): {result['features_train'].shape}")
+    logger.info(f"  Features shape (valid): {result['features_valid'].shape}")
+    logger.info(f"  Features shape (test):  {result['features_test'].shape}")
+    logger.info(f"  Output saved to: {config['output_dir']}")
+    logger.info("=" * 60)
+
+
+def run_deconvolution_fitting(config: Dict[str, Any], logger: logging.Logger) -> None:
+    """Run deconvolution model fitting based on configuration."""
+    from deconvolution_pipeline import DeconvolutionFittingPipeline
+
+    logger.info("Starting deconvolution fitting pipeline")
+    pipeline = DeconvolutionFittingPipeline(config=config, logger=logger)
+    pipeline.run()
+
+
 def main():
     """Main entry point for the application."""
     parser = argparse.ArgumentParser(
@@ -246,7 +291,7 @@ Examples:
     # Required arguments
     parser.add_argument(
         "--task",
-        choices=["pretrain", "fine_tune", "inference"],
+        choices=["pretrain", "fine_tune", "inference", "generate_pseudobulk", "fit_deconvolution"],
         required=True,
         help="Task to perform",
     )
@@ -286,6 +331,8 @@ Examples:
     parser.add_argument(
         "--datasets", nargs="+", help="Specific datasets to train on (default: all)"
     )
+    parser.add_argument("--log-file", type=str, default=None,
+                    help="Path to log file. If not set, logs go to stdout only.")
 
     # MLflow overrides
     parser.add_argument("--mlflow-uri", type=str, help="MLflow tracking URI")
@@ -300,7 +347,7 @@ Examples:
     args = parser.parse_args()
 
     # Setup logging
-    logger = setup_logging(args.verbose)
+    logger = setup_logging(args.verbose, args.log_file)
     logger.info(f"Starting MethylDL application - Task: {args.task}")
 
     try:
@@ -382,6 +429,10 @@ Examples:
             run_inference(config, logger)
         elif args.task == "pretrain":
             run_pretraining(config, logger)
+        elif args.task == "generate_pseudobulk":
+            run_pseudobulk_generation(config, logger)
+        elif args.task == "fit_deconvolution":
+            run_deconvolution_fitting(config, logger)
 
         logger.info("Task completed successfully")
         return 0

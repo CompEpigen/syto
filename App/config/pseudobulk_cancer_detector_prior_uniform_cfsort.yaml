@@ -1,0 +1,82 @@
+# ──────────────────────────────────────────────────────────────────
+# Pseudo-Bulk Mixture Generation Configuration
+# ──────────────────────────────────────────────────────────────────
+# Usage:
+#   python App/main.py --task generate_pseudobulk --config App/config/pseudobulk_cancer_detector.yaml
+
+# ── Classifier ────────────────────────────────────────────────────
+# Which classifier was used (or should be used) to predict reads
+# Supported values: methylbert | dismir | cancer_detector
+classifier_type: cancer_detector
+
+# ── Input data ────────────────────────────────────────────────────
+# "raw_splits" — raw splits that still need classifier prediction
+# "uxm_prepared"  — splits already prepared for uxm
+# "pre_predicted"  — pre-predicted splits (already enriched with predictions)
+# input_type: raw_splits
+input_type: uxm_prepared
+
+# Directory containing train.parquet, valid.parquet, test.parquet
+# (used when input_type == parquet)
+data_path: /data/leuven/389/vsc38912/Projects/methyldl/Data/training_data/SoftLabels_cfsort_inputs
+
+# ── Classifier checkpoint ────────────────────────────────────────
+# Required when input_type == parquet (classifier must run prediction)
+classifier_checkpoint: /staging/leuven/stg_00118/methylDL/experiments/cfsort_rrbs/CancerDetector/uniform_prior_cfsort/CD_trainlen=3826016_epsbetafit=0.01_prior=uniform_cfsort_scheme.pkl
+
+classifier_config:
+  # foundation_model: hanyangii/methylbert_hg19_12l
+  # classifier_head_implementation: dmr_attention_based
+  dmr_label_column: dmr_ctype_label
+  seq_length: 150
+  # batch_size: 2200
+  soft_labels: true
+  # Dismir-specific (only used when classifier_type == dismir)
+  # dismir_flavor: lstm
+
+# ── Labels & atlas ────────────────────────────────────────────────
+labels_dict_path: App/labels_dict.json
+atlas_path: /data/leuven/389/vsc38912/Projects/methyldl/Data/Atlas.U25.l4.hg38.full.tsv
+num_labels: 39
+
+# ── Split rebalancing ─────────────────────────────────────────────
+# Redistribute files across splits so every split has all
+# (dmr_ctype_label, original_label) combinations
+rebalance_splits: false
+# manual_common_labels: [28, 35]
+
+# ── UXM input generation ─────────────────────────────────────────
+# Whether to run prepare_reads_for_uxm during read preparation (Stage 2)
+generate_uxm_inputs: true
+# Whether to compute sf/counts tables during IO generation (Stage 4)
+generate_uxm_inputs_in_ios: true
+# Path to pre-computed UXM prepared reads pickle (used when input_type == uxm_prepared)
+uxm_prepared_reads_path: /data/leuven/389/vsc38912/Projects/methyldl/Data/training_data/uxm_prepared_reads.pkl
+
+# ── Generation mode ───────────────────────────────────────────────
+# "random"              — randomly select cell types and proportions
+# "target_proportions"  — use pre-defined proportion vectors
+generation_mode: target_proportions
+
+# ── Random mode parameters ────────────────────────────────────────
+# Labels allowed in the random mixture (null → all labels 0..num_labels-1)
+# allowed_labels: null
+# Maximum number of cell types per mixture
+# n_cells_max: 10
+
+# ── Target proportions mode ──────────────────────────────────────
+# Each entry is a length-num_labels proportion vector summing to 1.
+# Uncomment and populate for target_proportions mode.
+target_proportions_path: /data/leuven/389/vsc38912/Projects/methyldl/Data/training_data/target_proportions.npz
+
+# ── Shared generation parameters ─────────────────────────────────
+n_io_examples: 100000
+n_workers: 30
+batch_size: 100
+checkpoint_interval: 1000
+start_checkpoint_idx: 0
+# Reads to sample per split per IO example (null → int(4.75e5))
+n_read_per_split: 475000
+
+# ── Output ────────────────────────────────────────────────────────
+output_dir: /staging/leuven/stg_00118/methylDL/experiments/cfsort_rrbs/CancerDetector/uniform_prior_cfsort

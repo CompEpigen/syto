@@ -53,6 +53,7 @@ class DismirTestBase(unittest.TestCase):
         df = pd.DataFrame(
             dataset[1:], columns=["input_ids", "methylation_ids", "label"]
         )
+        df["dmr_label"] = np.random.randint(0, 5, len(df))
         df.to_parquet(self.train_path)
         df.to_parquet(self.test_path)
         df.to_parquet(self.valid_path)
@@ -204,8 +205,13 @@ class TestDismirPredict(DismirTestBase):
 
 class TestDismirTraining(DismirTestBase):
     """Test training functionality of Dismir model."""
-
-    def test_fixed_length_training(self):
+    @parameterized.expand(
+        [
+            ("dmr_attention_based",), 
+            ("vanilla",),  
+        ]
+    )
+    def test_fixed_length_training(self,classifier_type):
         """Test fixed-length training mode."""
         model = Dismir(
             max_sequence_length=128,
@@ -213,6 +219,9 @@ class TestDismirTraining(DismirTestBase):
             test_data_path=self.test_path,
             valid_data_path=self.valid_path,
             device=torch.device("cuda"),
+            classifier_type=classifier_type,
+            num_dmr_labels=100,
+            dmr_label_col = "dmr_label"
         )
 
         # Train for a few epochs
@@ -460,7 +469,7 @@ class TestVariableLengthDataset(DismirTestBase):
             data.append(
                 {"input_ids": dna_seq, "methylation_ids": meth_seq, "label": label}
             )
-
+        df["dmr_label"] = np.random.randint(0, 5, len(df))
         df = pd.DataFrame(data)
         df.to_parquet(self.data_path)
 

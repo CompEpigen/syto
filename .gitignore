@@ -1,7 +1,7 @@
 .vscode/*
 App/mlruns/*
 App/output/*
-
+output/*
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -179,6 +179,7 @@ cython_debug/
 /Experiments
 /Tutorials/mlruns
 /Tutorials/output
+/Tutorials/uxm_results_pseudobulk
 /mlartifacts
 /EDA/mlruns
 /EDA/output
@@ -188,6 +189,8 @@ cython_debug/
 /Tutorials/methylBertLoyferWithReject*
 /Tutorials/loyfer_atlas_crazy_split
 /Tutorials/DNABERT2_*
+/Tutorials/archive
+/Tutorials/methylBert_Loyfer_205files_*
 /test_container_tmp
 /EDA/*.pkl
 /EDA/*.pt
