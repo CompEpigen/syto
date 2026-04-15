@@ -757,6 +757,7 @@ class DirichletCalibrator(BaseEstimator, RegressorMixin):
         Returns a zero vector for temperature scaling (which has no bias).
         """
         if hasattr(self.model_, "b"):
+            # pylint: disable-next=not-callable
             return self.model_.b.detach().cpu().numpy()
         return np.zeros(self.n_classes_)
 

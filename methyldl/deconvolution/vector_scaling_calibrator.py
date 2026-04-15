@@ -148,7 +148,7 @@ class VectorScalingCalibrator(BaseEstimator, RegressorMixin):
         reg_lambda: L2 regularisation strength
         optimizer: Optimizer to use - "adam" or "sgd".
         lr: Learning rate for the optimizer.
-        scheduler: Learning rate schedule - "constant" (default), "linear",
+        scheduler: Learning rate schedule - "plateau" (default), "constant", "linear",
             or "cosine". Linear decays lr to 0 over max_iter epochs.
             Cosine uses cosine annealing to 0.
         max_iter: Maximum number of optimization epochs.
@@ -168,15 +168,22 @@ class VectorScalingCalibrator(BaseEstimator, RegressorMixin):
         lr: float = 0.01,
         max_iter: int = 500,
         optimizer: str = "adam",
-        scheduler: str = "cosine",
+        scheduler: str = "plateau",
         batch_size: int = 1000,
         patience: int = 50,
         tol: float = 1e-7,
         device: str = "cuda",
         verbose: bool = True,
+        plateau_factor: float = 0.5,
+        plateau_patience: int = 10,
     ):
         assert optimizer in {"adam", "sgd"}, "Unsupported optimizer"
-        assert scheduler in {"constant", "linear", "cosine"}, "Unsupported scheduler"
+        assert scheduler in {
+            "constant",
+            "linear",
+            "cosine",
+            "plateau",
+        }, "Unsupported scheduler"
         self.reg_lambda = reg_lambda
         self.optimizer = optimizer
         self.lr = lr
@@ -187,6 +194,8 @@ class VectorScalingCalibrator(BaseEstimator, RegressorMixin):
         self.tol = tol
         self.device = device
         self.verbose = verbose
+        self.plateau_factor = plateau_factor
+        self.plateau_patience = plateau_patience
 
         # Fitted attributes (set by fit())
         self.model_: Optional[_TrainedLinearCalibrationModel] = None
@@ -352,10 +361,17 @@ class VectorScalingCalibrator(BaseEstimator, RegressorMixin):
             sched = torch.optim.lr_scheduler.CosineAnnealingLR(
                 optim, T_max=self.max_iter, eta_min=0.0
             )
+        elif self.scheduler == "plateau":
+            sched = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                optim,
+                mode="min",
+                factor=self.plateau_factor,
+                patience=self.plateau_patience,
+            )
         else:
             raise ValueError(
                 f"Unknown scheduler '{self.scheduler}'. "
-                "Choose 'constant', 'linear', or 'cosine'."
+                "Choose 'plateau', 'constant', 'linear', or 'cosine'."
             )
 
         # batch_size=0 means full-batch: use the entire dataset each epoch
@@ -433,10 +449,6 @@ class VectorScalingCalibrator(BaseEstimator, RegressorMixin):
                 epoch_loss += loss.item()
                 n_batches += 1
 
-            # Step the learning rate scheduler after each epoch
-            if sched is not None:
-                sched.step()
-
             # Current learning rate (first param group)
             current_lr = optim.param_groups[0]["lr"]
 
@@ -459,6 +471,13 @@ class VectorScalingCalibrator(BaseEstimator, RegressorMixin):
                     val_mse = torch.mean((val_calibrated - targets_val) ** 2).item()
                 else:
                     selection_loss = train_loss
+
+            # Step the learning rate scheduler after computing selection_loss
+            if sched is not None:
+                if self.scheduler == "plateau":
+                    sched.step(selection_loss)
+                else:
+                    sched.step()
 
             # Record metrics for this epoch
             history["epoch"].append(epoch)
@@ -607,9 +626,8 @@ class VectorScalingCalibrator(BaseEstimator, RegressorMixin):
 class VectorScalingCalibratorCV(BaseEstimator, RegressorMixin):
     """Grid-search with k-fold cross-validation for :class:`VectorScalingCalibrator`.
 
-    Fuses the provided training and validation sets into a single dataset,
-    evaluates every combination of hyperparameters via k-fold CV, and
-    retrains a final calibrator on the full fused dataset using the
+    Evaluates every combination of hyperparameters via k-fold CV, and
+    retrains a final calibrator on the full dataset using the
     best-performing hyperparameters.
 
     Args:
@@ -618,7 +636,7 @@ class VectorScalingCalibratorCV(BaseEstimator, RegressorMixin):
         max_iter_list: List of maximum epoch counts to search over.
         optimizer: Optimizer passed to each inner calibrator ("adam" or "sgd").
         scheduler: LR scheduler passed to each inner calibrator
-            ("constant", "linear", or "cosine").
+            ("plateau", "constant", "linear", or "cosine").
         patience: Early-stopping patience passed to each inner calibrator.
         tol: Minimum loss improvement for early stopping.
         n_folds: Number of cross-validation folds (default 5).
@@ -638,12 +656,14 @@ class VectorScalingCalibratorCV(BaseEstimator, RegressorMixin):
         lr_list: list[float],
         max_iter_list: list[int],
         optimizer: str = "adam",
-        scheduler: str = "cosine",
+        scheduler: str = "plateau",
         patience: int = 50,
         tol: float = 1e-7,
         n_folds: int = 5,
         batch_size: int = None,
         verbose: bool = False,
+        plateau_factor: float = 0.5,
+        plateau_patience: int = 10,
     ):
         self.reg_lambda_list = reg_lambda_list
         self.lr_list = lr_list
@@ -655,6 +675,8 @@ class VectorScalingCalibratorCV(BaseEstimator, RegressorMixin):
         self.n_folds = n_folds
         self.batch_size = batch_size
         self.verbose = verbose
+        self.plateau_factor = plateau_factor
+        self.plateau_patience = plateau_patience
 
         self.best_calibrator_: Optional[VectorScalingCalibrator] = None
         self.best_params_: Optional[dict] = None
@@ -663,32 +685,23 @@ class VectorScalingCalibratorCV(BaseEstimator, RegressorMixin):
 
     def fit(
         self,
-        X_train: np.ndarray,
-        y_train: np.ndarray,
-        X_val: np.ndarray,
-        y_val: np.ndarray,
+        X: np.ndarray,
+        y: np.ndarray,
     ) -> "VectorScalingCalibratorCV":
-        """Fuse datasets, run k-fold CV grid search, and retrain on all data.
+        """Run k-fold CV grid search, and retrain on all data.
 
-        Concatenates ``X_train``/``X_val`` (and their labels) into a single
-        dataset, evaluates every hyperparameter combination via k-fold CV,
+        Evaluates every hyperparameter combination via k-fold CV,
         then retrains a final :class:`VectorScalingCalibrator` on the full
-        fused dataset with the best hyperparameters.
+        dataset with the best hyperparameters.
 
         Args:
-            X_train: Training probability predictions, shape (n_train, n_classes).
-            y_train: Training labels (integer, one-hot, or soft).
-            X_val: Validation probability predictions, shape (n_val, n_classes).
-            y_val: Validation labels, same format as ``y_train``.
+            X: Probability predictions, shape (n_samples, n_classes).
+            y: Labels (integer, one-hot, or soft), shape (n_samples, n_classes).
 
         Returns:
             self, with ``best_calibrator_``, ``best_params_``, and
             ``best_cv_val_loss_`` set.
         """
-        # Fuse train and val into a single dataset
-        X_all = np.concatenate([X_train, X_val], axis=0)
-        y_all = np.concatenate([y_train, y_val], axis=0)
-
         param_grid = {
             "reg_lambda": self.reg_lambda_list,
             "lr": self.lr_list,
@@ -698,6 +711,8 @@ class VectorScalingCalibratorCV(BaseEstimator, RegressorMixin):
             "patience": [self.patience],
             "tol": [self.tol],
             "batch_size": [self.batch_size],
+            "plateau_factor": [self.plateau_factor],
+            "plateau_patience": [self.plateau_patience],
         }
 
         # n-fold CV to find best hyperparameters
@@ -705,9 +720,8 @@ class VectorScalingCalibratorCV(BaseEstimator, RegressorMixin):
         best_params = None
         kf = KFold(n_splits=self.n_folds, shuffle=True, random_state=42)
 
-        best_metrics_per_param = (
-            {}
-        )  # Store best metrics for each hyperparameter combination
+        # Store best metrics for each hyperparameter combination
+        best_metrics_per_param = {}
         with tqdm(
             total=len(ParameterGrid(param_grid)) * self.n_folds,
             desc="CV grid search",
@@ -715,9 +729,9 @@ class VectorScalingCalibratorCV(BaseEstimator, RegressorMixin):
         ) as pbar:
             for params in ParameterGrid(param_grid):
                 fold_val_losses = []
-                for train_idx, val_idx in kf.split(X_all):
-                    X_tr_fold, X_val_fold = X_all[train_idx], X_all[val_idx]
-                    y_tr_fold, y_val_fold = y_all[train_idx], y_all[val_idx]
+                for train_idx, val_idx in kf.split(X):
+                    X_tr_fold, X_val_fold = X[train_idx], X[val_idx]
+                    y_tr_fold, y_val_fold = y[train_idx], y[val_idx]
 
                     calibrator = VectorScalingCalibrator(**params, verbose=False)
                     calibrator.fit(X_tr_fold, y_tr_fold, X_val_fold, y_val_fold)
@@ -741,9 +755,9 @@ class VectorScalingCalibratorCV(BaseEstimator, RegressorMixin):
 
         self.best_metrics_per_param_ = best_metrics_per_param
 
-        # Retrain on the full fused dataset with the best hyperparameters
+        # Retrain on the full dataset with the best hyperparameters
         final_calibrator = VectorScalingCalibrator(**best_params, verbose=False)
-        final_calibrator.fit(X_all, y_all)
+        final_calibrator.fit(X, y)
 
         self.best_calibrator_ = final_calibrator
         self.best_params_ = best_params
@@ -781,3 +795,98 @@ class VectorScalingCalibratorCV(BaseEstimator, RegressorMixin):
         if self.best_calibrator_ is None:
             raise RuntimeError("Calibrator not fitted yet. Call fit() first.")
         return self.best_calibrator_.predict(X)
+
+    def save(self, path: Union[str, Path]) -> None:
+        """Save the fitted CV calibrator to a .npz file.
+
+        Persists all constructor parameters, CV results, and the best
+        inner calibrator (including its model weights).
+
+        Args:
+            path: File path to save to (typically .npz).
+
+        Raises:
+            RuntimeError: If the calibrator has not been fitted yet.
+        """
+        if self.best_calibrator_ is None:
+            raise RuntimeError("Cannot save an unfitted calibrator. Call fit() first.")
+
+        # Serialise best_metrics_per_param_ with string keys
+        serialisable_metrics = None
+        if self.best_metrics_per_param_ is not None:
+            serialisable_metrics = {
+                json.dumps(list(k)): v for k, v in self.best_metrics_per_param_.items()
+            }
+
+        # Inner calibrator metadata (same structure as VectorScalingCalibrator.save)
+        inner = self.best_calibrator_
+        inner_metadata = {
+            "params": inner.get_params(),
+            "n_classes_": inner.n_classes_,
+            "final_loss_": inner.final_loss_,
+            "best_epoch_": inner.best_epoch_,
+            "best_metrics_": inner.best_metrics_,
+            "history_": inner.history_,
+            "model_method": inner.model_.method.value,
+        }
+
+        metadata = {
+            "cv_params": self.get_params(),
+            "best_params_": self.best_params_,
+            "best_cv_val_loss_": self.best_cv_val_loss_,
+            "best_metrics_per_param_": serialisable_metrics,
+            "inner_calibrator": inner_metadata,
+        }
+
+        arrays = {
+            name: param.detach().cpu().numpy()
+            for name, param in inner.model_.state_dict().items()
+        }
+        arrays["_metadata_json"] = np.array(json.dumps(metadata))
+        np.savez(path, **arrays)
+
+    def load(self, path: Union[str, Path]) -> "VectorScalingCalibratorCV":
+        """Load a fitted CV calibrator from a .npz file.
+
+        Args:
+            path: File path to load from.
+
+        Returns:
+            self, with all fitted attributes restored.
+        """
+        data = np.load(path, allow_pickle=False)
+        metadata = json.loads(str(data["_metadata_json"]))
+
+        # Restore constructor params
+        cv_params = metadata["cv_params"]
+        for key, value in cv_params.items():
+            setattr(self, key, value)
+
+        self.best_params_ = metadata["best_params_"]
+        self.best_cv_val_loss_ = metadata["best_cv_val_loss_"]
+
+        # Restore best_metrics_per_param_ with tuple keys
+        raw = metadata.get("best_metrics_per_param_")
+        if raw is not None:
+            self.best_metrics_per_param_ = {
+                tuple(tuple(pair) for pair in json.loads(k)): v for k, v in raw.items()
+            }
+
+        # Reconstruct inner calibrator
+        inner_meta = metadata["inner_calibrator"]
+        inner = VectorScalingCalibrator(**inner_meta["params"])
+        inner.n_classes_ = inner_meta["n_classes_"]
+        inner.final_loss_ = inner_meta["final_loss_"]
+        inner.best_epoch_ = inner_meta["best_epoch_"]
+        inner.best_metrics_ = inner_meta["best_metrics_"]
+        inner.history_ = inner_meta["history_"]
+
+        method_enum = CalibrationMethod(inner_meta["model_method"])
+        model = _TrainedLinearCalibrationModel(inner.n_classes_, method_enum)
+        state_dict = {name: torch.as_tensor(data[name]) for name in model.state_dict()}
+        model.load_state_dict(state_dict)
+        model.to(torch.device(inner.device))
+        inner.model_ = model
+
+        self.best_calibrator_ = inner
+        return self

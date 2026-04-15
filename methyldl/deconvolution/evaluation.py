@@ -4,7 +4,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from typing import Union,Optional,List
+from typing import Union, Optional, List
 import numpy as np
 import torch
 import torch.nn as nn
@@ -67,12 +67,15 @@ def compute_deconvolution_metrics(
     if isinstance(target, np.ndarray):
         target = torch.from_numpy(target)
     assert pred.shape == target.shape, "pred and target must have the same shape"
+    if pred.ndim == 1:
+        pred = pred.unsqueeze(0)
+        target = target.unsqueeze(0)
 
     with torch.no_grad():
         diff = pred - target
 
         mae = diff.abs().mean().item()
-        mse = (diff ** 2).mean().item()
+        mse = (diff**2).mean().item()
         kl = (
             (target * (target.clamp(min=eps).log() - pred.clamp(min=eps).log()))
             .sum(dim=-1)
@@ -81,6 +84,12 @@ def compute_deconvolution_metrics(
         )
         max_error = diff.abs().max().item()
         cosine_sim = nn.functional.cosine_similarity(pred, target, dim=-1).mean().item()
+
+        # --- Overall R² ---
+        flat_target = target.reshape(-1)
+        ss_res = (diff**2).sum()
+        ss_tot = ((flat_target - flat_target.mean()) ** 2).sum()
+        r2 = (1 - ss_res / ss_tot).item()
 
         # --- Overall Limits of Agreement (Bland-Altman) ---
         flat_diff = diff.reshape(-1)
@@ -91,8 +100,8 @@ def compute_deconvolution_metrics(
 
         # --- Per-class LoA (column-wise) ---
         # diff shape: (n_samples, n_classes)
-        per_class_bias = diff.mean(dim=0)       # (n_classes,)
-        per_class_std = diff.std(dim=0)          # (n_classes,)
+        per_class_bias = diff.mean(dim=0)  # (n_classes,)
+        per_class_std = diff.std(dim=0)  # (n_classes,)
         per_class_loa_lower = per_class_bias - 1.96 * per_class_std
         per_class_loa_upper = per_class_bias + 1.96 * per_class_std
 
@@ -111,6 +120,7 @@ def compute_deconvolution_metrics(
         "kl": kl,
         "max_error": max_error,
         "cosine_sim": cosine_sim,
+        "overall_r2": r2,
         "loa_lower": loa_lower,
         "loa_upper": loa_upper,
         "loa_width": loa_upper - loa_lower,

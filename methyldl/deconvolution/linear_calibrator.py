@@ -1,5 +1,7 @@
 """Linear post-processing utilities for deconvolution predictions."""
 
+from typing import Union
+
 import numpy as np
 from scipy.stats import linregress
 from sklearn.base import BaseEstimator, RegressorMixin
@@ -12,6 +14,12 @@ class LinearCalibrator(BaseEstimator, RegressorMixin):
     on the validation set, and then we use the fitted slopes and intercepts to adjust
     the predictions on the test set.
     """
+
+    _VALID_NORM_METHODS = (
+        "clip01-normalize",
+        "clip0-normalize",
+        "simplex-projection",
+    )
 
     def __init__(self):
         """Initialize calibration statistics for each cell type."""
@@ -68,52 +76,16 @@ class LinearCalibrator(BaseEstimator, RegressorMixin):
         theta = (cssv[np.arange(n), rho] - 1) / (rho + 1.0)
         return np.maximum(v - theta[:, np.newaxis], 0)
 
-    @staticmethod
-    def _entmax(z, alpha):
-        """Alpha-entmax mapping (Peters et al., 2019)."""
-        n, d = z.shape
-        result = np.zeros_like(z)
-        for i in range(n):
-            zi = z[i]
-            lo, hi = zi.min() - 1.0 / (alpha - 1), zi.max()
-            for _ in range(50):
-                mid = (lo + hi) / 2
-                p = np.maximum((alpha - 1) * (zi - mid), 0) ** (1 / (alpha - 1))
-                if p.sum() > 1:
-                    lo = mid
-                else:
-                    hi = mid
-            tau = (lo + hi) / 2
-            result[i] = np.maximum((alpha - 1) * (zi - tau), 0) ** (1 / (alpha - 1))
-            s = result[i].sum()
-            if s > 0:
-                result[i] /= s
-        return result
-
-    _VALID_NORM_METHODS = (
-        "clip01-normalize",
-        "clip0-normalize",
-        "softmax",
-        "simplex-projection",
-        "shift-normalize",
-        "entmax",
-    )
-
     def predict(
         self,
         X: np.ndarray,
         norm_method="clip01-normalize",
-        entmax_alpha=1.5,
-    ) -> np.ndarray:
+    ) -> Union[np.ndarray, tuple[np.ndarray, np.ndarray]]:
         """Apply the learned calibration and return corrected predictions.
 
         Args:
             X: Raw predicted proportions with shape ``(n_samples, n_cell_types)``.
-            norm_method: One of ``"clip01-normalize"``, ``"clip0-normalize"``, ``"softmax"``,
-                ``"simplex-projection"``, ``"shift-normalize"``,
-                or ``"entmax"``.
-            entmax_alpha: Alpha parameter for entmax (only used when
-                ``norm_method="entmax"``). 1 = softmax, 2 = sparsemax.
+            norm_method: One of ``"clip01-normalize"``, ``"clip0-normalize"``, ``"simplex-projection"``.
 
         Returns:
             A tuple containing the normalized predictions, followed by
@@ -147,27 +119,8 @@ class LinearCalibrator(BaseEstimator, RegressorMixin):
             final_predictions = clipped / np.clip(
                 clipped.sum(axis=1, keepdims=True), 1e-8, None
             )
-        elif norm_method == "softmax":
-            exp_vals = np.exp(adjusted_predictions)
-            final_predictions = exp_vals / exp_vals.sum(axis=1, keepdims=True)
         elif norm_method == "simplex-projection":
             final_predictions = self._project_onto_simplex(adjusted_predictions)
-        elif norm_method == "shift-normalize":
-            shifted = adjusted_predictions - adjusted_predictions.min(
-                axis=1, keepdims=True
-            )
-            final_predictions = shifted / np.clip(
-                shifted.sum(axis=1, keepdims=True), 1e-8, None
-            )
-        elif norm_method == "entmax":
-            assert entmax_alpha > 1, "entmax_alpha must be > 1"
-            if entmax_alpha == 1:
-                exp_vals = np.exp(adjusted_predictions)
-                final_predictions = exp_vals / exp_vals.sum(axis=1, keepdims=True)
-            elif entmax_alpha == 2:
-                final_predictions = self._project_onto_simplex(adjusted_predictions)
-            else:
-                final_predictions = self._entmax(adjusted_predictions, entmax_alpha)
 
         return final_predictions, adjusted_predictions
 
