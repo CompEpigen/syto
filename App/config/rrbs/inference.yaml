@@ -7,19 +7,22 @@ model:
   foundation_model: foundationalModels/methylbert_hg19_12l
 
 # Path to fine-tuned MethylBERT classifier checkpoint
-checkpoint_path: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/RRBS/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_d041_postfiltered_min_length_50_soft_labels_pooled_jakkard/checkpoint-800
+checkpoint_path: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/RRBS/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_d041_postfiltered_min_length_50_hard_labels_minibatch_balanced/checkpoint-400
 
 # Labels dictionary: JSON file mapping int label -> cell type name
 # e.g. {"0": "B-cells", "1": "T-cells", ...}
 labels_dict_path: App/labels_dict.json
 
 # Features mask in npz format - used to select features from the aggregated dmr matrix to be used with deconvolution models
-features_mask_path: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/RRBS/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_d041_postfiltered_min_length_50_soft_labels_pooled_jakkard/pseudobulk/features_mask_1.073_cutoff.npz
+features_mask_path: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/RRBS/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_d041_postfiltered_min_length_50_hard_labels_minibatch_balanced/pseudobulk/features_mask_3.05_cutoff.npz
 
 # Optional cell type name matching dict (atlas target name -> labels_dict name)
 # If atlas uses different naming than labels_dict, this maps between them.
 # Set to null if names already match.
 cell_type_match_dict_path: null
+
+# Number of labels in classification model
+num_labels: 40
 
 # Atlas file (TSV with columns: chr, start, end, name, target, ...)
 atlas_path: ../UXM_deconv/supplemental/Atlas.U25.l4.hg19.full.tsv
@@ -66,37 +69,37 @@ deconvolution:
     - name: xgboost
       enabled: true
       use_callibration: true
-      checkpoint_path: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/RRBS/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_d041_postfiltered_min_length_50_soft_labels_pooled_jakkard/pseudobulk/xgb_deconvolver.joblib
-      callibrator_path: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/RRBS/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_d041_postfiltered_min_length_50_soft_labels_pooled_jakkard/pseudobulk/xgb_linear_calibrator.npz
+      checkpoint_path: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/RRBS/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_d041_postfiltered_min_length_50_hard_labels_minibatch_balanced/pseudobulk/xgb_deconvolver.joblib
+      callibrator_path: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/RRBS/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_d041_postfiltered_min_length_50_hard_labels_minibatch_balanced/pseudobulk/xgb_linear_calibrator.npz
     - name: uxm
       enabled: true
     - name: 3Layer_MLP
       enabled: true
       use_callibration: true
-      checkpoint_path: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/RRBS/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_d041_postfiltered_min_length_50_soft_labels_pooled_jakkard/pseudobulk/mlp_best_deconvolver.pt
-      callibrator_path: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/RRBS/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_d041_postfiltered_min_length_50_soft_labels_pooled_jakkard/pseudobulk/mlp_linear_calibrator.npz
+      checkpoint_path: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/RRBS/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_d041_postfiltered_min_length_50_hard_labels_minibatch_balanced/pseudobulk/mlp_best_deconvolver.pt
+      callibrator_path: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/RRBS/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_d041_postfiltered_min_length_50_hard_labels_minibatch_balanced/pseudobulk/mlp_linear_calibrator.npz
     - name: Shallow_Wide_Network
       enabled: true
       use_callibration: true
-      checkpoint_path: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/RRBS/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_d041_postfiltered_min_length_50_soft_labels_pooled_jakkard/pseudobulk/swn_best_deconvolver.pt
-      callibrator_path: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/RRBS/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_d041_postfiltered_min_length_50_soft_labels_pooled_jakkard/pseudobulk/swn_linear_calibrator.npz
+      checkpoint_path: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/RRBS/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_d041_postfiltered_min_length_50_hard_labels_minibatch_balanced/pseudobulk/swn_best_deconvolver.pt
+      callibrator_path: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/RRBS/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_d041_postfiltered_min_length_50_hard_labels_minibatch_balanced/pseudobulk/swn_linear_calibrator.npz
     - name: ls
       flavor: nnls
       enabled: true
       use_callibration: true
-      checkpoint_path: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/RRBS/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_d041_postfiltered_min_length_50_soft_labels_pooled_jakkard/pseudobulk/nnls_deconvolver.joblib
-      callibrator_path: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/RRBS/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_d041_postfiltered_min_length_50_soft_labels_pooled_jakkard/pseudobulk/nnls_linear_calibrator.npz
+      checkpoint_path: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/RRBS/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_d041_postfiltered_min_length_50_hard_labels_minibatch_balanced/pseudobulk/nnls_deconvolver.joblib
+      callibrator_path: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/RRBS/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_d041_postfiltered_min_length_50_hard_labels_minibatch_balanced/pseudobulk/nnls_linear_calibrator.npz
     - name: ls
       flavor: psls
       enabled: true
       use_callibration: true
-      checkpoint_path: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/RRBS/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_d041_postfiltered_min_length_50_soft_labels_pooled_jakkard/pseudobulk/psls_deconvolver.joblib
-      callibrator_path: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/RRBS/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_d041_postfiltered_min_length_50_soft_labels_pooled_jakkard/pseudobulk/psls_linear_calibrator.npz
+      checkpoint_path: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/RRBS/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_d041_postfiltered_min_length_50_hard_labels_minibatch_balanced/pseudobulk/psls_deconvolver.joblib
+      callibrator_path: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/RRBS/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_d041_postfiltered_min_length_50_hard_labels_minibatch_balanced/pseudobulk/psls_linear_calibrator.npz
  
 
 # Output configuration
 output:
-  output_dir: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/RRBS/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_d041_postfiltered_min_length_50_soft_labels_pooled_jakkard/pseudobulk/deconvolutions/GSM7427265_GTEX-14JG1-0826-SM-L36ZF
+  output_dir: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/RRBS/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_d041_postfiltered_min_length_50_hard_labels_minibatch_balanced/pseudobulk/deconvolutions/GSM7427265_GTEX-14JG1-0826-SM-L36ZF
   save_processed_reads: true   # Save processed reads as pickle
   save_predictions: true       # Save MethylBERT predictions as pickle
   save_deconvolution: true     # Save deconvolution proportions as CSV
