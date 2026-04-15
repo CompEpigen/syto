@@ -119,6 +119,11 @@ class InferencePipeline:
         # By default the algorithm assumes that we have at least some data for each DMR group.
         self.fill_in_missing_labels = self.config.get("fill_in_missing_labels", False)
 
+        if self.config.get("num_labels", None) is None:
+            self.num_labels = len(self.labels_dict)
+        else:
+            self.num_labels = self.config["num_labels"]
+
     # ═══════════════════════════════════════════════════════════════════
     #  Public API
     # ═══════════════════════════════════════════════════════════════════
@@ -372,9 +377,7 @@ class InferencePipeline:
 
         # ── Load MethylBERT model ──────────────────────────────────────
         self.logger.info(f"Loading MethylBERT from checkpoint: {checkpoint_path}")
-        # num_labels = len(self.labels_dict)+1 #Rejected label
-        # TODO Make it a parameter
-        num_labels = len(self.labels_dict)
+
         num_dmr_labels = dataset.num_dmrs()
 
         rrms_config = OrderedDict(
@@ -408,7 +411,7 @@ class InferencePipeline:
             seq_len=seq_len,
             custom_config=rrms_config.copy(),
             fine_tuned_model_path=checkpoint_path,
-            num_labels=num_labels,
+            num_labels=self.num_labels,
             num_dmr_labels=num_dmr_labels,
             output_dir=os.path.join(self.config["output"]["output_dir"], "tmp_trainer"),
             classifier_implementation="dmr_attention_based",
@@ -423,7 +426,7 @@ class InferencePipeline:
             batch_size=batch_size,
         )
         predictions_pd = pd.DataFrame(
-            predictions[0], columns=["prediction_" + str(x) for x in range(num_labels)]
+            predictions[0], columns=["prediction_" + str(x) for x in range(self.num_labels)]
         )
         predictions_pd["read_name"] = [x[-3] for x in self.prepared_reads_chuncked[1:]]
         predictions_pd["ncpgs_marked"] = [
@@ -533,7 +536,7 @@ class InferencePipeline:
         flavor = method_cfg["flavor"]
         self.logger.info(f"Loading {flavor} from {checkpoint_path}")
         X = self._extract_features_by_mask(
-            np.array(self.dmr_aggregated[[f"prediction_{i}_wavg" for i in range(39)]]),
+            np.array(self.dmr_aggregated[[f"prediction_{i}_wavg" for i in range(self.num_labels)]]),
             self.features_mask,
         )
         X = X.flatten()
@@ -568,7 +571,7 @@ class InferencePipeline:
         # Build the prediction matrix from DMR-aggregated data
         # prediction_matrix = self._build_prediction_matrix()
         X = self._extract_features_by_mask(
-            np.array(self.dmr_aggregated[[f"prediction_{i}_wavg" for i in range(39)]]),
+            np.array(self.dmr_aggregated[[f"prediction_{i}_wavg" for i in range(self.num_labels)]]),
             self.features_mask,
         )
         deconv_preds = deconvolver._predict_raw(X)
@@ -643,7 +646,7 @@ class InferencePipeline:
         X = torch.FloatTensor(
             self._extract_features_by_mask(
                 np.array(
-                    self.dmr_aggregated[[f"prediction_{i}_wavg" for i in range(39)]]
+                    self.dmr_aggregated[[f"prediction_{i}_wavg" for i in range(self.num_labels)]]
                 ),
                 self.features_mask,
             )
