@@ -2,12 +2,12 @@
 # Pseudo-Bulk Mixture Generation Configuration
 # ──────────────────────────────────────────────────────────────────
 # Usage:
-#   python App/main.py --task generate_pseudobulk --config App/config/pseudobulk.yaml
+#   python App/main.py --task generate_pseudobulk --config App/config/pseudobulk_cancer_detector.yaml
 
 # ── Classifier ────────────────────────────────────────────────────
 # Which classifier was used (or should be used) to predict reads
-# Supported values: methylbert | dismir | cancer_detector (future)
-classifier_type: methylbert
+# Supported values: methylbert | dismir | cancer_detector | lookup
+classifier_type: lookup
 
 # ── Input data ────────────────────────────────────────────────────
 # "raw_splits" — raw splits that still need classifier prediction
@@ -18,35 +18,32 @@ input_type: pre_predicted
 
 # Directory containing train.parquet, valid.parquet, test.parquet
 # (used when input_type == parquet)
-data_path: /home/luna.kuleuven.be/u0169940/Data/Loyfer/SoftLabelsForRRBSsplits_205files_pooled_Jaccard_hg38_mincpg_4_minlen_10_d041
-
-splits: ["train", "valid"]
-
+data_path: /home/luna.kuleuven.be/u0169940/Data/Loyfer/SoftLabelsTrainingData_205files_pooled_Jaccard_hg38_mincpg_4_minlen_10_no_data_leak
 
 # Pre-predicted pickle paths (used when input_type == pickle)
 pickle_paths:
-  train: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/RRBS/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_d041_postfiltered_min_length_50_hard_labels_minibatch_balanced/pseudobulk/train_predicted.pkl
-  valid: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/RRBS/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_d041_postfiltered_min_length_50_hard_labels_minibatch_balanced/pseudobulk/valid_predicted.pkl
-  # test: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/RRBS/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_d041_postfiltered_min_length_50_soft_labels_pooled_jakkard/pseudobulk/test_predicted.pkl
+  train: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/pseudobulk/LookupClassifier_SoftLabels_Ours/pseudobulk/train_predicted.pkl
+  valid: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/pseudobulk/LookupClassifier_SoftLabels_Ours/pseudobulk/valid_predicted.pkl
+  test: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/pseudobulk/LookupClassifier_SoftLabels_Ours/pseudobulk/test_predicted.pkl
 
 # ── Classifier checkpoint ────────────────────────────────────────
 # Required when input_type == parquet (classifier must run prediction)
-classifier_checkpoint: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/RRBS/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_d041_postfiltered_min_length_50_hard_labels_minibatch_balanced/checkpoint-400/model.safetensors
+classifier_checkpoint: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/pseudobulk/LookupClassifier_SoftLabels_Ours/lookup_fitted.joblib
 
 classifier_config:
-  foundation_model: hanyangii/methylbert_hg19_12l
-  classifier_head_implementation: dmr_attention_based
+  # foundation_model: hanyangii/methylbert_hg19_12l
+  # classifier_head_implementation: dmr_attention_based
   dmr_label_column: dmr_ctype_label
   seq_length: 150
-  batch_size: 2200
-  soft_labels: false 
+  # batch_size: 2200
+  soft_labels: true 
   # Dismir-specific (only used when classifier_type == dismir)
   # dismir_flavor: lstm
 
 # ── Labels & atlas ────────────────────────────────────────────────
 labels_dict_path: App/labels_dict.json
 atlas_path: /home/luna.kuleuven.be/u0169940/Repos/UXM_deconv/supplemental/Atlas.U25.l4.hg38.full.tsv
-num_labels: 40
+num_labels: 39
 
 # ── Split rebalancing ─────────────────────────────────────────────
 # Redistribute files across splits so every split has all
@@ -87,4 +84,4 @@ resume_from_checkpoint: false
 n_read_per_split: 475000
 
 # ── Output ────────────────────────────────────────────────────────
-output_dir: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/RRBS/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_d041_postfiltered_min_length_50_hard_labels_minibatch_balanced/pseudobulk
+output_dir: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/pseudobulk/LookupClassifier_SoftLabels_Ours//pseudobulk
