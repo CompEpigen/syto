@@ -652,9 +652,9 @@ class VectorScalingCalibratorCV(BaseEstimator, RegressorMixin):
 
     def __init__(
         self,
-        reg_lambda_list: list[float],
-        lr_list: list[float],
-        max_iter_list: list[int],
+        reg_lambda_list: list[float] = None,
+        lr_list: list[float] = None,
+        max_iter_list: list[int] = None,
         optimizer: str = "adam",
         scheduler: str = "plateau",
         patience: int = 50,
@@ -665,6 +665,12 @@ class VectorScalingCalibratorCV(BaseEstimator, RegressorMixin):
         plateau_factor: float = 0.5,
         plateau_patience: int = 10,
     ):
+        if reg_lambda_list is None:
+            reg_lambda_list = [0.0, 1e-4, 1e-3, 1e-2]
+        if lr_list is None:
+            lr_list = [1e-4, 1e-3, 1e-2]
+        if max_iter_list is None:
+            max_iter_list = [1000]
         self.reg_lambda_list = reg_lambda_list
         self.lr_list = lr_list
         self.max_iter_list = max_iter_list

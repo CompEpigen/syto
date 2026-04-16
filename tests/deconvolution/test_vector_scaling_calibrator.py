@@ -12,7 +12,6 @@ from methyldl.deconvolution.vector_scaling_calibrator import (
     VectorScalingCalibratorCV,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

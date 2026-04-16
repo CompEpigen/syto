@@ -46,9 +46,11 @@ class DMRAttentionClassifier(nn.Module):
             nn.Dropout(config.hidden_dropout_prob),
             nn.Linear(config.hidden_size // 2, self.num_labels),
         )
-            # Focal loss bias initialization
+        # Focal loss bias initialization
         if getattr(config, "focal_init", False):
-            print("focal_init has been set to True. The biases for the final classification layer will be set such that p for target classes is focal_prior_prob/n_classes")
+            print(
+                "focal_init has been set to True. The biases for the final classification layer will be set such that p for target classes is focal_prior_prob/n_classes"
+            )
             bg_index = getattr(config, "bg_class_index", 0)
             prior_prob = getattr(config, "focal_prior_prob", 0.01)
             num_fg = self.num_labels - 1

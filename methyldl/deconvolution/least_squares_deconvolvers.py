@@ -79,9 +79,7 @@ class AbstractLSDeconvolver(BaseEstimator, RegressorMixin):
             raise FileNotFoundError(f"Model file not found at {filepath}")
         model = joblib.load(filepath)
         if not isinstance(model, cls):
-            raise TypeError(
-                f"Loaded object is not of type {cls.__name__}"
-            )
+            raise TypeError(f"Loaded object is not of type {cls.__name__}")
         check_is_fitted(model)
         return model
 

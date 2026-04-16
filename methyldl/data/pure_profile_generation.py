@@ -79,9 +79,7 @@ def generate_pure_profiles(
     grouped_valid = valid_data.groupby(
         ["original_label", "dmr_ctype_label"], sort=False
     )
-    grouped_test = test_data.groupby(
-        ["original_label", "dmr_ctype_label"], sort=False
-    )
+    grouped_test = test_data.groupby(["original_label", "dmr_ctype_label"], sort=False)
 
     target_columns = _build_target_columns(num_input_labels)
 
@@ -107,9 +105,7 @@ def generate_pure_profiles(
             )
             pure_profiles.append((proportions_full, subs, uxm_data))
         except Exception as e:
-            logger.warning(
-                f"Failed to generate pure profile for cell type {i}: {e}"
-            )
+            logger.warning(f"Failed to generate pure profile for cell type {i}: {e}")
             pure_profiles.append(None)
 
     return pure_profiles

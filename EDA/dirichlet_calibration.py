@@ -242,7 +242,12 @@ class DirichletCalibrator(BaseEstimator, RegressorMixin):
     ):
         assert method in {"full", "diagonal", "temperature"}, "Unsupported method"
         assert optimizer in {"adam", "sgd"}, "Unsupported optimizer"
-        assert scheduler in {"constant", "linear", "cosine", "plateau"}, "Unsupported scheduler"
+        assert scheduler in {
+            "constant",
+            "linear",
+            "cosine",
+            "plateau",
+        }, "Unsupported scheduler"
         assert normalization in {
             "softmax",
             "sparsemax",
@@ -413,7 +418,9 @@ class DirichletCalibrator(BaseEstimator, RegressorMixin):
             loss = -torch.mean(torch.sum(targets * torch.log(probs), dim=1))
         else:
             p_star = model.activate(logits)
-            loss = self._fenchel_young_loss(logits, p_star, targets, model.normalization)
+            loss = self._fenchel_young_loss(
+                logits, p_star, targets, model.normalization
+            )
 
         # --- Regularisation ---
         if with_regularization:
@@ -622,7 +629,9 @@ class DirichletCalibrator(BaseEstimator, RegressorMixin):
                 batch_tgt = targets_all[idx]
 
                 optim.zero_grad()
-                loss = self._compute_loss(model, batch_input, batch_tgt, with_regularization=True)
+                loss = self._compute_loss(
+                    model, batch_input, batch_tgt, with_regularization=True
+                )
                 loss.backward()
                 optim.step()
                 epoch_loss += loss.item()

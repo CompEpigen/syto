@@ -50,7 +50,10 @@ from methyldl.deconvolution.uxm import (
     rearange_uxm_deconvolution_results,
     load_atlas,
 )
-from methyldl.deconvolution.least_squares_deconvolvers import PSLSDeconvolver, NNLSDeconvolver
+from methyldl.deconvolution.least_squares_deconvolvers import (
+    PSLSDeconvolver,
+    NNLSDeconvolver,
+)
 
 from methyldl.deconvolution.xgbdeconvolver import (
     XGBoostDeconvolver,
@@ -491,8 +494,8 @@ class InferencePipeline:
                 )
 
         return results
-    
-    def _run_ls_deconvolution(self, method_cfg: Dict[str,Any]) -> np.ndarray:
+
+    def _run_ls_deconvolution(self, method_cfg: Dict[str, Any]) -> np.ndarray:
         """
         Run LS based deconvolution on the aggregated predictions selected feature matrices
         """
@@ -506,20 +509,21 @@ class InferencePipeline:
         X = X.flatten()
         if "nnls" in flavor:
             deconvolver = NNLSDeconvolver.load(checkpoint_path)
-            proportions,_,_ = deconvolver.predict_single_sample(X)
+            proportions, _, _ = deconvolver.predict_single_sample(X)
         elif "psls" in flavor:
             deconvolver = PSLSDeconvolver.load(checkpoint_path)
             proportions = deconvolver.predict_single_sample(X)
         else:
-            raise ValueError("LS fabily of deconvolvers supports only two flavors: nnls and psls")
-        
+            raise ValueError(
+                "LS fabily of deconvolvers supports only two flavors: nnls and psls"
+            )
+
         if method_cfg["use_callibration"]:
             calibrator = LinearCalibrator()
             calibrator.load_calibration_parameters(method_cfg["callibrator_path"])
-            proportions = calibrator.predict(np.expand_dims(proportions,0))
+            proportions = calibrator.predict(np.expand_dims(proportions, 0))
 
-
-        proportions = np.round(proportions,4)
+        proportions = np.round(proportions, 4)
         self.logger.debug(f"{flavor} proportions: {proportions}")
 
         return proportions

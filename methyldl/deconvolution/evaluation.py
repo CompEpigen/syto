@@ -9,7 +9,6 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-
 # def compute_deconvolution_metrics(
 #     pred: Union[torch.Tensor, np.ndarray],
 #     target: Union[torch.Tensor, np.ndarray],
@@ -66,7 +65,9 @@ def compute_deconvolution_metrics(
         pred = torch.from_numpy(pred)
     if isinstance(target, np.ndarray):
         target = torch.from_numpy(target)
-    assert pred.shape == target.shape, "pred and target must have the same shape"
+    assert (
+        pred.shape == target.shape
+    ), f"pred and target must have the same shape but got {pred.shape=} vs {target.shape=}"
     if pred.ndim == 1:
         pred = pred.unsqueeze(0)
         target = target.unsqueeze(0)

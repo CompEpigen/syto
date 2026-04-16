@@ -66,42 +66,33 @@ def rebalance_splits(
     test_file_set = _informative_files(test_data)
 
     # Combine all data for redistribution
-    all_data = pd.concat(
-        [train_data, valid_data, test_data], ignore_index=True
-    )
+    all_data = pd.concat([train_data, valid_data, test_data], ignore_index=True)
 
     # Files belonging to manually flagged labels
     manual_common_files = set(
-        all_data.loc[
-            all_data[label_col].isin(manual_common_labels), file_col
-        ].unique()
+        all_data.loc[all_data[label_col].isin(manual_common_labels), file_col].unique()
     )
 
     # Files exclusive to each split
     train_files = (
-        train_file_set
-        .difference(valid_file_set)
+        train_file_set.difference(valid_file_set)
         .difference(test_file_set)
         .difference(manual_common_files)
     )
     valid_files = (
-        valid_file_set
-        .difference(train_file_set)
+        valid_file_set.difference(train_file_set)
         .difference(test_file_set)
         .difference(manual_common_files)
     )
     test_files = (
-        test_file_set
-        .difference(train_file_set)
+        test_file_set.difference(train_file_set)
         .difference(valid_file_set)
         .difference(manual_common_files)
     )
 
     # Files that appear in more than one split, plus manual ones
     common_files = (
-        train_file_set
-        .intersection(valid_file_set)
-        .intersection(test_file_set)
+        train_file_set.intersection(valid_file_set).intersection(test_file_set)
     ).union(manual_common_files)
 
     # Build exclusive-split subsets
@@ -126,14 +117,8 @@ def rebalance_splits(
             random_state=random_state,
         )
 
-        train_split = pd.concat(
-            [train_split, common_train], ignore_index=True
-        )
-        valid_split = pd.concat(
-            [valid_split, common_valid], ignore_index=True
-        )
-        test_split = pd.concat(
-            [test_split, common_test], ignore_index=True
-        )
+        train_split = pd.concat([train_split, common_train], ignore_index=True)
+        valid_split = pd.concat([valid_split, common_valid], ignore_index=True)
+        test_split = pd.concat([test_split, common_test], ignore_index=True)
 
     return train_split, valid_split, test_split

@@ -105,15 +105,15 @@ def compute_feature_mask(
         Binary mask with the same shape as *ratios*.
     """
     mask = (ratios > cutoff).astype(int)
-    
+
     if guarantee_diagonal_selection:
         np.fill_diagonal(mask, 1)
-        
+
     if guarantee_columns_selection:
         for c in guarantee_columns_selection:
             if 0 <= c < mask.shape[1]:
                 mask[:, c] = 1
-                
+
     return mask
 
 
@@ -149,9 +149,7 @@ def apply_feature_mask(
             results.append(compressed)
         return np.array(results)
     else:
-        raise ValueError(
-            f"Expected 2-D or 3-D matrix, got {matrix.ndim}-D"
-        )
+        raise ValueError(f"Expected 2-D or 3-D matrix, got {matrix.ndim}-D")
 
 
 def apply_mask_to_ios(
@@ -255,13 +253,20 @@ def generate_feature_selection_plot(
         Path to the saved plot.
     """
     import matplotlib
+
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     import seaborn as sns
 
-    pure_train = extract_pure_feature_matrix(pure_profiles, num_input_labels, num_output_labels, split_idx=0)
-    pure_valid = extract_pure_feature_matrix(pure_profiles, num_input_labels, num_output_labels, split_idx=1)
-    pure_test = extract_pure_feature_matrix(pure_profiles, num_input_labels, num_output_labels, split_idx=2)
+    pure_train = extract_pure_feature_matrix(
+        pure_profiles, num_input_labels, num_output_labels, split_idx=0
+    )
+    pure_valid = extract_pure_feature_matrix(
+        pure_profiles, num_input_labels, num_output_labels, split_idx=1
+    )
+    pure_test = extract_pure_feature_matrix(
+        pure_profiles, num_input_labels, num_output_labels, split_idx=2
+    )
 
     train_ratios = compute_feature_ratios(pure_train)
     valid_ratios = compute_feature_ratios(pure_valid)
@@ -280,7 +285,10 @@ def generate_feature_selection_plot(
     # Maximal binary mask across all splits (for reporting)
     maximal_ratios = np.array([train_ratios, valid_ratios, test_ratios]).max(axis=0)
     maximal_bin = compute_feature_mask(
-        maximal_ratios, cutoff, guarantee_diagonal_selection, guarantee_columns_selection
+        maximal_ratios,
+        cutoff,
+        guarantee_diagonal_selection,
+        guarantee_columns_selection,
     )
 
     # Difference mask: where not all three agree

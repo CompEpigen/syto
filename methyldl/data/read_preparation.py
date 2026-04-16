@@ -87,9 +87,7 @@ def prepare_splits_for_pseudobulk(
 
         # CpG count
         if "methylated_CpGs" in df.columns and "unmethylated_CpGs" in df.columns:
-            df["total_marked_cpgs"] = (
-                df["methylated_CpGs"] + df["unmethylated_CpGs"]
-            )
+            df["total_marked_cpgs"] = df["methylated_CpGs"] + df["unmethylated_CpGs"]
 
         # Direction placeholder
         df["direction"] = "U"
@@ -106,9 +104,7 @@ def prepare_splits_for_pseudobulk(
 
     if generate_uxm_inputs:
         if atlas_path is None:
-            raise ValueError(
-                "atlas_path is required when generate_uxm_inputs=True"
-            )
+            raise ValueError("atlas_path is required when generate_uxm_inputs=True")
         if cell_type_match_dict is None:
             raise ValueError(
                 "cell_type_match_dict is required when generate_uxm_inputs=True"

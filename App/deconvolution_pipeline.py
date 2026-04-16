@@ -114,9 +114,7 @@ class DeconvolutionFittingPipeline:
             )
             with open(pure_profiles_path, "rb") as f:
                 pure_profiles = pickle.load(f)
-            self.logger.info(
-                f"  Loaded {len(pure_profiles)} pure profiles"
-            )
+            self.logger.info(f"  Loaded {len(pure_profiles)} pure profiles")
             return pure_profiles
 
         self.logger.info("Stage 1: Generating purified cell-type profiles ...")
@@ -150,13 +148,9 @@ class DeconvolutionFittingPipeline:
     #  Stage 2: Feature selection
     # ═══════════════════════════════════════════════════════════════
 
-    def _stage2_feature_selection(
-        self, pure_profiles: list
-    ) -> Dict[str, np.ndarray]:
+    def _stage2_feature_selection(self, pure_profiles: list) -> Dict[str, np.ndarray]:
         """Compute feature mask and apply to full IO matrices."""
-        self.logger.info(
-            f"Stage 2: Feature selection with cutoff={self.cutoff} ..."
-        )
+        self.logger.info(f"Stage 2: Feature selection with cutoff={self.cutoff} ...")
 
         # Compute mask from validation split
         pure_valid = extract_pure_feature_matrix(
@@ -173,8 +167,7 @@ class DeconvolutionFittingPipeline:
         n_selected = int(mask.sum())
         total = self.num_output_labels * self.num_input_labels
         self.logger.info(
-            f"  Selected {n_selected}/{total} features "
-            f"(cutoff={self.cutoff})"
+            f"  Selected {n_selected}/{total} features " f"(cutoff={self.cutoff})"
         )
 
         # Save mask
@@ -200,8 +193,7 @@ class DeconvolutionFittingPipeline:
         # Optional plot
         if self.config.get("generate_feature_selection_plot", True):
             master_names = [
-                self.labels_dict.get(i, str(i))
-                for i in range(self.num_output_labels)
+                self.labels_dict.get(i, str(i)) for i in range(self.num_output_labels)
             ]
             plot_path = os.path.join(
                 self.output_dir,
@@ -248,25 +240,40 @@ class DeconvolutionFittingPipeline:
             try:
                 if name == "xgb":
                     model, metrics = self._fit_xgb(
-                        deconv_cfg, features_train, proportions,
-                        features_valid, proportions, features_test, proportions,
+                        deconv_cfg,
+                        features_train,
+                        proportions,
+                        features_valid,
+                        proportions,
+                        features_test,
+                        proportions,
                     )
                 elif name in ("swn", "mlp"):
                     model, metrics = self._fit_nn(
-                        name, deconv_cfg, features_train, proportions,
-                        features_valid, proportions, features_test, proportions,
+                        name,
+                        deconv_cfg,
+                        features_train,
+                        proportions,
+                        features_valid,
+                        proportions,
+                        features_test,
+                        proportions,
                     )
                 elif name in ("nnls", "psls"):
                     model, metrics = self._fit_ls(
-                        name, deconv_cfg, pure_profiles, mask,
-                        features_train, proportions,
-                        features_valid, proportions,
-                        features_test, proportions,
+                        name,
+                        deconv_cfg,
+                        pure_profiles,
+                        mask,
+                        features_train,
+                        proportions,
+                        features_valid,
+                        proportions,
+                        features_test,
+                        proportions,
                     )
                 else:
-                    self.logger.warning(
-                        f"  Unknown deconvolver '{name}', skipping"
-                    )
+                    self.logger.warning(f"  Unknown deconvolver '{name}', skipping")
                     continue
 
                 results[name] = {"metrics": metrics}
@@ -275,18 +282,18 @@ class DeconvolutionFittingPipeline:
                 if deconv_cfg.get("calibrate", False):
                     self.logger.info(f"  Fitting linear calibrator for {name}")
                     calib_metrics = self._fit_calibrator(
-                        name, model, deconv_cfg,
-                        features_valid, proportions,
-                        features_test, proportions,
+                        name,
+                        model,
+                        deconv_cfg,
+                        features_valid,
+                        proportions,
+                        features_test,
+                        proportions,
                     )
-                    results[f"{name}_calibrated"] = {
-                        "metrics": calib_metrics
-                    }
+                    results[f"{name}_calibrated"] = {"metrics": calib_metrics}
 
             except Exception as e:
-                self.logger.error(
-                    f"  Failed to fit '{name}': {e}", exc_info=True
-                )
+                self.logger.error(f"  Failed to fit '{name}': {e}", exc_info=True)
 
         # Log summary
         self._log_summary(results)
@@ -312,7 +319,7 @@ class DeconvolutionFittingPipeline:
         xgb_config = XGBDeconvolverConfig(**params)
 
         n_features = X_train.shape[1]
-        
+
         model = XGBoostDeconvolver(
             config=xgb_config,
             output_transform="clip_normalize",
@@ -324,8 +331,10 @@ class DeconvolutionFittingPipeline:
         )
 
         model.fit(
-            X_train, y_train,
-            X_val, y_val,
+            X_train,
+            y_train,
+            X_val,
+            y_val,
             verbose=1,
         )
 
@@ -369,18 +378,22 @@ class DeconvolutionFittingPipeline:
             layers = []
             in_dim = n_input_features
             for h_dim in hidden_dims:
-                layers.extend([
-                    nn.Linear(in_dim, h_dim),
-                    nn.GELU(),
-                    nn.Dropout(params.get("dropout", 0.2)),
-                ])
+                layers.extend(
+                    [
+                        nn.Linear(in_dim, h_dim),
+                        nn.GELU(),
+                        nn.Dropout(params.get("dropout", 0.2)),
+                    ]
+                )
                 in_dim = h_dim
             # Final extra hidden layer matching the input
-            layers.extend([
-                nn.Linear(in_dim, n_input_features),
-                nn.GELU(),
-                nn.Dropout(params.get("final_dropout", 0.1)),
-            ])
+            layers.extend(
+                [
+                    nn.Linear(in_dim, n_input_features),
+                    nn.GELU(),
+                    nn.Dropout(params.get("final_dropout", 0.1)),
+                ]
+            )
             layers.append(nn.Linear(n_input_features, n_cell_types))
             layers.append(nn.Softmax(dim=-1))
             model = nn.Sequential(*layers)
@@ -419,12 +432,8 @@ class DeconvolutionFittingPipeline:
             lr=params.get("lr", 1e-3),
             weight_decay=params.get("weight_decay", 1e-4),
             device=device,
-            early_stopping_metric=params.get(
-                "early_stopping_metric", "val_mae"
-            ),
-            early_stopping_patience=params.get(
-                "early_stopping_patience", 15
-            ),
+            early_stopping_metric=params.get("early_stopping_metric", "val_mae"),
+            early_stopping_patience=params.get("early_stopping_patience", 15),
             scheduler_type=params.get("scheduler_type", "plateau"),
             verbose=params.get("verbose", 1),
         )
@@ -438,16 +447,12 @@ class DeconvolutionFittingPipeline:
         self.logger.info(f"    {name.upper()} test MAE: {metrics['mae']:.6f}")
 
         # Save
-        save_path = os.path.join(
-            self.output_dir, f"{name}_best_deconvolver.pt"
-        )
+        save_path = os.path.join(self.output_dir, f"{name}_best_deconvolver.pt")
         torch.save(trained_model.state_dict(), save_path)
         self.logger.info(f"    Saved {name.upper()} model to {save_path}")
 
         # Also save architecture metadata for later loading
-        meta_path = os.path.join(
-            self.output_dir, f"{name}_architecture_meta.json"
-        )
+        meta_path = os.path.join(self.output_dir, f"{name}_architecture_meta.json")
         meta = {
             "name": name,
             "n_input_features": n_input_features,
@@ -513,14 +518,10 @@ class DeconvolutionFittingPipeline:
             test_pred = model.predict(X_test, n_workers=n_workers)
 
         metrics = compute_deconvolution_metrics(test_pred, y_test)
-        self.logger.info(
-            f"    {name.upper()} test MAE: {metrics['mae']:.6f}"
-        )
+        self.logger.info(f"    {name.upper()} test MAE: {metrics['mae']:.6f}")
 
         # Save
-        save_path = os.path.join(
-            self.output_dir, f"{name}_deconvolver.joblib"
-        )
+        save_path = os.path.join(self.output_dir, f"{name}_deconvolver.joblib")
         model.save(save_path)
         self.logger.info(f"    Saved {name.upper()} model to {save_path}")
 
@@ -548,24 +549,19 @@ class DeconvolutionFittingPipeline:
         4. Evaluate and save.
         """
         # Get validation predictions
-        val_pred = self._predict_with_model(
-            deconv_name, model, X_val, cfg
-        )
+        val_pred = self._predict_with_model(deconv_name, model, X_val, cfg)
 
         # Fit calibrator
         calibrator = LinearCalibrator()
         calibrator.fit(val_pred, y_val)
 
         # Get test predictions and calibrate
-        test_pred = self._predict_with_model(
-            deconv_name, model, X_test, cfg
-        )
+        test_pred = self._predict_with_model(deconv_name, model, X_test, cfg)
         calibrated_pred, _ = calibrator.predict(test_pred)
 
         metrics = compute_deconvolution_metrics(calibrated_pred, y_test)
         self.logger.info(
-            f"    {deconv_name}_calibrated test MAE: "
-            f"{metrics['mae']:.6f}"
+            f"    {deconv_name}_calibrated test MAE: " f"{metrics['mae']:.6f}"
         )
 
         # Save calibrator
