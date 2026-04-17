@@ -297,6 +297,7 @@ class TestNNLSDeconvolver(unittest.TestCase, LeastSquaresDeconvolverAssertions):
             with self.assertRaises(NotFittedError):
                 NNLSDeconvolver.load(path)
 
+
 class TestPSLSDeconvolverCVXPY(unittest.TestCase, LeastSquaresDeconvolverAssertions):
     """Tests covering the CVXPY-backed PSLS execution paths."""
 

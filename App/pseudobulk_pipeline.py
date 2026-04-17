@@ -61,12 +61,8 @@ class PseudoBulkPipeline:
         self.ios_dir = os.path.join(self.output_dir, "ios_deconvolution")
         os.makedirs(self.ios_dir, exist_ok=True)
 
-        self.ios_base_path = os.path.join(
-            self.ios_dir, "ios_deconvolution_data.pkl"
-        )
-        self.consolidated_path = os.path.join(
-            self.output_dir, "ios_full_matrices.npz"
-        )
+        self.ios_base_path = os.path.join(self.ios_dir, "ios_deconvolution_data.pkl")
+        self.consolidated_path = os.path.join(self.output_dir, "ios_full_matrices.npz")
 
     # ═══════════════════════════════════════════════════════════════
     #  Public API
@@ -87,7 +83,7 @@ class PseudoBulkPipeline:
             train, valid, test = self._load_splits()
             self.logger.info(
                 f"  train={len(train)}, valid={len(valid)}, test={len(test)} reads"
-        )
+            )
 
             # ── Stage 1b: Optional rebalancing ────────────────────────
             if self.config.get("rebalance_splits", False):
@@ -123,7 +119,9 @@ class PseudoBulkPipeline:
                 f"  After preparation: train={len(train)}, valid={len(valid)}, "
                 f"test={len(test)}"
             )
-            with open(os.path.join(self.output_dir, "uxm_prepared_reads.pkl"), "wb") as f:
+            with open(
+                os.path.join(self.output_dir, "uxm_prepared_reads.pkl"), "wb"
+            ) as f:
                 pickle.dump((train, valid, test), f)
         elif self.config["input_type"] == "uxm_prepared":
             self.logger.info("Skipping Stage 1 and 2: Loading uxm prepared reads ...")
@@ -142,7 +140,7 @@ class PseudoBulkPipeline:
             train, valid, test = self._load_splits()
             self.logger.info(
                 f"  train={len(train)}, valid={len(valid)}, test={len(test)} reads"
-        )
+            )
 
         # ── Stage 3: Classifier predictions (if needed) ───────────
         if self.config["input_type"] in ["raw_splits", "uxm_prepared"]:
@@ -171,9 +169,7 @@ class PseudoBulkPipeline:
             with open(os.path.join(self.output_dir, "predicted_reads.pkl"), "wb") as f:
                 pickle.dump((train, valid, test), f)
         else:
-            self.logger.info(
-                "Stage 3: Skipped (input already has predictions)"
-            )
+            self.logger.info("Stage 3: Skipped (input already has predictions)")
 
         # ── Stage 4: Generate IO examples ─────────────────────────
         self.logger.info("Stage 4: Generating pseudo-bulk IO examples ...")
@@ -269,8 +265,7 @@ class PseudoBulkPipeline:
 
         else:
             raise ValueError(
-                f"Unknown input_type: '{input_type}'. "
-                "Must be 'parquet' or 'pickle'."
+                f"Unknown input_type: '{input_type}'. " "Must be 'parquet' or 'pickle'."
             )
 
         return train, valid, test
@@ -291,9 +286,7 @@ class PseudoBulkPipeline:
             classifier_head_implementation=classifier_cfg.get(
                 "classifier_head_implementation", "dmr_attention_based"
             ),
-            dmr_label_column=classifier_cfg.get(
-                "dmr_label_column", "dmr_ctype_label"
-            ),
+            dmr_label_column=classifier_cfg.get("dmr_label_column", "dmr_ctype_label"),
             soft_labels=classifier_cfg.get("soft_labels", True),
             dismir_flavor=classifier_cfg.get("dismir_flavor", "lstm"),
             batch_size=classifier_cfg.get("batch_size", 2200),

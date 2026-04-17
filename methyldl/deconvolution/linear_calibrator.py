@@ -1,5 +1,7 @@
 """Linear post-processing utilities for deconvolution predictions."""
 
+from typing import Union
+
 import numpy as np
 from scipy.stats import linregress
 from sklearn.base import BaseEstimator, RegressorMixin
@@ -12,6 +14,12 @@ class LinearCalibrator(BaseEstimator, RegressorMixin):
     on the validation set, and then we use the fitted slopes and intercepts to adjust
     the predictions on the test set.
     """
+
+    _VALID_NORM_METHODS = (
+        "clip01-normalize",
+        "clip0-normalize",
+        "simplex-projection",
+    )
 
     def __init__(self):
         """Initialize calibration statistics for each cell type."""
@@ -56,20 +64,40 @@ class LinearCalibrator(BaseEstimator, RegressorMixin):
         """Report whether scikit-learn can treat this estimator as fitted."""
         return self.slopes is not None and self.intercepts is not None
 
-    def predict(self, X: np.ndarray) -> np.ndarray:
+    @staticmethod
+    def _project_onto_simplex(v):
+        """Project each row of v onto the probability simplex (Duchi et al., 2008)."""
+        n, d = v.shape
+        u = np.sort(v, axis=1)[:, ::-1]
+        cssv = np.cumsum(u, axis=1)
+        j = np.arange(1, d + 1)
+        cond = u * j > (cssv - 1)
+        rho = d - 1 - np.argmax(cond[:, ::-1], axis=1)
+        theta = (cssv[np.arange(n), rho] - 1) / (rho + 1.0)
+        return np.maximum(v - theta[:, np.newaxis], 0)
+
+    def predict(
+        self,
+        X: np.ndarray,
+        norm_method="clip01-normalize",
+    ) -> Union[np.ndarray, tuple[np.ndarray, np.ndarray]]:
         """Apply the learned calibration and return corrected predictions.
 
         Args:
             X: Raw predicted proportions with shape ``(n_samples, n_cell_types)``.
+            norm_method: One of ``"clip01-normalize"``, ``"clip0-normalize"``, ``"simplex-projection"``.
 
         Returns:
-            A tuple containing the clipped and row-normalized predictions, followed by
-            the raw affine-adjusted predictions before clipping.
+            A tuple containing the normalized predictions, followed by
+            the raw affine-adjusted predictions before normalization.
         """
         check_is_fitted(self)
         assert X.shape[1] == len(
             self.slopes
         ), "Number of cell types in predictions must match number of slopes/intercepts"
+        assert (
+            norm_method in self._VALID_NORM_METHODS
+        ), f"norm_method must be one of {self._VALID_NORM_METHODS}"
 
         adjusted_predictions = np.zeros_like(X)
         for cell_type_idx in range(self.n_cell_types):
@@ -79,13 +107,22 @@ class LinearCalibrator(BaseEstimator, RegressorMixin):
             )
 
         # Linear correction can push some values slightly outside the simplex.
-        # We first enforce valid proportion bounds, then renormalize each sample
-        # so the calibrated proportions still sum to one.
-        clipped_adjusted_predictions = np.clip(adjusted_predictions, 0, 1)
-        clipped_norm_adjusted_predictions = clipped_adjusted_predictions / np.clip(
-            clipped_adjusted_predictions.sum(axis=1, keepdims=True), 1e-8, None
-        )
-        return clipped_norm_adjusted_predictions, adjusted_predictions
+        # Project back onto the simplex using the chosen method.
+        final_predictions = None
+        if norm_method == "clip01-normalize":
+            clipped = np.clip(adjusted_predictions, 0, 1)
+            final_predictions = clipped / np.clip(
+                clipped.sum(axis=1, keepdims=True), 1e-8, None
+            )
+        elif norm_method == "clip0-normalize":
+            clipped = np.clip(adjusted_predictions, 0, None)
+            final_predictions = clipped / np.clip(
+                clipped.sum(axis=1, keepdims=True), 1e-8, None
+            )
+        elif norm_method == "simplex-projection":
+            final_predictions = self._project_onto_simplex(adjusted_predictions)
+
+        return final_predictions, adjusted_predictions
 
     def save_calibration_parameters(self, filepath: str):
         """Save the fitted calibration parameters to a file."""

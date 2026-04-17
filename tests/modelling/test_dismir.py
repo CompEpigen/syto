@@ -205,13 +205,14 @@ class TestDismirPredict(DismirTestBase):
 
 class TestDismirTraining(DismirTestBase):
     """Test training functionality of Dismir model."""
+
     @parameterized.expand(
         [
-            ("dmr_attention_based",), 
-            ("vanilla",),  
+            ("dmr_attention_based",),
+            ("vanilla",),
         ]
     )
-    def test_fixed_length_training(self,classifier_type):
+    def test_fixed_length_training(self, classifier_type):
         """Test fixed-length training mode."""
         model = Dismir(
             max_sequence_length=128,
@@ -221,7 +222,7 @@ class TestDismirTraining(DismirTestBase):
             device=torch.device("cuda"),
             classifier_type=classifier_type,
             num_dmr_labels=100,
-            dmr_label_col = "dmr_label"
+            dmr_label_col="dmr_label",
         )
 
         # Train for a few epochs

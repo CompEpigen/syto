@@ -59,7 +59,24 @@ class TestComputeDeconvolutionMetricsNp(unittest.TestCase):
         result = compute_deconvolution_metrics(pred=pred, target=target)
         expected = _manual_numpy_metrics(pred=pred, target=target)
 
-        self.assertEqual(set(result), {"mae", "mse", "kl", "max_error", "cosine_sim"})
+        for key in (
+            "mae",
+            "mse",
+            "kl",
+            "max_error",
+            "cosine_sim",
+            "overall_r2",
+            "loa_lower",
+            "loa_upper",
+            "loa_width",
+            "worst_class_idx",
+            "worst_class_name",
+            "worst_class_loa_lower",
+            "worst_class_loa_upper",
+            "worst_class_loa_width",
+            "per_class_loa",
+        ):
+            self.assertIn(key, result)
         for key, expected_value in expected.items():
             self.assertAlmostEqual(result[key], expected_value, places=5)
 
@@ -107,8 +124,10 @@ class TestComputeDeconvolutionMetricsTorch(unittest.TestCase):
 
         result = compute_deconvolution_metrics(pred=pred, target=target)
 
-        for value in result.values():
-            self.assertIsInstance(value, float)
+        for key, value in result.items():
+            if key in ("per_class_loa", "worst_class_idx", "worst_class_name"):
+                continue
+            self.assertIsInstance(value, float, msg=f"{key} is not float")
 
     def test_raises_assertion_error_for_shape_mismatch(self):
         """Mismatched tensor shapes should fail before metric computation starts."""

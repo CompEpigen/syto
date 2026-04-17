@@ -57,6 +57,7 @@ class TestLinearCalibrator(unittest.TestCase):
         )
         calibrator = LinearCalibrator()
 
+        # pylint: disable-next=assignment-from-no-return
         fit_result = calibrator.fit(X, y)
 
         self.assertIsNone(fit_result)
@@ -119,7 +120,7 @@ class TestLinearCalibrator(unittest.TestCase):
             calibrator.predict(np.array([[0.2, 0.3, 0.5]], dtype=float))
 
     def test_predict_applies_affine_adjustment_and_row_normalization(self):
-        """predict should return raw affine outputs plus normalized calibrated rows."""
+        """predict should return raw affine outputs plus clip01-normalized calibrated rows."""
         calibrator = self._make_fitted_calibrator(
             slopes=[2.0, 0.5],
             intercepts=[0.1, 0.2],
@@ -132,7 +133,7 @@ class TestLinearCalibrator(unittest.TestCase):
             dtype=float,
         )
 
-        normalized, adjusted = calibrator.predict(X)
+        normalized, adjusted = calibrator.predict(X, norm_method="clip01-normalize")
 
         expected_adjusted = np.array(
             [
@@ -153,8 +154,8 @@ class TestLinearCalibrator(unittest.TestCase):
         np.testing.assert_allclose(normalized, expected_normalized, atol=1e-10)
         np.testing.assert_allclose(normalized.sum(axis=1), np.ones(X.shape[0]))
 
-    def test_predict_clips_out_of_bounds_values_and_preserves_zero_rows(self):
-        """predict should clip to [0, 1] and avoid dividing by zero on empty rows."""
+    def test_predict_clip01_clips_out_of_bounds_values_and_preserves_zero_rows(self):
+        """clip01-normalize should clip to [0, 1] and avoid dividing by zero on empty rows."""
         calibrator = self._make_fitted_calibrator(
             slopes=[2.0, -3.0],
             intercepts=[0.8, -0.1],
@@ -167,7 +168,7 @@ class TestLinearCalibrator(unittest.TestCase):
             dtype=float,
         )
 
-        normalized, adjusted = calibrator.predict(X)
+        normalized, adjusted = calibrator.predict(X, norm_method="clip01-normalize")
 
         expected_adjusted = np.array(
             [
@@ -193,11 +194,197 @@ class TestLinearCalibrator(unittest.TestCase):
         )
 
         zero_row_normalized, zero_row_adjusted = zero_row_calibrator.predict(
-            np.array([[0.1, 0.2]], dtype=float)
+            np.array([[0.1, 0.2]], dtype=float), norm_method="clip01-normalize"
         )
 
         np.testing.assert_allclose(zero_row_adjusted, np.array([[-0.9, -0.8]]))
         np.testing.assert_allclose(zero_row_normalized, np.zeros((1, 2)))
+
+    def test_predict_rejects_invalid_norm_method(self):
+        """predict should reject an unrecognised normalisation method."""
+        calibrator = self._make_fitted_calibrator(
+            slopes=[1.0, 1.0],
+            intercepts=[0.0, 0.0],
+        )
+
+        with self.assertRaisesRegex(AssertionError, "norm_method must be one of"):
+            calibrator.predict(
+                np.array([[0.5, 0.5]], dtype=float), norm_method="invalid"
+            )
+
+    def test_predict_clip0_normalize_preserves_values_above_one(self):
+        """clip0-normalize should keep values > 1 and only clip negatives to zero."""
+        calibrator = self._make_fitted_calibrator(
+            slopes=[2.0, 0.5],
+            intercepts=[0.1, 0.2],
+        )
+        X = np.array(
+            [
+                [0.20, 0.40],
+                [0.50, 0.20],
+            ],
+            dtype=float,
+        )
+
+        normalized, adjusted = calibrator.predict(X, norm_method="clip0-normalize")
+
+        expected_adjusted = np.array(
+            [
+                [0.50, 0.40],
+                [1.10, 0.30],
+            ],
+            dtype=float,
+        )
+        # clip0 keeps 1.1 as-is (only clips negatives), so row 2 sums to 1.4
+        expected_normalized = np.array(
+            [
+                [5.0 / 9.0, 4.0 / 9.0],
+                [11.0 / 14.0, 3.0 / 14.0],
+            ],
+            dtype=float,
+        )
+
+        np.testing.assert_allclose(adjusted, expected_adjusted, atol=1e-10)
+        np.testing.assert_allclose(normalized, expected_normalized, atol=1e-10)
+        np.testing.assert_allclose(normalized.sum(axis=1), np.ones(X.shape[0]))
+
+    def test_predict_clip0_normalize_clips_negatives_and_preserves_zero_rows(self):
+        """clip0-normalize should clip negatives to 0 and survive all-zero rows."""
+        calibrator = self._make_fitted_calibrator(
+            slopes=[2.0, -3.0],
+            intercepts=[0.8, -0.1],
+        )
+        X = np.array(
+            [
+                [0.30, 0.20],
+                [0.00, 1.00],
+            ],
+            dtype=float,
+        )
+
+        normalized, adjusted = calibrator.predict(X, norm_method="clip0-normalize")
+
+        expected_adjusted = np.array(
+            [
+                [1.40, -0.70],
+                [0.80, -3.10],
+            ],
+            dtype=float,
+        )
+        # clip0 keeps 1.4 as-is, clips -0.7 to 0 -> [1.4, 0.0] -> [1.0, 0.0]
+        expected_normalized = np.array(
+            [
+                [1.0, 0.0],
+                [1.0, 0.0],
+            ],
+            dtype=float,
+        )
+
+        np.testing.assert_allclose(adjusted, expected_adjusted, atol=1e-10)
+        np.testing.assert_allclose(normalized, expected_normalized, atol=1e-10)
+
+        zero_row_calibrator = self._make_fitted_calibrator(
+            slopes=[1.0, 1.0],
+            intercepts=[-1.0, -1.0],
+        )
+
+        zero_row_normalized, zero_row_adjusted = zero_row_calibrator.predict(
+            np.array([[0.1, 0.2]], dtype=float), norm_method="clip0-normalize"
+        )
+
+        np.testing.assert_allclose(zero_row_adjusted, np.array([[-0.9, -0.8]]))
+        np.testing.assert_allclose(zero_row_normalized, np.zeros((1, 2)))
+
+    def test_predict_simplex_projection_projects_onto_simplex(self):
+        """simplex-projection should produce rows that sum to 1 and are non-negative."""
+        calibrator = self._make_fitted_calibrator(
+            slopes=[2.0, 0.5],
+            intercepts=[0.1, 0.2],
+        )
+        X = np.array(
+            [
+                [0.20, 0.40],
+                [0.50, 0.20],
+            ],
+            dtype=float,
+        )
+
+        normalized, adjusted = calibrator.predict(X, norm_method="simplex-projection")
+
+        expected_adjusted = np.array(
+            [
+                [0.50, 0.40],
+                [1.10, 0.30],
+            ],
+            dtype=float,
+        )
+        # Row 1: sum 0.9 < 1, add 0.05 to each -> [0.55, 0.45]
+        # Row 2: sum 1.4 > 1, subtract 0.2 from each -> [0.9, 0.1]
+        expected_normalized = np.array(
+            [
+                [0.55, 0.45],
+                [0.90, 0.10],
+            ],
+            dtype=float,
+        )
+
+        np.testing.assert_allclose(adjusted, expected_adjusted, atol=1e-10)
+        np.testing.assert_allclose(normalized, expected_normalized, atol=1e-10)
+        np.testing.assert_allclose(normalized.sum(axis=1), np.ones(X.shape[0]))
+
+    def test_predict_simplex_projection_handles_negative_adjusted_values(self):
+        """simplex-projection should zero-out deeply negative components and still sum to 1."""
+        calibrator = self._make_fitted_calibrator(
+            slopes=[2.0, -3.0],
+            intercepts=[0.8, -0.1],
+        )
+        X = np.array(
+            [
+                [0.30, 0.20],
+                [0.00, 1.00],
+            ],
+            dtype=float,
+        )
+
+        normalized, adjusted = calibrator.predict(X, norm_method="simplex-projection")
+
+        expected_adjusted = np.array(
+            [
+                [1.40, -0.70],
+                [0.80, -3.10],
+            ],
+            dtype=float,
+        )
+        # Row 1: project [1.4, -0.7] -> [1.0, 0.0]
+        # Row 2: project [0.8, -3.1] -> [1.0, 0.0]
+        expected_normalized = np.array(
+            [
+                [1.0, 0.0],
+                [1.0, 0.0],
+            ],
+            dtype=float,
+        )
+
+        np.testing.assert_allclose(adjusted, expected_adjusted, atol=1e-10)
+        np.testing.assert_allclose(normalized, expected_normalized, atol=1e-10)
+        np.testing.assert_allclose(normalized.sum(axis=1), np.ones(X.shape[0]))
+
+    def test_predict_simplex_projection_distributes_mass_on_all_negative_rows(self):
+        """simplex-projection should spread probability mass even when all adjusted values are negative."""
+        calibrator = self._make_fitted_calibrator(
+            slopes=[1.0, 1.0],
+            intercepts=[-1.0, -1.0],
+        )
+
+        normalized, adjusted = calibrator.predict(
+            np.array([[0.1, 0.2]], dtype=float), norm_method="simplex-projection"
+        )
+
+        np.testing.assert_allclose(adjusted, np.array([[-0.9, -0.8]]))
+        # Simplex projection of [-0.9, -0.8]: theta = (-1.7-1)/2 = -1.35
+        # result = max([-0.9+1.35, -0.8+1.35], 0) = [0.45, 0.55]
+        np.testing.assert_allclose(normalized, np.array([[0.45, 0.55]]), atol=1e-10)
+        np.testing.assert_allclose(normalized.sum(axis=1), np.ones(1))
 
     def test_save_calibration_parameters_persists_all_fitted_statistics(self):
         """Saving should serialize every fitted calibration array to an NPZ file."""
@@ -236,6 +423,7 @@ class TestLinearCalibrator(unittest.TestCase):
             filepath = f"{tmp_dir}/calibration_params.npz"
             source.save_calibration_parameters(filepath)
 
+            # pylint: disable-next=assignment-from-no-return
             load_result = loaded.load_calibration_parameters(filepath)
 
         self.assertIsNone(load_result)

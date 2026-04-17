@@ -60,12 +60,15 @@ default_methylbert_config = OrderedDict(
     ]
 )
 
+
 class BalancedBackgroundBatchSampler(Sampler):
     """
     Yields batches where background reads are capped at bg_ratio of the batch.
     """
-    def __init__(self, signal_mask, batch_size, bg_ratio=0.3,
-                 shuffle=True, drop_last=False):
+
+    def __init__(
+        self, signal_mask, batch_size, bg_ratio=0.3, shuffle=True, drop_last=False
+    ):
         self.batch_size = batch_size
         self.bg_ratio = bg_ratio
         self.shuffle = shuffle
@@ -89,8 +92,8 @@ class BalancedBackgroundBatchSampler(Sampler):
         s_ptr, b_ptr = 0, 0
 
         while s_ptr + self.n_signal_per_batch <= len(signal):
-            batch_signal = signal[s_ptr:s_ptr + self.n_signal_per_batch]
-            batch_bg = bg_cycle[b_ptr:b_ptr + self.n_bg_per_batch]
+            batch_signal = signal[s_ptr : s_ptr + self.n_signal_per_batch]
+            batch_bg = bg_cycle[b_ptr : b_ptr + self.n_bg_per_batch]
             batch = np.concatenate([batch_signal, batch_bg])
             np.random.shuffle(batch)
             yield batch.tolist()
@@ -100,7 +103,7 @@ class BalancedBackgroundBatchSampler(Sampler):
         if not self.drop_last and s_ptr < len(signal):
             remaining = signal[s_ptr:]
             n_bg_rem = int(len(remaining) * self.bg_ratio / (1 - self.bg_ratio))
-            batch_bg = bg_cycle[b_ptr:b_ptr + n_bg_rem]
+            batch_bg = bg_cycle[b_ptr : b_ptr + n_bg_rem]
             batch = np.concatenate([remaining, batch_bg])
             np.random.shuffle(batch)
             yield batch.tolist()
@@ -116,6 +119,7 @@ class BalancedTrainer(Trainer):
     """
     HF Trainer that uses BalancedBackgroundBatchSampler for training.
     """
+
     def __init__(self, *args, signal_mask=None, bg_ratio=0.3, **kwargs):
         super().__init__(*args, **kwargs)
         self.signal_mask = signal_mask
@@ -141,6 +145,7 @@ class BalancedTrainer(Trainer):
             num_workers=self.args.dataloader_num_workers,
             pin_memory=self.args.dataloader_pin_memory,
         )
+
 
 def methylbert_finetune_collator(features):
     """
@@ -537,7 +542,9 @@ class MethylBertEmbeddedDMR(BertPreTrainedModel):
                     loss = self.classification_loss_fct(ctype_logits, labels.float())
 
             elif self.num_labels >= 2 and self.loss in ["bce", "focal_bce"]:
-                ctype_label_onehot = F.one_hot(labels, num_classes=self.num_labels).float()
+                ctype_label_onehot = F.one_hot(
+                    labels, num_classes=self.num_labels
+                ).float()
                 loss = self.classification_loss_fct(ctype_logits, ctype_label_onehot)
             else:
                 # Hard labels with CE
@@ -727,8 +734,8 @@ class MethylBert:
         prediction_mode=False,
         callbacks=None,
         batch_size=None,
-        signal_mask=None, 
-        bg_ratio=0.3
+        signal_mask=None,
+        bg_ratio=0.3,
     ):
         """
         Internal method to build a HF Trainer.
@@ -766,11 +773,13 @@ class MethylBert:
                 data_collator=data_collator,
                 preprocess_logits_for_metrics=preprocessing_function,
                 compute_metrics=(
-                    compute_metrics if not self.soft_labels else compute_metrics_soft_labels
+                    compute_metrics
+                    if not self.soft_labels
+                    else compute_metrics_soft_labels
                 ),
                 callbacks=callbacks,
             )
-        
+
         else:
             trainer = BalancedTrainer(
                 model=self.model,
@@ -781,11 +790,13 @@ class MethylBert:
                 data_collator=data_collator,
                 preprocess_logits_for_metrics=preprocessing_function,
                 compute_metrics=(
-                    compute_metrics if not self.soft_labels else compute_metrics_soft_labels
+                    compute_metrics
+                    if not self.soft_labels
+                    else compute_metrics_soft_labels
                 ),
                 callbacks=callbacks,
-                signal_mask=signal_mask,   
-                bg_ratio=bg_ratio,         
+                signal_mask=signal_mask,
+                bg_ratio=bg_ratio,
             )
 
         return trainer
@@ -800,8 +811,8 @@ class MethylBert:
         training_args=None,
         callbacks: Optional[List[TrainerCallback]] = None,
         resume_from_checkpoint: Optional[Union[bool, str]] = None,
-        signal_mask=None, 
-        bg_ratio=0.3
+        signal_mask=None,
+        bg_ratio=0.3,
     ):
         """
         Fine-tune your model on a training set, optional validation set, etc.
@@ -836,7 +847,7 @@ class MethylBert:
             custom_training_args=training_args,
             callbacks=callbacks,
             signal_mask=signal_mask,
-            bg_ratio=bg_ratio
+            bg_ratio=bg_ratio,
         )
         checkpoint_path = None
         if resume_from_checkpoint is not None:

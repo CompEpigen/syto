@@ -22,13 +22,13 @@ def signature_distance(sig1, sig2):
     """
     set1 = set(sig1)
     set2 = set(sig2)
-    
+
     if not set1 and not set2:
         return 0.0
-        
+
     intersection = len(set1.intersection(set2))
     union = len(set1.union(set2))
-    
+
     return 1.0 - (intersection / union)
 
 
