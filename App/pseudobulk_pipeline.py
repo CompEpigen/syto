@@ -168,6 +168,9 @@ class PseudoBulkPipeline:
         self.logger.info("Stage 4: Generating pseudo-bulk IO examples ...")
         generate_uxm_in_ios = self.config.get("generate_uxm_inputs_in_ios", True)
 
+        self.logger.info("  Filtering unused columns to optimize RAM usage ...")
+        self._filter_split_columns(splits_data, generate_uxm_in_ios)
+
         split_generation = self.config.get("split_generation")
 
         if split_generation is not None:
@@ -238,6 +241,40 @@ class PseudoBulkPipeline:
     # ═══════════════════════════════════════════════════════════════
     #  Stage-4 generation helpers
     # ═══════════════════════════════════════════════════════════════
+
+    def _filter_split_columns(
+        self,
+        splits_data: Dict[str, pd.DataFrame],
+        generate_uxm_in_ios: bool,
+    ) -> None:
+        """Filter dataframes to retain only the necessary columns for pseudo-bulk logic."""
+        base_cols = [
+            "original_label",
+            "dmr_ctype_label",
+            "dmr_ctype",
+            "NCPGS",
+            "total_marked_cpgs",
+            "M_rate",
+            "methylation_level",
+            "chr",
+            "chromosome",
+            "label",
+        ]
+        
+        if generate_uxm_in_ios:
+            base_cols.extend(["name", "record_M", "record_U", "record_X"])
+
+        for split_name, df in splits_data.items():
+            pred_cols = [
+                c for c in df.columns 
+                if c.startswith("prediction_") and c[11:].isdigit()
+            ]
+            # Keep only columns that exist in the dataframe to avoid KeyErrors
+            keep_cols = [c for c in base_cols + pred_cols if c in df.columns]
+            
+            # Select the columns in-place conceptually 
+            # (assigning a sub-slice reference back to the dict)
+            splits_data[split_name] = df[keep_cols]
 
     def _build_shared_kwargs(
         self,
