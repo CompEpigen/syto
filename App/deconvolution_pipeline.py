@@ -233,18 +233,51 @@ class DeconvolutionFittingPipeline:
         self.logger.info("Stage 3: Fitting deconvolvers ...")
 
         deconvolvers_cfg = self.config.get("deconvolvers", [])
-        
-        if "features_train" not in feature_data or "features_valid" not in feature_data:
-            raise ValueError("Both 'train' and 'valid' splits are required for fitting deconvolvers.")
 
-        # extract feature dict mapping directly to arrays
+        # Extract feature dict mapping split names to arrays.
+        # Handles both legacy keys (features_{split}) and variant-aware
+        # keys (features_{split}_{variant}).  When multiple variants
+        # exist for a split, the preferred variant from config is used
+        # (default: first variant found alphabetically).
+        preferred_variant = self.config.get("preferred_dmr_variant")
         features_dict = {}
         for key, val in feature_data.items():
-            if key.startswith("features_"):
-                split_name = key.replace("features_", "")
-                features_dict[split_name] = val
-                
-        proportions = feature_data["proportions"]
+            if not key.startswith("features_"):
+                continue
+            remainder = key[len("features_"):]
+            # Determine if this is a variant key (split_variant) or legacy (split)
+            parts = remainder.rsplit("_", 1)
+            if len(parts) == 2 and parts[1] in ("uniform", "random"):
+                split_name, variant = parts
+                if preferred_variant and variant != preferred_variant:
+                    continue
+                # Only store if not already occupied (first variant wins)
+                if split_name not in features_dict:
+                    features_dict[split_name] = val
+            else:
+                # Legacy key: features_{split}
+                features_dict[remainder] = val
+
+        if "train" not in features_dict or "valid" not in features_dict:
+            raise ValueError("Both 'train' and 'valid' splits are required for fitting deconvolvers.")
+
+        # Resolve proportions — legacy key first, then per-split fallback
+        if "proportions" in feature_data:
+            proportions = feature_data["proportions"]
+        else:
+            # Use proportions from train split (or first available)
+            for split_name in ("train", "valid", "test"):
+                pkey = f"proportions_{split_name}"
+                if pkey in feature_data:
+                    proportions = feature_data[pkey]
+                    break
+            else:
+                prop_keys = [k for k in feature_data if k.startswith("proportions_")]
+                if prop_keys:
+                    proportions = feature_data[prop_keys[0]]
+                else:
+                    raise ValueError("No proportions found in feature data.")
+
         mask = feature_data["mask"]
 
         results: Dict[str, Any] = {}

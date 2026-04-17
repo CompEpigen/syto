@@ -170,36 +170,49 @@ def apply_mask_to_ios(
 ) -> dict:
     """Load full IO matrices, apply the feature mask, and save.
 
+    Supports both **legacy** and **variant-aware** ``.npz`` layouts:
+
+    * Legacy: ``proportions``, ``features_{split}``
+    * Variant-aware: ``proportions_{split}``, ``features_{split}_{variant}``
+
     Parameters
     ----------
     ios_path : str
-        Path to the ``ios_full_matrices.npz`` file containing
-        ``proportions``, ``features_train``, ``features_valid``,
-        ``features_test``.
+        Path to the ``ios_full_matrices.npz`` file.
     mask : np.ndarray
         Binary feature mask of shape ``(n_dmr_groups, n_pred_classes)``.
     output_path : str
         Where to save the filtered ``.npz`` file.
     cutoff : float
         Cutoff value used (recorded in the filename for traceability).
+    splits : list
+        Split names to process.
 
     Returns
     -------
     dict
-        Dictionary with ``proportions``, ``features_train``,
-        ``features_valid``, ``features_test`` after masking.
+        Dictionary with proportions and masked features arrays.
     """
     data = np.load(ios_path)
-    proportions = data["proportions"]
 
     logger.info(
         f"Applying mask (cutoff={cutoff}) to IO matrices: "
         f"selected features = {int(mask.sum())}"
     )
     result = {}
-    result["proportions"] = proportions
-    for split_name in splits:
-        result[f"features_{split_name}"] = apply_feature_mask(data[f"features_{split_name}"], mask)
+
+    # Copy proportions — handle both legacy and per-split keys
+    if "proportions" in data:
+        result["proportions"] = data["proportions"]
+    for key in data.files:
+        if key.startswith("proportions_"):
+            result[key] = data[key]
+
+    # Apply mask to feature arrays — handle both layout variants
+    for key in data.files:
+        if key.startswith("features_"):
+            result[key] = apply_feature_mask(data[key], mask)
+
     if output_path is not None:
         os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
         np.savez_compressed(output_path, **result)

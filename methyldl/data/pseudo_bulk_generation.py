@@ -4,7 +4,7 @@ import pickle
 import random
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from copy import deepcopy
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -171,6 +171,7 @@ def init_worker(
     num_labels=39,
     generate_uxm_inputs=True,
     target_proportions=None,
+    dmr_sampling_variants=None,
 ):
     """Initialize worker process with shared data and pre-computed groups.
 
@@ -190,9 +191,16 @@ def init_worker(
         Whether to compute UXM sf/counts tables.  Default True.
     target_proportions : list, optional
         Pre-defined proportions for target-proportion mode.
+    dmr_sampling_variants : list[str], optional
+        List of DMR sampling strategies to apply per IO example.
+        Each entry must be ``"uniform"`` or ``"random"``.
+        Default ``["uniform"]``.
     """
 
     global _worker_data
+
+    if dmr_sampling_variants is None:
+        dmr_sampling_variants = ["uniform"]
 
     # Set unique random seed per process
     seed = mp.current_process().pid
@@ -218,6 +226,7 @@ def init_worker(
     _worker_data["num_labels"] = num_labels
     _worker_data["generate_uxm_inputs"] = generate_uxm_inputs
     _worker_data["target_proportions"] = target_proportions
+    _worker_data["dmr_sampling_variants"] = dmr_sampling_variants
     _worker_data["target_columns"] = _build_target_columns(num_labels)
 
 
@@ -230,12 +239,19 @@ def worker_task(batch_args):
         ``(batch_indices, batch_proportions)`` where ``batch_proportions``
         is either ``None`` (random mode) or a list of ``(labels, proportions)``
         tuples for target-proportion mode.
+
+    Each proportion vector is processed once per DMR sampling variant
+    stored in ``_worker_data["dmr_sampling_variants"]``.  Results are
+    tagged with the variant name as a 4th tuple element:
+    ``(proportions_out, subs, uxm_data, variant)``.
     """
 
     global _worker_data
     batch_indices, batch_proportions = batch_args
     results = []
     exceptions = []
+
+    dmr_sampling_variants = _worker_data.get("dmr_sampling_variants", ["uniform"])
 
     for i, _ in enumerate(batch_indices):
         try:
@@ -254,22 +270,76 @@ def worker_task(batch_args):
                     _worker_data["allowed_labels"], _worker_data["n_cells_max"]
                 )
 
-            _, proportions_out, subs, uxm_data = generate_pseudo_bulk_optimized(
-                _worker_data["n_read_per_split"],
-                labels,
-                proportions,
-                _worker_data["grouped_splits"],
-                _worker_data["target_columns"],
-                num_labels=_worker_data["num_labels"],
-                generate_uxm_inputs=_worker_data["generate_uxm_inputs"],
-            )
+            for variant in dmr_sampling_variants:
+                _, proportions_out, subs, uxm_data = generate_pseudo_bulk_optimized(
+                    _worker_data["n_read_per_split"],
+                    labels,
+                    proportions,
+                    _worker_data["grouped_splits"],
+                    _worker_data["target_columns"],
+                    num_labels=_worker_data["num_labels"],
+                    generate_uxm_inputs=_worker_data["generate_uxm_inputs"],
+                    dmr_sampling=variant,
+                )
 
-            results.append((proportions_out, subs, uxm_data))
+                results.append((proportions_out, subs, uxm_data, variant))
 
         except Exception as e:
             exceptions.append((labels, proportions, str(e)))
 
     return results, exceptions
+
+
+def _compute_samples_per_dmr_uniform(labels, n_samples_list, num_labels):
+    """Uniform DMR allocation: equal reads per DMR group.
+
+    Parameters
+    ----------
+    labels : list[int]
+        Cell-type labels in this mixture.
+    n_samples_list : list[int]
+        Total reads to sample for each label.
+    num_labels : int
+        Number of DMR groups.
+
+    Returns
+    -------
+    dict
+        ``{label: int}`` with reads per DMR group for each label.
+    """
+    return {
+        label: int(n / num_labels) for label, n in zip(labels, n_samples_list)
+    }
+
+
+def _compute_samples_per_dmr_random(labels, n_samples_list, num_labels):
+    """Random DMR allocation: random weights per DMR, normalized, times n.
+
+    For each label, generate ``num_labels`` random weights, normalize them
+    to sum to 1, then multiply by the total read count for that label to
+    obtain per-DMR read counts.
+
+    Parameters
+    ----------
+    labels : list[int]
+        Cell-type labels in this mixture.
+    n_samples_list : list[int]
+        Total reads to sample for each label.
+    num_labels : int
+        Number of DMR groups.
+
+    Returns
+    -------
+    dict
+        ``{label: list[int]}`` with per-DMR read counts for each label.
+    """
+    result = {}
+    for label, n in zip(labels, n_samples_list):
+        weights = [random.random() for _ in range(num_labels)]
+        total_w = sum(weights)
+        counts = [int(n * w / total_w) for w in weights]
+        result[label] = counts
+    return result
 
 
 def generate_pseudo_bulk_optimized(
@@ -280,6 +350,7 @@ def generate_pseudo_bulk_optimized(
     target_columns,
     num_labels=39,
     generate_uxm_inputs=True,
+    dmr_sampling="uniform",
 ):
     """Optimized version using pre-computed groups.
 
@@ -299,24 +370,45 @@ def generate_pseudo_bulk_optimized(
         Number of cell-type labels. Default 39.
     generate_uxm_inputs : bool
         If True, compute UXM sf/counts tables. Default True.
+    dmr_sampling : str
+        DMR sampling strategy. ``"uniform"`` distributes reads equally
+        across DMR groups; ``"random"`` generates random weights per DMR,
+        normalizes them, and multiplies by the target count.  Default
+        ``"uniform"``.
     """
     assert np.round(np.sum(proportions), 4) == 1, "Proportions must sum up to one"
+    assert dmr_sampling in ("uniform", "random"), (
+        f"dmr_sampling must be 'uniform' or 'random', got '{dmr_sampling}'"
+    )
 
     n_samples_list = [int(total_samples * x) for x in proportions]
     sample_name = "pseudo_bulk_sample"
+
+    # Compute per-DMR read counts based on the sampling strategy
+    if dmr_sampling == "uniform":
+        samples_per_dmr = _compute_samples_per_dmr_uniform(
+            labels, n_samples_list, num_labels
+        )
+    else:
+        samples_per_dmr = _compute_samples_per_dmr_random(
+            labels, n_samples_list, num_labels
+        )
 
     subs = {}
     uxm_data = {}
 
     for split_name, grouped in grouped_splits.items():
         sub_parts = []
-        samples_per_dmr = {
-            label: int(n / num_labels) for label, n in zip(labels, n_samples_list)
-        }
 
         for label in labels:
-            n_per_dmr = samples_per_dmr[label]
+            per_dmr = samples_per_dmr[label]
             for dmr_ctype_label in range(num_labels):
+                # per_dmr is an int for uniform, list[int] for random
+                n_per_dmr = (
+                    per_dmr if isinstance(per_dmr, int) else per_dmr[dmr_ctype_label]
+                )
+                if n_per_dmr <= 0:
+                    continue
                 try:
                     group = grouped.get_group((label, dmr_ctype_label))
                     sub_parts.append(group.sample(n_per_dmr, replace=True))
@@ -380,6 +472,7 @@ def run_ios_generation_parallel(
     num_labels=39,
     generate_uxm_inputs=True,
     target_proportions=None,
+    dmr_sampling_variants=None,
 ):
     """Parallel pseudo-bulk IO-example generation.
 
@@ -413,6 +506,9 @@ def run_ios_generation_parallel(
     target_proportions : list of list[float], optional
         Pre-defined proportion vectors, each of length ``num_labels``.
         When provided, overrides ``n_io_examples`` and random selection.
+    dmr_sampling_variants : list[str], optional
+        List of DMR sampling strategies (``"uniform"`` and/or
+        ``"random"``).  Default ``["uniform"]``.
     """
     if n_workers is None:
         n_workers = max(1, mp.cpu_count() - 1)
@@ -420,6 +516,8 @@ def run_ios_generation_parallel(
         allowed_labels = list(range(num_labels))
     if n_read_per_split is None:
         n_read_per_split = int(4.75 * 1e5)
+    if dmr_sampling_variants is None:
+        dmr_sampling_variants = ["uniform"]
 
     # Determine effective number of examples
     if target_proportions is not None:
@@ -463,6 +561,7 @@ def run_ios_generation_parallel(
             num_labels,
             generate_uxm_inputs,
             None,  # target_proportions stored per-batch, not globally
+            dmr_sampling_variants,
         ),
     ) as executor:
 
@@ -509,10 +608,27 @@ def consolidate_ios_pickles(
 ):
     """Load partial pickle checkpoints and consolidate into a single ``.npz``.
 
-    Each pickle is expected to contain a list of tuples
-    ``(proportions, subs, uxm_data)`` where ``subs`` is a dictionary of
-    DataFrames (e.g. 'train', 'valid', 'test') and ``uxm_data`` is the corresponding
-    UXM data (or ``None`` if UXM was disabled).
+    Each pickle is expected to contain a list of tuples.  The tuples may
+    be in one of two formats:
+
+    **Legacy (3-element):**
+        ``(proportions, subs, uxm_data)``
+
+    **Variant-tagged (4-element):**
+        ``(proportions, subs, uxm_data, variant)``
+
+    where ``subs`` is a dictionary of DataFrames (e.g. 'train', 'valid',
+    'test'), ``uxm_data`` is the corresponding UXM data (or ``None``),
+    and ``variant`` is a string like ``"uniform"`` or ``"random"``.
+
+    When variant tags are present, features are stored under
+    ``features_{split}_{variant}`` keys and proportions under
+    ``proportions_{split}`` keys (deduplicated per split).  A top-level
+    ``proportions`` key is additionally written **only** when all splits
+    share the exact same proportions array.
+
+    When no variant tags are present (legacy mode), the output uses the
+    original key scheme: ``proportions``, ``features_{split}``.
 
     Parameters
     ----------
@@ -526,17 +642,48 @@ def consolidate_ios_pickles(
     Returns
     -------
     dict
-        Keys: ``proportions``, ``features_train``, ``features_valid``,
-        ``features_test`` (dynamically populated) — each a numpy array.
+        Numpy arrays keyed as described above.
     """
     pred_cols = [f"prediction_{i}_wavg" for i in range(num_labels)]
-
-    proportions_list = []
-    features_lists = {}
 
     pkl_files = sorted(
         f for f in os.listdir(ios_dir) if f.endswith(".pkl")
     )
+
+    # Detect whether any tuple has a variant tag
+    has_variants = False
+    for pkl_name in pkl_files:
+        pkl_path = os.path.join(ios_dir, pkl_name)
+        try:
+            with open(pkl_path, "rb") as f:
+                part_ios = pickle.load(f)
+        except Exception:
+            continue
+        for item in part_ios:
+            if len(item) == 4:
+                has_variants = True
+            break
+        if has_variants:
+            break
+
+    if not has_variants:
+        # ── Legacy consolidation (unchanged behaviour) ─────────────
+        return _consolidate_legacy(ios_dir, output_path, num_labels, pred_cols, pkl_files)
+
+    # ── Variant-aware consolidation ────────────────────────────────
+    return _consolidate_variant_aware(ios_dir, output_path, num_labels, pred_cols, pkl_files)
+
+
+def _consolidate_legacy(
+    ios_dir: str,
+    output_path: str,
+    num_labels: int,
+    pred_cols: list,
+    pkl_files: list,
+):
+    """Legacy consolidation: all IO tuples are ``(proportions, subs, uxm_data)``."""
+    proportions_list = []
+    features_lists = {}
 
     for pkl_name in tqdm(pkl_files, desc="Consolidating pickles"):
         pkl_path = os.path.join(ios_dir, pkl_name)
@@ -549,16 +696,17 @@ def consolidate_ios_pickles(
             continue
 
         for item in part_ios:
-            gt = np.expand_dims(np.array(item[0]),0)
+            gt = np.expand_dims(np.array(item[0]), 0)
             proportions_list.append(gt)
 
             subs = item[1]
             for split_name, df in subs.items():
                 if split_name not in features_lists:
                     features_lists[split_name] = []
-                features_lists[split_name].append(np.expand_dims(df[pred_cols].to_numpy(), 0))
+                features_lists[split_name].append(
+                    np.expand_dims(df[pred_cols].to_numpy(), 0)
+                )
 
-    # Single concatenation at the end (O(n))
     result = {
         "proportions": np.concatenate(proportions_list, axis=0),
     }
@@ -567,7 +715,96 @@ def consolidate_ios_pickles(
             result[f"features_{split_name}"] = np.concatenate(lst, axis=0)
 
     np.savez_compressed(output_path, **result)
+    return result
 
+
+def _consolidate_variant_aware(
+    ios_dir: str,
+    output_path: str,
+    num_labels: int,
+    pred_cols: list,
+    pkl_files: list,
+):
+    """Variant-aware consolidation for ``(proportions, subs, uxm_data, variant)`` tuples.
+
+    Stores proportions as ``proportions_{split}`` (deduplicated per
+    proportion vector).  Features are stored under
+    ``features_{split}_{variant}``.
+    """
+    # {split_name: {variant: [arrays]}}
+    features_by_split_variant = {}
+    # {split_name: {variant: [proportion_arrays]}}
+    proportions_by_split_variant = {}
+
+    for pkl_name in tqdm(pkl_files, desc="Consolidating pickles (variant-aware)"):
+        pkl_path = os.path.join(ios_dir, pkl_name)
+        try:
+            with open(pkl_path, "rb") as f:
+                part_ios = pickle.load(f)
+        except Exception:
+            import warnings
+            warnings.warn(f"{pkl_name} is corrupted and cannot be opened")
+            continue
+
+        for item in part_ios:
+            props = item[0]
+            subs = item[1]
+            # item[2] is uxm_data (not stored in npz)
+            variant = item[3]
+
+            gt = np.expand_dims(np.array(props), 0)
+
+            for split_name, df in subs.items():
+                key = (split_name, variant)
+
+                if split_name not in features_by_split_variant:
+                    features_by_split_variant[split_name] = {}
+                    proportions_by_split_variant[split_name] = {}
+
+                if variant not in features_by_split_variant[split_name]:
+                    features_by_split_variant[split_name][variant] = []
+                    proportions_by_split_variant[split_name][variant] = []
+
+                features_by_split_variant[split_name][variant].append(
+                    np.expand_dims(df[pred_cols].to_numpy(), 0)
+                )
+                proportions_by_split_variant[split_name][variant].append(gt)
+
+    result = {}
+
+    # Build per-split proportions (deduplicated: same across variants for one split)
+    for split_name, variant_dict in proportions_by_split_variant.items():
+        # Collect all proportion arrays across variants for this split
+        all_props = []
+        for variant, props_list in sorted(variant_dict.items()):
+            all_props.extend(props_list)
+        # Deduplicate: proportions should be the same across variants
+        # (each proportion vector appears once per variant), so we take
+        # every N-th where N = number of variants
+        n_variants = len(variant_dict)
+        deduplicated = all_props[::n_variants]
+        result[f"proportions_{split_name}"] = np.concatenate(deduplicated, axis=0)
+
+    # Build per-split-per-variant features
+    for split_name, variant_dict in features_by_split_variant.items():
+        for variant, feat_list in sorted(variant_dict.items()):
+            if feat_list:
+                result[f"features_{split_name}_{variant}"] = np.concatenate(
+                    feat_list, axis=0
+                )
+
+    # Check if all splits share the same proportions; if so, also store
+    # a top-level "proportions" key for convenience.
+    prop_keys = [k for k in result if k.startswith("proportions_")]
+    if len(prop_keys) >= 2:
+        first = result[prop_keys[0]]
+        all_same = all(
+            np.array_equal(first, result[k]) for k in prop_keys[1:]
+        )
+        if all_same:
+            result["proportions"] = first
+
+    np.savez_compressed(output_path, **result)
     return result
 
 

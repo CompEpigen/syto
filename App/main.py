@@ -64,7 +64,6 @@ def validate_config(config: Dict[str, Any], task: str) -> None:
         ],
         "generate_pseudobulk": [
             "classifier_type",
-            "generation_mode",
             "output_dir",
             "labels_dict_path",
         ],
