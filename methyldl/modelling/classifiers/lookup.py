@@ -1,9 +1,10 @@
 """
-Soft-label lookup classifier with KNN fallback.
+Lookup classifier with KNN fallback, supporting soft and hard labels.
 
 The classifier is essentially a lookup table keyed by (region_name, cpg_signature)
-whose values are soft-label probability vectors.  When a key is missing at predict
-time it falls back to 1-NN (or ties-averaged) using the Jaccard signature distance.
+whose values are label vectors (soft probabilities or hard one-hot / averaged one-hot).
+When a key is missing at predict time it falls back to 1-NN (or ties-averaged) using
+the Jaccard signature distance.
 """
 
 from __future__ import annotations
@@ -33,13 +34,14 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
-class SoftLabelConfig:
+class LabelConfig:
     """All tuneable knobs live here."""
 
     num_classes: int = 39
     label_col: str = "original_label"
+    label_mode: str = "soft"  # "soft" or "hard"
 
-    # KNN smoothing parameters (used during *fit* to build the table)
+    # KNN smoothing parameters (used during *fit* to build the table, soft mode only)
     min_reads: int = 30
     max_distance: float = 0.41
 
@@ -47,8 +49,13 @@ class SoftLabelConfig:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, d: dict) -> "SoftLabelConfig":
+    def from_dict(cls, d: dict) -> "LabelConfig":
+        # pylint: disable=no-member
         return cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
+
+
+# Backward-compatible alias
+SoftLabelConfig = LabelConfig
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -57,24 +64,24 @@ class SoftLabelConfig:
 
 
 class LookupClassifier:
-    """Lookup-table classifier backed by soft labels.
+    """Lookup-table classifier backed by soft or hard labels.
 
     Parameters
     ----------
-    config : SoftLabelConfig
+    config : LabelConfig
         Smoothing / labelling hyper-parameters.
 
     Usage
     -----
-    >>> clf = SoftLabelClassifier(SoftLabelConfig(min_reads=30, max_distance=0.41))
+    >>> clf = LookupClassifier(LabelConfig(min_reads=30, max_distance=0.41))
     >>> clf.fit(train_df)
     >>> preds = clf.predict(test_df)
     >>> clf.save("model.pkl")
-    >>> clf = SoftLabelClassifier.load("model.pkl")
+    >>> clf = LookupClassifier.load("model.pkl")
     """
 
-    def __init__(self, config: Optional[SoftLabelConfig] = None):
-        self.config = config or SoftLabelConfig()
+    def __init__(self, config: Optional[LabelConfig] = None):
+        self.config = config or LabelConfig()
 
         # Populated by fit() --------------------------------------------------
         # {(region, cpg_sig): {"soft_label": [...], "normalized_counts": [...]}}
@@ -137,20 +144,25 @@ class LookupClassifier:
             df["cpg_sig"] = df.progress_apply(extract_cpg_signature, axis=1)
         # Guarantee tuple type
         df["cpg_sig"] = df["cpg_sig"].apply(
-            lambda x: tuple(x) if not isinstance(x, tuple) else x
+            lambda x: (
+                tuple(tuple(int(e) for e in p) for p in x)
+                if not isinstance(x, tuple)
+                else x
+            )
         )
 
+        label_key = "hard_label" if self.config.label_mode == "hard" else "soft_label"
         pred_matrix = np.empty((len(df), num_classes))
         sources = []
 
         for i, (_, row) in enumerate(
-            tqdm(df.iterrows(), total=len(df), desc="Predicting soft labels")
+            tqdm(df.iterrows(), total=len(df), desc="Predicting labels")
         ):
             key = (row["name"], row["cpg_sig"])
             entry = self._lookup.get(key)
 
             if entry is not None:
-                pred_matrix[i] = entry["soft_label"]
+                pred_matrix[i] = entry[label_key]
                 sources.append("exact")
             else:
                 pred_matrix[i] = self._fallback_nn(row["name"], row["cpg_sig"])
@@ -180,7 +192,7 @@ class LookupClassifier:
         with open(path, "rb") as f:
             payload = pickle.load(f)
 
-        config = SoftLabelConfig.from_dict(payload["config"])
+        config = LabelConfig.from_dict(payload["config"])
         clf = cls(config)
 
         clf._lookup = {cls._str_to_key(k): v for k, v in payload["lookup"].items()}
@@ -197,16 +209,21 @@ class LookupClassifier:
     # ================================================================== private
 
     def _build_mapping(self, df: pd.DataFrame) -> Dict[tuple, dict]:
-        """Raw DataFrame → {(region, cpg_sig): {soft_label, normalized_counts}}."""
+        """Raw DataFrame → {(region, cpg_sig): {label_vector, counts}}."""
         cfg = self.config
         df = df.copy()
 
         # Ensure cpg_sig column
+
         if "cpg_sig" not in df.columns:
             tqdm.pandas(desc="Extracting signatures")
             df["cpg_sig"] = df.progress_apply(extract_cpg_signature, axis=1)
         df["cpg_sig"] = df["cpg_sig"].apply(
-            lambda x: tuple(x) if not isinstance(x, tuple) else x
+            lambda x: (
+                tuple(tuple(int(e) for e in p) for p in x)
+                if not isinstance(x, tuple)
+                else x
+            )
         )
 
         # Ensure label column is int
@@ -221,7 +238,14 @@ class LookupClassifier:
         class_cols = list(range(cfg.num_classes))
         base_counts["total_reads"] = base_counts[class_cols].sum(axis=1)
 
-        # Smooth
+        if cfg.label_mode == "hard":
+            return self._build_hard_mapping(base_counts, class_cols)
+
+        return self._build_soft_mapping(base_counts)
+
+    def _build_soft_mapping(self, base_counts: pd.DataFrame) -> Dict[tuple, dict]:
+        """Build the soft-label lookup table via KNN smoothing."""
+        cfg = self.config
         mapping_df = apply_normalized_knn_smoothing(
             base_counts,
             min_reads=cfg.min_reads,
@@ -229,7 +253,6 @@ class LookupClassifier:
             num_classes=cfg.num_classes,
         )
 
-        # Convert to dict
         table: Dict[tuple, dict] = {}
         for _, row in mapping_df.iterrows():
             key = (row["name"], row["cpg_sig"])
@@ -247,12 +270,66 @@ class LookupClassifier:
             }
         return table
 
+    def _build_hard_mapping(
+        self, base_counts: pd.DataFrame, class_cols: list
+    ) -> Dict[tuple, dict]:
+        """Build the hard-label lookup table (argmax with tie-averaging).
+
+        Counts are first normalized using global sequencing-depth weights
+        (same method as ``apply_normalized_knn_smoothing``) before the
+        argmax is computed.
+        """
+        cfg = self.config
+
+        # Sanity check: the highest class (by global count) must dominate
+        global_counts = base_counts[class_cols].sum(axis=0).sort_values(ascending=False)
+        if len(global_counts) >= 2:
+            top, runner_up = global_counts.iloc[0], global_counts.iloc[1]
+            if top < 10 * runner_up:
+                top_cls = int(global_counts.index[0])
+                runner_cls = int(global_counts.index[1])
+                raise ValueError(
+                    f"Hard-label sanity check failed: class {top_cls} has "
+                    f"{int(top)} reads but class {runner_cls} has {int(runner_up)} "
+                    f"reads (ratio {top / runner_up:.1f}x < 10x required). "
+                    f"This suggests the background class does not dominate "
+                    f"as expected."
+                )
+
+        # Global normalization weights (median / per-class total)
+        global_class_counts = base_counts[class_cols].sum(axis=0)
+        nonzero = global_class_counts[global_class_counts > 0]
+        median_count = nonzero.median()
+        epsilon = 1e-9
+        class_weights = (median_count / (global_class_counts + epsilon)).values
+
+        raw_matrix = base_counts[class_cols].values.astype(float)
+        normalized_matrix = raw_matrix * class_weights[np.newaxis, :]
+
+        table: Dict[tuple, dict] = {}
+
+        for idx, row in base_counts.iterrows():
+            counts = normalized_matrix[idx]
+            max_val = counts.max()
+            max_mask = counts == max_val
+            n_tied = max_mask.sum()
+
+            # One-hot if strict argmax, averaged one-hot if tied
+            label_vec = np.zeros(cfg.num_classes)
+            label_vec[max_mask] = 1.0 / n_tied
+
+            key = (row["name"], row["cpg_sig"])
+            table[key] = {
+                "hard_label": label_vec.tolist(),
+                "normalized_counts": normalized_matrix[idx].tolist(),
+            }
+        return table
+
     def _fallback_nn(self, region: str, query_sig: tuple) -> list:
         """1-NN fallback within the same region.
 
-        If multiple neighbours share the minimum distance, their
-        *normalized counts* are summed and re-normalised to produce
-        the predicted soft label.
+        Soft mode: normalized counts of tied NNs are summed and re-normalised.
+        Hard mode: hard-label vectors of tied NNs are averaged.
         """
         num_classes = self.config.num_classes
         candidates = self._region_index.get(region)
@@ -274,7 +351,14 @@ class LookupClassifier:
             elif d == best_dist:
                 best_entries.append(entry)
 
-        # Aggregate normalised counts of all tied NNs
+        if self.config.label_mode == "hard":
+            # Average the hard-label vectors of all tied NNs
+            agg = np.zeros(num_classes)
+            for entry in best_entries:
+                agg += np.array(entry["hard_label"])
+            return (agg / len(best_entries)).tolist()
+
+        # Soft mode: aggregate normalised counts of all tied NNs
         agg_counts = np.zeros(num_classes)
         for entry in best_entries:
             agg_counts += np.array(entry["normalized_counts"])

@@ -45,7 +45,7 @@ class PseudoBulkPipeline:
 
         # Labels
         labels_dict_path = config["labels_dict_path"]
-        with open(labels_dict_path, "r") as f:
+        with open(labels_dict_path, "r", encoding="utf-8") as f:
             raw = json.load(f)
             self.labels_dict: Dict[int, str] = {int(k): v for k, v in raw.items()}
         self.num_labels = config.get("num_labels", len(self.labels_dict))
