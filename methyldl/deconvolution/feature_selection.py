@@ -200,10 +200,10 @@ def apply_mask_to_ios(
     result["proportions"] = proportions
     for split_name in splits:
         result[f"features_{split_name}"] = apply_feature_mask(data[f"features_{split_name}"], mask)
-
-    os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
-    np.savez_compressed(output_path, **result)
-    logger.info(f"Saved filtered features to {output_path}")
+    if output_path is not None:
+        os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+        np.savez_compressed(output_path, **result)
+        logger.info(f"Saved filtered features to {output_path}")
 
     return result
 
