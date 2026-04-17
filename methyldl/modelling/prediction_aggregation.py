@@ -49,12 +49,11 @@ def aggregate_predictions_by_dmr(
                 "labels_dict must be provided when fill_in_missing_labels is set to True"
             )
 
-    # Auto-detect prediction columns if not provided
     if prediction_cols is None:
         prediction_cols = [
             col
             for col in df.columns
-            if col.startswith("prediction_") and col != "prediction"
+            if col.startswith("prediction_") and col[11:].isdigit()
         ]
         prediction_cols = sorted(prediction_cols, key=lambda x: int(x.split("_")[1]))
         prediction_cols.append("methylation_level")
@@ -147,7 +146,7 @@ def aggregate_predictions_by_dmr_optimized(df, group_cols):
     prediction_cols = [
         col
         for col in df.columns
-        if col.startswith("prediction_") and col != "prediction"
+        if col.startswith("prediction_") and col[11:].isdigit() 
     ]
     prediction_cols = sorted(prediction_cols, key=lambda x: int(x.split("_")[1]))
     prediction_cols.append("methylation_level")
@@ -202,7 +201,7 @@ def aggregate_chuncked_predictions_weighted(
     Calculates the weighted average of prediction columns grouped by read_name.
     """
     # 1. Identify prediction columns (prediction_0 ... prediction_39)
-    pred_cols = [c for c in pred_df.columns if c.startswith("prediction_")]
+    pred_cols = [c for c in pred_df.columns if c.startswith("prediction_") and c[11:].isdigit()]
 
     # 2. Create a working copy to avoid SettingWithCopy warnings
     df = pred_df.copy()
@@ -267,6 +266,7 @@ def get_final_prediction(
             col
             for col in df.columns
             if col.startswith(prediction_prefix) and col.endswith(suffix)
+            and col.replace(prediction_prefix, "").replace(suffix, "").isdigit()
         ]
         pred_cols = sorted(
             pred_cols,
