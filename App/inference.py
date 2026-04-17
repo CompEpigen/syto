@@ -426,7 +426,8 @@ class InferencePipeline:
             batch_size=batch_size,
         )
         predictions_pd = pd.DataFrame(
-            predictions[0], columns=["prediction_" + str(x) for x in range(self.num_labels)]
+            predictions[0],
+            columns=["prediction_" + str(x) for x in range(self.num_labels)],
         )
         predictions_pd["read_name"] = [x[-3] for x in self.prepared_reads_chuncked[1:]]
         predictions_pd["ncpgs_marked"] = [
@@ -514,7 +515,9 @@ class InferencePipeline:
 
                 if method_cfg.get("use_callibration", False):
                     calibrator = LinearCalibrator()
-                    calibrator.load_calibration_parameters(method_cfg["callibrator_path"])
+                    calibrator.load_calibration_parameters(
+                        method_cfg["callibrator_path"]
+                    )
                     if proportions.ndim == 1:
                         proportions = np.expand_dims(proportions, 0)
                     calib_proportions = calibrator.predict(proportions)
@@ -536,7 +539,11 @@ class InferencePipeline:
         flavor = method_cfg["flavor"]
         self.logger.info(f"Loading {flavor} from {checkpoint_path}")
         X = self._extract_features_by_mask(
-            np.array(self.dmr_aggregated[[f"prediction_{i}_wavg" for i in range(self.num_labels)]]),
+            np.array(
+                self.dmr_aggregated[
+                    [f"prediction_{i}_wavg" for i in range(self.num_labels)]
+                ]
+            ),
             self.features_mask,
         )
         X = X.flatten()
@@ -571,7 +578,11 @@ class InferencePipeline:
         # Build the prediction matrix from DMR-aggregated data
         # prediction_matrix = self._build_prediction_matrix()
         X = self._extract_features_by_mask(
-            np.array(self.dmr_aggregated[[f"prediction_{i}_wavg" for i in range(self.num_labels)]]),
+            np.array(
+                self.dmr_aggregated[
+                    [f"prediction_{i}_wavg" for i in range(self.num_labels)]
+                ]
+            ),
             self.features_mask,
         )
         deconv_preds = deconvolver._predict_raw(X)
@@ -646,7 +657,9 @@ class InferencePipeline:
         X = torch.FloatTensor(
             self._extract_features_by_mask(
                 np.array(
-                    self.dmr_aggregated[[f"prediction_{i}_wavg" for i in range(self.num_labels)]]
+                    self.dmr_aggregated[
+                        [f"prediction_{i}_wavg" for i in range(self.num_labels)]
+                    ]
                 ),
                 self.features_mask,
             )

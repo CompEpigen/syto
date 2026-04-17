@@ -87,7 +87,12 @@ class PseudoBulkPipeline:
             # ── Stage 1b: Optional rebalancing ────────────────────────
             if self.config.get("rebalance_splits", False):
                 self.logger.info("Stage 1b: Rebalancing splits ...")
-                if "train" in splits_data and "valid" in splits_data and "test" in splits_data and len(splits_data) == 3:
+                if (
+                    "train" in splits_data
+                    and "valid" in splits_data
+                    and "test" in splits_data
+                    and len(splits_data) == 3
+                ):
                     manual_labels = self.config.get("manual_common_labels", [28, 35])
                     train, valid, test = rebalance_splits(
                         splits_data["train"],
@@ -98,10 +103,14 @@ class PseudoBulkPipeline:
                     splits_data["train"] = train
                     splits_data["valid"] = valid
                     splits_data["test"] = test
-                    sizes = ", ".join(f"{name}={len(df)}" for name, df in splits_data.items())
+                    sizes = ", ".join(
+                        f"{name}={len(df)}" for name, df in splits_data.items()
+                    )
                     self.logger.info(f"  After rebalance: {sizes}")
                 else:
-                    self.logger.warning("Rebalancing is only supported when exactly train, valid, and test splits are present. Skipping.")
+                    self.logger.warning(
+                        "Rebalancing is only supported when exactly train, valid, and test splits are present. Skipping."
+                    )
 
             # ── Stage 2: Prepare reads ────────────────────────────────
             self.logger.info("Stage 2: Preparing reads ...")
@@ -118,7 +127,9 @@ class PseudoBulkPipeline:
             )
             sizes = ", ".join(f"{name}={len(df)}" for name, df in splits_data.items())
             self.logger.info(f"  After preparation: {sizes}")
-            with open(os.path.join(self.output_dir, "uxm_prepared_reads.pkl"), "wb") as f:
+            with open(
+                os.path.join(self.output_dir, "uxm_prepared_reads.pkl"), "wb"
+            ) as f:
                 pickle.dump(splits_data, f)
         elif self.config["input_type"] == "uxm_prepared":
             self.logger.info("Skipping Stage 1 and 2: Loading uxm prepared reads ...")
@@ -241,7 +252,9 @@ class PseudoBulkPipeline:
         if input_type == "raw_splits":
             data_path = self.config["data_path"]
             for split_name in splits_cfg:
-                splits_data[split_name] = pd.read_parquet(os.path.join(data_path, f"{split_name}.parquet"))
+                splits_data[split_name] = pd.read_parquet(
+                    os.path.join(data_path, f"{split_name}.parquet")
+                )
         elif input_type == "pre_predicted":
             pickle_paths = self.config["pickle_paths"]
             for split_name in splits_cfg:

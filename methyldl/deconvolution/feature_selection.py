@@ -56,13 +56,12 @@ def extract_pure_feature_matrix(
         split_idx = splits[split_idx]
 
     return np.array(
-            [
-                pure_profiles[i][1][split_idx][target_columns].to_numpy()
-                for i in range(num_output_labels)
-                if pure_profiles[i] is not None
-            ]
-        )
-
+        [
+            pure_profiles[i][1][split_idx][target_columns].to_numpy()
+            for i in range(num_output_labels)
+            if pure_profiles[i] is not None
+        ]
+    )
 
 
 def compute_feature_ratios(pure_matrix: np.ndarray) -> np.ndarray:
@@ -160,11 +159,7 @@ def apply_feature_mask(
 
 
 def apply_mask_to_ios(
-    ios_path: str,
-    mask: np.ndarray,
-    output_path: str,
-    cutoff: float,
-    splits: list
+    ios_path: str, mask: np.ndarray, output_path: str, cutoff: float, splits: list
 ) -> dict:
     """Load full IO matrices, apply the feature mask, and save.
 
@@ -197,7 +192,9 @@ def apply_mask_to_ios(
     result = {}
     result["proportions"] = proportions
     for split_name in splits:
-        result[f"features_{split_name}"] = apply_feature_mask(data[f"features_{split_name}"], mask)
+        result[f"features_{split_name}"] = apply_feature_mask(
+            data[f"features_{split_name}"], mask
+        )
 
     os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
     np.savez_compressed(output_path, **result)
@@ -220,7 +217,7 @@ def generate_feature_selection_plot(
     master_names: Optional[List[str]] = None,
     guarantee_diagonal_selection: bool = False,
     guarantee_columns_selection: Optional[List[int]] = None,
-    splits: List = ["train", "valid", "test"]
+    splits: List = ["train", "valid", "test"],
 ) -> str:
     """Generate a heatmap comparing feature masks across splits.
 
@@ -260,8 +257,11 @@ def generate_feature_selection_plot(
     split_ratios = {}
     for idx, split_name in enumerate(splits):
         pure_matrix = extract_pure_feature_matrix(
-            pure_profiles, num_input_labels, num_output_labels,
-            split_idx=idx, splits=splits,
+            pure_profiles,
+            num_input_labels,
+            num_output_labels,
+            split_idx=idx,
+            splits=splits,
         )
         ratios = compute_feature_ratios(pure_matrix)
         binary = compute_feature_mask(
@@ -283,7 +283,7 @@ def generate_feature_selection_plot(
     all_bins = list(split_bins.values())
     agreement = np.ones_like(all_bins[0], dtype=bool)
     for b in all_bins[1:]:
-        agreement &= (all_bins[0] == b)
+        agreement &= all_bins[0] == b
     diff_mask = ~agreement
 
     # --- Axis labels ------------------------------------------------------

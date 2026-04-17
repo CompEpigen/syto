@@ -149,7 +149,12 @@ def generate_pseudo_bulk(
         uxm_deconv_results_alligned = rearange_uxm_deconvolution_results(
             labels_dict_reversed, uxm_proportions, ref_cells
         )
-        uxm_data[split_name] = (sf, counts, uxm_deconv_results, uxm_deconv_results_alligned)
+        uxm_data[split_name] = (
+            sf,
+            counts,
+            uxm_deconv_results,
+            uxm_deconv_results_alligned,
+        )
 
         if return_reads:
             reads[split_name] = sub
@@ -549,14 +554,16 @@ def consolidate_ios_pickles(
             continue
 
         for item in part_ios:
-            gt = np.expand_dims(np.array(item[0]),0)
+            gt = np.expand_dims(np.array(item[0]), 0)
             proportions_list.append(gt)
 
             subs = item[1]
             for split_name, df in subs.items():
                 if split_name not in features_lists:
                     features_lists[split_name] = []
-                features_lists[split_name].append(np.expand_dims(df[pred_cols].to_numpy(), 0))
+                features_lists[split_name].append(
+                    np.expand_dims(df[pred_cols].to_numpy(), 0)
+                )
 
     # Single concatenation at the end (O(n))
     result = {
