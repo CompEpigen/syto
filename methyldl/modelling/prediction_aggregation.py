@@ -4,6 +4,44 @@ import numpy as np
 import pandas as pd
 
 
+def _fill_in_missing_labels(
+    df: pd.DataFrame,
+    group_cols: List[str],
+    labels_dict:dict    
+) ->pd.DataFrame:
+    """
+    Helper to fill in missing labels, if present. 
+    """
+
+    labels_dict_pd = pd.DataFrame(labels_dict, index=["dmr_ctype"]).T.reset_index()
+    labels_dict_pd.columns = ["dmr_ctype_label", "dmr_ctype"]
+    if set(labels_dict_pd["dmr_ctype_label"]).difference(
+        set(df["dmr_ctype_label"])
+    ):
+        df = pd.merge(
+            df,
+            labels_dict_pd,
+            on=["dmr_ctype_label", "dmr_ctype"],
+            how="outer",
+            indicator=True,
+        )
+        synthetic_rows = df["_merge"] == "right_only"
+        df.drop(columns=["_merge"], inplace=True)
+        fill_columns = [col for col in df.columns if col not in group_cols]
+        string_fill_columns = [
+            col
+            for col in fill_columns
+            if pd.api.types.is_string_dtype(df[col].dtype)
+        ]
+        if string_fill_columns:
+            df = df.astype(
+                {col: object for col in string_fill_columns}, copy=False
+            )
+        df.loc[:, fill_columns] = df.loc[:, fill_columns].fillna(0)
+        df.loc[synthetic_rows, "label"] = -1
+        df["total_weight"] = df["total_weight"].apply(lambda x: max(x, 1))
+    return df
+
 def aggregate_predictions_by_dmr(
     df: pd.DataFrame,
     group_cols: Optional[List[str]] = None,
@@ -109,33 +147,7 @@ def aggregate_predictions_by_dmr(
     result.reset_index(inplace=True)
 
     if fill_in_missing_labels:
-        labels_dict_pd = pd.DataFrame(labels_dict, index=["dmr_ctype"]).T.reset_index()
-        labels_dict_pd.columns = ["dmr_ctype_label", "dmr_ctype"]
-        if set(labels_dict_pd["dmr_ctype_label"]).difference(
-            set(result["dmr_ctype_label"])
-        ):
-            result = pd.merge(
-                result,
-                labels_dict_pd,
-                on=["dmr_ctype_label", "dmr_ctype"],
-                how="outer",
-                indicator=True,
-            )
-            synthetic_rows = result["_merge"] == "right_only"
-            result.drop(columns=["_merge"], inplace=True)
-            fill_columns = [col for col in result.columns if col not in group_cols]
-            string_fill_columns = [
-                col
-                for col in fill_columns
-                if pd.api.types.is_string_dtype(result[col].dtype)
-            ]
-            if string_fill_columns:
-                result = result.astype(
-                    {col: object for col in string_fill_columns}, copy=False
-                )
-            result.loc[:, fill_columns] = result.loc[:, fill_columns].fillna(0)
-            result.loc[synthetic_rows, "label"] = -1
-            result["total_weight"] = result["total_weight"].apply(lambda x: max(x, 1))
+       result = _fill_in_missing_labels(result, group_cols, labels_dict)
 
     return result
 

@@ -208,6 +208,7 @@ class PseudoBulkPipeline:
                     ios_dir=split_ios_dir,
                     output_path=split_output,
                     num_labels=self.num_labels,
+                    labels_dict=self.labels_dict
                 )
                 merged_result.update(part)
 
@@ -219,6 +220,7 @@ class PseudoBulkPipeline:
                 ios_dir=self.ios_dir,
                 output_path=self.consolidated_path,
                 num_labels=self.num_labels,
+                labels_dict=self.labels_dict
             )
 
         # Log summary — handle both legacy and variant-aware key schemes

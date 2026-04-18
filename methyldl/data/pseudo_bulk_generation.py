@@ -17,6 +17,7 @@ from methyldl.deconvolution.uxm import (
 from methyldl.modelling.prediction_aggregation import (
     aggregate_predictions_by_dmr,
     aggregate_predictions_by_dmr_optimized,
+    _fill_in_missing_labels
 )
 
 # Global variables for worker processes (initialized once per worker)
@@ -312,12 +313,42 @@ def _compute_samples_per_dmr_uniform(labels, n_samples_list, num_labels):
     }
 
 
-def _compute_samples_per_dmr_random(labels, n_samples_list, num_labels):
-    """Random DMR allocation: random weights per DMR, normalized, times n.
+# def _compute_samples_per_dmr_random(labels, n_samples_list, num_labels):
+#     """Random DMR allocation: random weights per DMR, normalized, times n.
 
-    For each label, generate ``num_labels`` random weights, normalize them
-    to sum to 1, then multiply by the total read count for that label to
-    obtain per-DMR read counts.
+#     For each label, generate ``num_labels`` random weights, normalize them
+#     to sum to 1, then multiply by the total read count for that label to
+#     obtain per-DMR read counts.
+
+#     Parameters
+#     ----------
+#     labels : list[int]
+#         Cell-type labels in this mixture.
+#     n_samples_list : list[int]
+#         Total reads to sample for each label.
+#     num_labels : int
+#         Number of DMR groups.
+
+#     Returns
+#     -------
+#     dict
+#         ``{label: list[int]}`` with per-DMR read counts for each label.
+#     """
+#     result = {}
+#     for label, n in zip(labels, n_samples_list):
+#         weights = [random.random() for _ in range(num_labels)]
+#         total_w = sum(weights)
+#         counts = [int(n * w / total_w) for w in weights]
+#         result[label] = counts
+#     return result
+
+def _compute_samples_per_dmr_multinomial(labels, n_samples_list, num_labels):
+    """Realistic DMR allocation using multinomial sampling.
+
+    Simulates natural sequencing noise by randomly distributing each 
+    cell type's total reads across the available DMRs. This causes 
+    total depth to fluctuate per locus, but guarantees the local 
+    proportions correctly center around the global mixture proportions.
 
     Parameters
     ----------
@@ -334,13 +365,16 @@ def _compute_samples_per_dmr_random(labels, n_samples_list, num_labels):
         ``{label: list[int]}`` with per-DMR read counts for each label.
     """
     result = {}
+    
+    # Assumption: A read has an equal baseline probability of landing in any DMR
+    pvals = [1.0 / num_labels] * num_labels 
+    
     for label, n in zip(labels, n_samples_list):
-        weights = [random.random() for _ in range(num_labels)]
-        total_w = sum(weights)
-        counts = [int(n * w / total_w) for w in weights]
+        # np.random.multinomial perfectly distributes 'n' items into 'num_labels' bins
+        counts = np.random.multinomial(n, pvals).tolist()
         result[label] = counts
+        
     return result
-
 
 def generate_pseudo_bulk_optimized(
     total_samples,
@@ -377,7 +411,7 @@ def generate_pseudo_bulk_optimized(
         ``"uniform"``.
     """
     assert np.round(np.sum(proportions), 4) == 1, "Proportions must sum up to one"
-    assert dmr_sampling in ("uniform", "random"), (
+    assert dmr_sampling in ("uniform", "uniform_multinomial"), (
         f"dmr_sampling must be 'uniform' or 'random', got '{dmr_sampling}'"
     )
 
@@ -390,9 +424,10 @@ def generate_pseudo_bulk_optimized(
             labels, n_samples_list, num_labels
         )
     else:
-        samples_per_dmr = _compute_samples_per_dmr_random(
+        samples_per_dmr = _compute_samples_per_dmr_multinomial(
             labels, n_samples_list, num_labels
         )
+
 
     subs = {}
     uxm_data = {}
@@ -604,6 +639,7 @@ def run_ios_generation_parallel(
 def consolidate_ios_pickles(
     ios_dir: str,
     output_path: str,
+    labels_dict: dict,
     num_labels: int = 39,
 ):
     """Load partial pickle checkpoints and consolidate into a single ``.npz``.
@@ -671,7 +707,7 @@ def consolidate_ios_pickles(
         return _consolidate_legacy(ios_dir, output_path, num_labels, pred_cols, pkl_files)
 
     # ── Variant-aware consolidation ────────────────────────────────
-    return _consolidate_variant_aware(ios_dir, output_path, num_labels, pred_cols, pkl_files)
+    return _consolidate_variant_aware(ios_dir, output_path, num_labels, pred_cols, pkl_files,labels_dict)
 
 
 def _consolidate_legacy(
@@ -724,6 +760,7 @@ def _consolidate_variant_aware(
     num_labels: int,
     pred_cols: list,
     pkl_files: list,
+    labels_dict: dict
 ):
     """Variant-aware consolidation for ``(proportions, subs, uxm_data, variant)`` tuples.
 
@@ -764,7 +801,8 @@ def _consolidate_variant_aware(
                 if variant not in features_by_split_variant[split_name]:
                     features_by_split_variant[split_name][variant] = []
                     proportions_by_split_variant[split_name][variant] = []
-
+                if df.shape[0]<num_labels:
+                    df = _fill_in_missing_labels(df,group_cols=["dmr_ctype_label", "dmr_ctype"],labels_dict=labels_dict)
                 features_by_split_variant[split_name][variant].append(
                     np.expand_dims(df[pred_cols].to_numpy(), 0)
                 )

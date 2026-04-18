@@ -251,10 +251,10 @@ def run_pseudobulk_generation(config: Dict[str, Any], logger: logging.Logger) ->
     logger.info("=" * 60)
     logger.info("PSEUDO-BULK GENERATION SUMMARY")
     logger.info("=" * 60)
-    logger.info(f"  Total examples: {result['proportions'].shape[0]}")
-    splits_cfg = config.get("splits", ["train", "valid", "test"])
-    for split_name in splits_cfg:
-        logger.info(f"Features shape {split_name}: {result[f'features_{split_name}'].shape}")
+    logger.info(f"  Total examples: {result[result.keys()[0]].shape[0]}")
+    # splits_cfg = config.get("splits", ["train", "valid", "test"])
+    # for split_name in splits_cfg:
+    #     logger.info(f"Features shape {split_name}: {result[f'features_{split_name}'].shape}")
     logger.info(f"  Output saved to: {config['output_dir']}")
     logger.info("=" * 60)
 
