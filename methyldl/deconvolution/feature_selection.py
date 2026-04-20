@@ -9,8 +9,8 @@ visualisation plots that compare selected features across data splits.
 
 import logging
 import os
-from typing import List, Optional, Tuple
 import math
+from typing import List, Optional, Tuple, Union
 
 import numpy as np
 
@@ -88,39 +88,84 @@ def compute_feature_ratios(pure_matrix: np.ndarray) -> np.ndarray:
 
 def compute_feature_mask(
     ratios: np.ndarray,
-    cutoff: float = 1.1,
+    cutoff: Optional[float] = 1.1,
     guarantee_diagonal_selection: bool = False,
     guarantee_columns_selection: Optional[List[int]] = None,
-) -> np.ndarray:
+    top_features: Optional[int] = None,
+    return_cutoff: bool = False,
+) -> Union[np.ndarray, Tuple[np.ndarray, float]]:
     """Return a binary mask where ratio > cutoff, with optional guaranteed features.
 
     Parameters
     ----------
     ratios : np.ndarray
         Ratio matrix from :func:`compute_feature_ratios`.
-    cutoff : float
-        Threshold above which a feature is selected.
+    cutoff : float, optional
+        Threshold above which a feature is selected. Default is 1.1.
+        Ignored if `top_features` is provided.
     guarantee_diagonal_selection : bool
         If True, the diagonal elements of the mask are set to 1.
     guarantee_columns_selection : list of int, optional
         A list of column indices to unconditionally select (all rows for those columns set to 1).
+    top_features : int, optional
+        If provided, selects exactly this many top features based on ratios. Guaranteed features
+        are prioritized. `cutoff` is dynamically calculated based on the selected non-guaranteed features.
+    return_cutoff : bool
+        If True, returns a tuple ``(mask, calculated_cutoff)``.
 
     Returns
     -------
-    np.ndarray
-        Binary mask with the same shape as *ratios*.
+    np.ndarray or tuple
+        Binary mask with the same shape as *ratios*. If `return_cutoff` is True, returns
+        ``(mask, calculated_cutoff)``.
     """
-    mask = (ratios > cutoff).astype(int)
-
+    guaranteed_mask = np.zeros_like(ratios, dtype=int)
     if guarantee_diagonal_selection:
-        np.fill_diagonal(mask, 1)
-
+        np.fill_diagonal(guaranteed_mask, 1)
+        
     if guarantee_columns_selection:
         for c in guarantee_columns_selection:
-            if 0 <= c < mask.shape[1]:
-                mask[:, c] = 1
+            if 0 <= c < ratios.shape[1]:
+                guaranteed_mask[:, c] = 1
 
-    return mask
+    if top_features is not None:
+        # Give priority to guaranteed features by inflating their ratios
+        modified_ratios = ratios.copy()
+        modified_ratios[guaranteed_mask == 1] += 1e9
+        
+        flat_ratios = modified_ratios.flatten()
+        # Handle Nans
+        flat_ratios[np.isnan(flat_ratios)] = -np.inf
+        
+        # Find indices of top `top_features` features
+        sorted_idx = np.argsort(flat_ratios)[::-1]
+        actual_top_features = min(top_features, len(flat_ratios))
+        selected_idx = sorted_idx[:actual_top_features]
+        
+        mask_flat = np.zeros_like(flat_ratios, dtype=int)
+        mask_flat[selected_idx] = 1
+        mask = mask_flat.reshape(ratios.shape)
+        
+        # Calculate the appropriate cutoff (minimum original ratio among selected non-guaranteed features)
+        selected_non_guaranteed = (mask == 1) & (guaranteed_mask == 0)
+        if selected_non_guaranteed.any():
+            calc_cutoff = float(ratios[selected_non_guaranteed].min())
+        else:
+            calc_cutoff = float(ratios[mask == 1].min()) if (mask == 1).any() else 0.0
+            
+        if return_cutoff:
+            return mask, calc_cutoff
+        return mask
+
+    else:
+        # Default behavior using predefined cutoff
+        val_cutoff = cutoff if cutoff is not None else 1.1
+        mask = (ratios > val_cutoff).astype(int)
+        mask[guaranteed_mask == 1] = 1
+        
+        if return_cutoff:
+            return mask, float(val_cutoff)
+        return mask
 
 
 def apply_feature_mask(
@@ -163,42 +208,53 @@ def apply_mask_to_ios(
 ) -> dict:
     """Load full IO matrices, apply the feature mask, and save.
 
+    Supports both **legacy** and **variant-aware** ``.npz`` layouts:
+
+    * Legacy: ``proportions``, ``features_{split}``
+    * Variant-aware: ``proportions_{split}``, ``features_{split}_{variant}``
+
     Parameters
     ----------
     ios_path : str
-        Path to the ``ios_full_matrices.npz`` file containing
-        ``proportions``, ``features_train``, ``features_valid``,
-        ``features_test``.
+        Path to the ``ios_full_matrices.npz`` file.
     mask : np.ndarray
         Binary feature mask of shape ``(n_dmr_groups, n_pred_classes)``.
     output_path : str
         Where to save the filtered ``.npz`` file.
     cutoff : float
         Cutoff value used (recorded in the filename for traceability).
+    splits : list
+        Split names to process.
 
     Returns
     -------
     dict
-        Dictionary with ``proportions``, ``features_train``,
-        ``features_valid``, ``features_test`` after masking.
+        Dictionary with proportions and masked features arrays.
     """
     data = np.load(ios_path)
-    proportions = data["proportions"]
 
     logger.info(
         f"Applying mask (cutoff={cutoff}) to IO matrices: "
         f"selected features = {int(mask.sum())}"
     )
     result = {}
-    result["proportions"] = proportions
-    for split_name in splits:
-        result[f"features_{split_name}"] = apply_feature_mask(
-            data[f"features_{split_name}"], mask
-        )
 
-    os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
-    np.savez_compressed(output_path, **result)
-    logger.info(f"Saved filtered features to {output_path}")
+    # Copy proportions — handle both legacy and per-split keys
+    if "proportions" in data:
+        result["proportions"] = data["proportions"]
+    for key in data.files:
+        if key.startswith("proportions_"):
+            result[key] = data[key]
+
+    # Apply mask to feature arrays — handle both layout variants
+    for key in data.files:
+        if key.startswith("features_"):
+            result[key] = apply_feature_mask(data[key], mask)
+
+    if output_path is not None:
+        os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+        np.savez_compressed(output_path, **result)
+        logger.info(f"Saved filtered features to {output_path}")
 
     return result
 
@@ -218,6 +274,7 @@ def generate_feature_selection_plot(
     guarantee_diagonal_selection: bool = False,
     guarantee_columns_selection: Optional[List[int]] = None,
     splits: List = ["train", "valid", "test"],
+    top_features: Optional[int] = None
 ) -> str:
     """Generate a heatmap comparing feature masks across splits.
 
@@ -240,6 +297,8 @@ def generate_feature_selection_plot(
         Cell-type names for axis labels.  Defaults to indices.
     splits : list[str]
         Split names to process.  The grid adapts automatically.
+    top_features : int, optional
+        Number of top features to dynamically determine cutoff.
 
     Returns
     -------
@@ -265,7 +324,7 @@ def generate_feature_selection_plot(
         )
         ratios = compute_feature_ratios(pure_matrix)
         binary = compute_feature_mask(
-            ratios, cutoff, guarantee_diagonal_selection, guarantee_columns_selection
+            ratios, cutoff, guarantee_diagonal_selection, guarantee_columns_selection, top_features=top_features
         )
         split_ratios[split_name] = ratios
         split_bins[split_name] = binary
@@ -273,10 +332,7 @@ def generate_feature_selection_plot(
     # Maximal binary mask across all splits (for reporting)
     maximal_ratios = np.array(list(split_ratios.values())).max(axis=0)
     maximal_bin = compute_feature_mask(
-        maximal_ratios,
-        cutoff,
-        guarantee_diagonal_selection,
-        guarantee_columns_selection,
+        maximal_ratios, cutoff, guarantee_diagonal_selection, guarantee_columns_selection, top_features=top_features
     )
 
     # Difference mask: positions where not all splits agree

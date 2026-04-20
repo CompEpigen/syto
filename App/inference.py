@@ -124,6 +124,8 @@ class InferencePipeline:
         else:
             self.num_labels = self.config["num_labels"]
 
+        self.input_length = int(np.sum(self.features_mask))
+
     # ═══════════════════════════════════════════════════════════════════
     #  Public API
     # ═══════════════════════════════════════════════════════════════════
@@ -613,7 +615,7 @@ class InferencePipeline:
             #     nn.Softmax(dim=-1)
             # )
             deconvolver = nn.Sequential(
-                nn.Linear(156, 1024),
+                nn.Linear(self.input_length, 1024),
                 nn.GELU(),
                 nn.Dropout(0.2),
                 nn.Linear(1024, 39),
@@ -634,16 +636,16 @@ class InferencePipeline:
             #     nn.Softmax(dim=-1)
             # )
             deconvolver = nn.Sequential(
-                nn.Linear(156, 512),
+                nn.Linear(self.input_length, 512),
                 nn.GELU(),
                 nn.Dropout(0.2),
                 nn.Linear(512, 256),
                 nn.GELU(),
                 nn.Dropout(0.2),
-                nn.Linear(256, 156),
+                nn.Linear(256, self.input_length),
                 nn.GELU(),
                 nn.Dropout(0.1),
-                nn.Linear(156, 39),
+                nn.Linear(self.input_length, 39),
                 nn.Softmax(dim=-1),
             )
         else:

@@ -4,6 +4,44 @@ import numpy as np
 import pandas as pd
 
 
+def _fill_in_missing_labels(
+    df: pd.DataFrame,
+    group_cols: List[str],
+    labels_dict:dict    
+) ->pd.DataFrame:
+    """
+    Helper to fill in missing labels, if present. 
+    """
+
+    labels_dict_pd = pd.DataFrame(labels_dict, index=["dmr_ctype"]).T.reset_index()
+    labels_dict_pd.columns = ["dmr_ctype_label", "dmr_ctype"]
+    if set(labels_dict_pd["dmr_ctype_label"]).difference(
+        set(df["dmr_ctype_label"])
+    ):
+        df = pd.merge(
+            df,
+            labels_dict_pd,
+            on=["dmr_ctype_label", "dmr_ctype"],
+            how="outer",
+            indicator=True,
+        )
+        synthetic_rows = df["_merge"] == "right_only"
+        df.drop(columns=["_merge"], inplace=True)
+        fill_columns = [col for col in df.columns if col not in group_cols]
+        string_fill_columns = [
+            col
+            for col in fill_columns
+            if pd.api.types.is_string_dtype(df[col].dtype)
+        ]
+        if string_fill_columns:
+            df = df.astype(
+                {col: object for col in string_fill_columns}, copy=False
+            )
+        df.loc[:, fill_columns] = df.loc[:, fill_columns].fillna(0)
+        df.loc[synthetic_rows, "label"] = -1
+        df["total_weight"] = df["total_weight"].apply(lambda x: max(x, 1))
+    return df
+
 def aggregate_predictions_by_dmr(
     df: pd.DataFrame,
     group_cols: Optional[List[str]] = None,
@@ -49,12 +87,11 @@ def aggregate_predictions_by_dmr(
                 "labels_dict must be provided when fill_in_missing_labels is set to True"
             )
 
-    # Auto-detect prediction columns if not provided
     if prediction_cols is None:
         prediction_cols = [
             col
             for col in df.columns
-            if col.startswith("prediction_") and col != "prediction"
+            if col.startswith("prediction_") and col[11:].isdigit()
         ]
         prediction_cols = sorted(prediction_cols, key=lambda x: int(x.split("_")[1]))
         prediction_cols.append("methylation_level")
@@ -110,33 +147,7 @@ def aggregate_predictions_by_dmr(
     result.reset_index(inplace=True)
 
     if fill_in_missing_labels:
-        labels_dict_pd = pd.DataFrame(labels_dict, index=["dmr_ctype"]).T.reset_index()
-        labels_dict_pd.columns = ["dmr_ctype_label", "dmr_ctype"]
-        if set(labels_dict_pd["dmr_ctype_label"]).difference(
-            set(result["dmr_ctype_label"])
-        ):
-            result = pd.merge(
-                result,
-                labels_dict_pd,
-                on=["dmr_ctype_label", "dmr_ctype"],
-                how="outer",
-                indicator=True,
-            )
-            synthetic_rows = result["_merge"] == "right_only"
-            result.drop(columns=["_merge"], inplace=True)
-            fill_columns = [col for col in result.columns if col not in group_cols]
-            string_fill_columns = [
-                col
-                for col in fill_columns
-                if pd.api.types.is_string_dtype(result[col].dtype)
-            ]
-            if string_fill_columns:
-                result = result.astype(
-                    {col: object for col in string_fill_columns}, copy=False
-                )
-            result.loc[:, fill_columns] = result.loc[:, fill_columns].fillna(0)
-            result.loc[synthetic_rows, "label"] = -1
-            result["total_weight"] = result["total_weight"].apply(lambda x: max(x, 1))
+       result = _fill_in_missing_labels(result, group_cols, labels_dict)
 
     return result
 
@@ -147,7 +158,7 @@ def aggregate_predictions_by_dmr_optimized(df, group_cols):
     prediction_cols = [
         col
         for col in df.columns
-        if col.startswith("prediction_") and col != "prediction"
+        if col.startswith("prediction_") and col[11:].isdigit() 
     ]
     prediction_cols = sorted(prediction_cols, key=lambda x: int(x.split("_")[1]))
     prediction_cols.append("methylation_level")
@@ -202,7 +213,7 @@ def aggregate_chuncked_predictions_weighted(
     Calculates the weighted average of prediction columns grouped by read_name.
     """
     # 1. Identify prediction columns (prediction_0 ... prediction_39)
-    pred_cols = [c for c in pred_df.columns if c.startswith("prediction_")]
+    pred_cols = [c for c in pred_df.columns if c.startswith("prediction_") and c[11:].isdigit()]
 
     # 2. Create a working copy to avoid SettingWithCopy warnings
     df = pred_df.copy()
@@ -267,6 +278,7 @@ def get_final_prediction(
             col
             for col in df.columns
             if col.startswith(prediction_prefix) and col.endswith(suffix)
+            and col.replace(prediction_prefix, "").replace(suffix, "").isdigit()
         ]
         pred_cols = sorted(
             pred_cols,

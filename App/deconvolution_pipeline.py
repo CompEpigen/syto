@@ -72,6 +72,7 @@ class DeconvolutionFittingPipeline:
         os.makedirs(self.output_dir, exist_ok=True)
 
         # Feature selection
+        self.top_features = config.get("top_features", None)
         self.cutoff = config.get("feature_cutoff", 1.1)
         self.splits = config.get("splits", ["train", "valid", "test"])
         self.guarantee_diagonal = config.get("guarantee_diagonal_selection", False)
@@ -148,28 +149,47 @@ class DeconvolutionFittingPipeline:
 
     def _stage2_feature_selection(self, pure_profiles: list) -> Dict[str, np.ndarray]:
         """Compute feature mask and apply to full IO matrices."""
-        self.logger.info(f"Stage 2: Feature selection with cutoff={self.cutoff} ...")
+        if getattr(self, "top_features", None) is not None:
+            self.logger.info(
+                f"Stage 2: Feature selection for top {self.top_features} features ..."
+            )
+        else:
+            self.logger.info(
+                f"Stage 2: Feature selection with cutoff={self.cutoff} ..."
+            )
 
         # Compute mask from validation split
         pure_valid = extract_pure_feature_matrix(
-            pure_profiles,
-            self.num_input_labels,
-            self.num_output_labels,
-            split_idx=1,
-            splits=self.splits,
+            pure_profiles, self.num_input_labels, self.num_output_labels, split_idx=1,splits =self.splits
         )
         valid_ratios = compute_feature_ratios(pure_valid)
-        mask = compute_feature_mask(
-            valid_ratios,
-            self.cutoff,
-            guarantee_diagonal_selection=self.guarantee_diagonal,
-            guarantee_columns_selection=self.guarantee_columns,
-        )
+        
+        if getattr(self, "top_features", None) is not None:
+            mask, calc_cutoff = compute_feature_mask(
+                valid_ratios,
+                cutoff=None,
+                guarantee_diagonal_selection=self.guarantee_diagonal,
+                guarantee_columns_selection=self.guarantee_columns,
+                top_features=self.top_features,
+                return_cutoff=True
+            )
+            self.cutoff = calc_cutoff
+            self.logger.info(
+                f"  Automatic cutoff evaluated as {self.cutoff:.4f}"
+            )
+        else:
+            mask = compute_feature_mask(
+                valid_ratios,
+                self.cutoff,
+                guarantee_diagonal_selection=self.guarantee_diagonal,
+                guarantee_columns_selection=self.guarantee_columns,
+            )
 
         n_selected = int(mask.sum())
         total = self.num_output_labels * self.num_input_labels
         self.logger.info(
-            f"  Selected {n_selected}/{total} features " f"(cutoff={self.cutoff})"
+            f"  Selected {n_selected}/{total} features "
+            f"(dynamic_cutoff={self.cutoff:.4f})"
         )
 
         # Save mask
@@ -189,7 +209,7 @@ class DeconvolutionFittingPipeline:
             mask=mask,
             output_path=filtered_path,
             cutoff=self.cutoff,
-            splits=self.splits,
+            splits =self.splits
         )
         feature_data["mask"] = mask
 
@@ -211,7 +231,8 @@ class DeconvolutionFittingPipeline:
                 master_names=master_names,
                 guarantee_diagonal_selection=self.guarantee_diagonal,
                 guarantee_columns_selection=self.guarantee_columns,
-                splits=self.splits,
+                splits =self.splits,
+                top_features=getattr(self, "top_features", None)
             )
 
         return feature_data
@@ -230,19 +251,50 @@ class DeconvolutionFittingPipeline:
 
         deconvolvers_cfg = self.config.get("deconvolvers", [])
 
-        if "features_train" not in feature_data or "features_valid" not in feature_data:
-            raise ValueError(
-                "Both 'train' and 'valid' splits are required for fitting deconvolvers."
-            )
-
-        # extract feature dict mapping directly to arrays
+        # Extract feature dict mapping split names to arrays.
+        # Handles both legacy keys (features_{split}) and variant-aware
+        # keys (features_{split}_{variant}).  When multiple variants
+        # exist for a split, the preferred variant from config is used
+        # (default: first variant found alphabetically).
+        preferred_variant = self.config.get("preferred_dmr_variant")
         features_dict = {}
         for key, val in feature_data.items():
-            if key.startswith("features_"):
-                split_name = key.replace("features_", "")
-                features_dict[split_name] = val
+            if not key.startswith("features_"):
+                continue
+            remainder = key[len("features_"):]
+            # Determine if this is a variant key (split_variant) or legacy (split)
+            parts = remainder.rsplit("_", 1)
+            if len(parts) == 2 and parts[1] in ("uniform", "random"):
+                split_name, variant = parts
+                if preferred_variant and variant != preferred_variant:
+                    continue
+                # Only store if not already occupied (first variant wins)
+                if split_name not in features_dict:
+                    features_dict[split_name] = val
+            else:
+                # Legacy key: features_{split}
+                features_dict[remainder] = val
 
-        proportions = feature_data["proportions"]
+        if "train" not in features_dict or "valid" not in features_dict:
+            raise ValueError("Both 'train' and 'valid' splits are required for fitting deconvolvers.")
+
+        # Resolve proportions — legacy key first, then per-split fallback
+        if "proportions" in feature_data:
+            proportions = feature_data["proportions"]
+        else:
+            # Use proportions from train split (or first available)
+            for split_name in ("train", "valid", "test"):
+                pkey = f"proportions_{split_name}"
+                if pkey in feature_data:
+                    proportions = feature_data[pkey]
+                    break
+            else:
+                prop_keys = [k for k in feature_data if k.startswith("proportions_")]
+                if prop_keys:
+                    proportions = feature_data[prop_keys[0]]
+                else:
+                    raise ValueError("No proportions found in feature data.")
+
         mask = feature_data["mask"]
 
         results: Dict[str, Any] = {}
@@ -262,13 +314,7 @@ class DeconvolutionFittingPipeline:
                     )
                 elif name in ("nnls", "psls"):
                     model, metrics = self._fit_ls(
-                        name,
-                        deconv_cfg,
-                        pure_profiles,
-                        mask,
-                        features_dict,
-                        proportions,
-                        self.splits,
+                        name, deconv_cfg, pure_profiles, mask, features_dict, proportions, self.splits
                     )
                 else:
                     self.logger.warning(f"  Unknown deconvolver '{name}', skipping")
@@ -289,6 +335,7 @@ class DeconvolutionFittingPipeline:
 
         # Log summary
         self._log_summary(results)
+        self._save_summary_csv(results)
 
         return results
 
@@ -323,10 +370,8 @@ class DeconvolutionFittingPipeline:
         )
 
         model.fit(
-            X_train,
-            y,
-            X_val,
-            y,
+            X_train, y,
+            X_val, y,
             verbose=1,
         )
 
@@ -409,7 +454,7 @@ class DeconvolutionFittingPipeline:
         X_train = features["train"]
         X_val = features["valid"]
         X_test = features.get("test")
-
+        
         n_input_features = X_train.shape[1]
 
         model = self._build_nn_model(name, n_input_features, params)
@@ -474,7 +519,7 @@ class DeconvolutionFittingPipeline:
         mask: np.ndarray,
         features: Dict[str, np.ndarray],
         y: np.ndarray,
-        splits: List,
+        splits: List
     ) -> Tuple[Any, dict]:
         """Fit NNLS or PSLS deconvolver.
 
@@ -486,11 +531,7 @@ class DeconvolutionFittingPipeline:
 
         # Build reference matrix from train-split pure profiles
         pure_train = extract_pure_feature_matrix(
-            pure_profiles,
-            self.num_input_labels,
-            self.num_output_labels,
-            split_idx=0,
-            splits=splits,
+            pure_profiles, self.num_input_labels, self.num_output_labels, split_idx=0, splits=splits
         )
         # pure_train shape: (n_cell_types, n_dmr_groups, n_pred_classes)
         # Apply mask to each cell type's profile
@@ -522,7 +563,9 @@ class DeconvolutionFittingPipeline:
             test_pred = model.predict(eval_X, n_workers=n_workers)
 
         metrics = compute_deconvolution_metrics(test_pred, y)
-        self.logger.info(f"    {name.upper()} {eval_name} MAE: {metrics['mae']:.6f}")
+        self.logger.info(
+            f"    {name.upper()} {eval_name} MAE: {metrics['mae']:.6f}"
+        )
 
         # Save
         save_path = os.path.join(self.output_dir, f"{name}_deconvolver.joblib")
@@ -563,12 +606,15 @@ class DeconvolutionFittingPipeline:
         calibrator.fit(val_pred, y)
 
         # Get test predictions and calibrate
-        test_pred = self._predict_with_model(deconv_name, model, eval_X, cfg)
+        test_pred = self._predict_with_model(
+            deconv_name, model, eval_X, cfg
+        )
         calibrated_pred, _ = calibrator.predict(test_pred)
 
         metrics = compute_deconvolution_metrics(calibrated_pred, y)
         self.logger.info(
-            f"    {deconv_name}_calibrated {eval_name} MAE: " f"{metrics['mae']:.6f}"
+            f"    {deconv_name}_calibrated {eval_name} MAE: "
+            f"{metrics['mae']:.6f}"
         )
 
         # Save calibrator
@@ -643,19 +689,50 @@ class DeconvolutionFittingPipeline:
 
     def _log_summary(self, results: Dict[str, Any]) -> None:
         """Log a summary of all fitted models and their test metrics."""
-        self.logger.info("=" * 60)
+        self.logger.info("=" * 70)
         self.logger.info("DECONVOLUTION FITTING SUMMARY")
-        self.logger.info("=" * 60)
+        self.logger.info("=" * 70)
 
         for model_name, data in results.items():
-            metrics = data["metrics"]
-            self.logger.info(
-                f"  {model_name:25s}  "
-                f"MAE={metrics['mae']:.6f}  "
-                f"MSE={metrics['mse']:.6f}  "
-                f"CosSim={metrics['cosine_sim']:.6f}"
+            if "metrics" in data:
+                m = data["metrics"]
+                self.logger.info(
+                    f"  {model_name:30s}  "
+                    f"R2={m.get('overall_r2', 0.0):.6f}  "
+                    f"LoA=[{m.get('loa_lower', 0.0):.6f}, {m.get('loa_upper', 0.0):.6f}]  "
+                    f"LoA(worst)=[{m.get('worst_class_loa_lower', 0.0):.6f}, {m.get('worst_class_loa_upper', 0.0):.6f}]  "
+                    f"MAE={m['mae']:.6f}  "
+                    f"MSE={m['mse']:.6f}  "
+                    f"KLDiv={m.get('kl', 0.0):.6f}"
+                )
+
+        self.logger.info("=" * 70)
+        self.logger.info(f"  Output directory: {self.output_dir}")
+        self.logger.info("=" * 70)
+
+    def _save_summary_csv(self, results: Dict[str, Any]) -> None:
+        """Save a CSV with one row per model."""
+        import pandas as pd
+        rows: list = []
+        for model_name, data in results.items():
+            if "metrics" not in data:
+                continue
+            m = data["metrics"]
+            rows.append(
+                {
+                    "model": model_name,
+                    "overall_r2": m.get("overall_r2"),
+                    "loa_lower": m.get("loa_lower"),
+                    "loa_upper": m.get("loa_upper"),
+                    "worst_class_loa_lower": m.get("worst_class_loa_lower"),
+                    "worst_class_loa_upper": m.get("worst_class_loa_upper"),
+                    "mae": m["mae"],
+                    "mse": m["mse"],
+                    "kl": m.get("kl")
+                }
             )
 
-        self.logger.info("=" * 60)
-        self.logger.info(f"  Output directory: {self.output_dir}")
-        self.logger.info("=" * 60)
+        df = pd.DataFrame(rows)
+        csv_path = os.path.join(self.output_dir, "deconvolution_summary.csv")
+        df.to_csv(csv_path, index=False)
+        self.logger.info(f"Saved deconvolution summary CSV to {csv_path}")
