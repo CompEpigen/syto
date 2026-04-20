@@ -333,7 +333,6 @@ class ClassifierAdapter:
         model = self._model
         if model is None:
             raise ValueError("LookupClassifier model is not loaded.")
-
         return model.predict(split_df)
 
     # ─── Public API ─────────────────────────────────────────────────
