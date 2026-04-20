@@ -27,45 +27,45 @@ n_read_per_split: 475000
 
 # ── Feature selection (Stage 2) ────────────────────────────────
 # Cutoff for selecting discriminative features (max/mean ratio)
-feature_cutoff: 7.235
+feature_cutoff: 999
 guarantee_diagonal_selection: true
-#guarantee_columns_selection: [39]
+guarantee_columns_selection: [39]
 
 # Whether to generate the 2x2 heatmap comparing feature masks
 # across train/valid/test splits
-generate_feature_selection_plot: true
+generate_feature_selection_plot: false
 
 # ── Deconvolvers (Stage 3) ─────────────────────────────────────
 # Each entry defines a deconvolver to fit.  Supported names:
 #   xgb, swn, mlp, nnls, psls
 # Set calibrate: true to also fit a linear calibrator on top.
 deconvolvers:
-  - name: xgb
-    calibrate: true
-    params:
-      n_estimators: 500
-      max_depth: 15
-      learning_rate: 0.05
-      subsample: 0.7
-      colsample_bytree: 1.0
-      min_child_weight: 5
-      reg_alpha: 0.1
-      reg_lambda: 1.0
-      random_state: 42
+#   - name: xgb
+#     calibrate: true
+#     params:
+#       n_estimators: 500
+#       max_depth: 15
+#       learning_rate: 0.05
+#       subsample: 0.7
+#       colsample_bytree: 1.0
+#       min_child_weight: 5
+#       reg_alpha: 0.1
+#       reg_lambda: 1.0
+#       random_state: 42
 
-  - name: swn
-    calibrate: true
-    params:
-      hidden_dim: 1024
-      dropout: 0.2
-      n_epochs: 5000
-      batch_size: 512
-      lr: 0.00005
-      weight_decay: 0.001
-      early_stopping_metric: val_mae
-      early_stopping_patience: 1000
-      scheduler_type: none
-      device: cuda
+#   - name: swn
+#     calibrate: true
+#     params:
+#       hidden_dim: 1024
+#       dropout: 0.2
+#       n_epochs: 5000
+#       batch_size: 512
+#       lr: 0.00005
+#       weight_decay: 0.001
+#       early_stopping_metric: val_mae
+#       early_stopping_patience: 1000
+#       scheduler_type: none
+#       device: cuda
 
   - name: mlp
     calibrate: true
@@ -79,7 +79,7 @@ deconvolvers:
       weight_decay: 0.001
       early_stopping_metric: val_mae
       early_stopping_patience: 1000
-      scheduler_type: plateau
+      scheduler_type: none
       device: cuda
 
   - name: nnls

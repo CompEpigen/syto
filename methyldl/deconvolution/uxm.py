@@ -192,8 +192,12 @@ def prepare_reads_for_uxm(
     for i_atlas, (_, row) in enumerate(atlas.iterrows()):
         if i_atlas % 100 == 0 or i_atlas == n_atlas - 1:
             current_chrom_ptr = chrom_base_pointer.get(row["chr"], 0)
-            print(f"\r{progress_prefix}Processed {i_atlas}/{n_atlas} atlas regions (reads scanned: {current_chrom_ptr}/{n_records})", end="", flush=True)
-        
+            print(
+                f"\r{progress_prefix}Processed {i_atlas}/{n_atlas} atlas regions (reads scanned: {current_chrom_ptr}/{n_records})",
+                end="",
+                flush=True,
+            )
+
         name = row["name"]
         chromosome = row["chr"]
         start = row["start"] - 1  # 1-based to 0-based
@@ -287,8 +291,8 @@ def prepare_reads_for_uxm(
                     )
 
             scan_ptr += 1
-            
-    print() # Add a newline after the progress bar finishes
+
+    print()  # Add a newline after the progress bar finishes
 
     # Update column names to reflect actual content
     if debug:

@@ -201,9 +201,7 @@ def apply_feature_mask(
             results.append(compressed)
         return np.array(results)
     else:
-        raise ValueError(
-            f"Expected 2-D or 3-D matrix, got {matrix.ndim}-D"
-        )
+        raise ValueError(f"Expected 2-D or 3-D matrix, got {matrix.ndim}-D")
 
 
 def apply_mask_to_ios(
@@ -313,6 +311,7 @@ def generate_feature_selection_plot(
         Path to the saved plot.
     """
     import matplotlib
+
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     import seaborn as sns

@@ -96,9 +96,7 @@ def generate_pure_profiles(
             )
             pure_profiles.append((proportions_full, subs, uxm_data))
         except Exception as e:
-            logger.warning(
-                f"Failed to generate pure profile for cell type {i}: {e}"
-            )
+            logger.warning(f"Failed to generate pure profile for cell type {i}: {e}")
             pure_profiles.append(None)
 
     return pure_profiles

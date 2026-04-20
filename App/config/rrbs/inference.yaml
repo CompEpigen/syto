@@ -14,7 +14,7 @@ checkpoint_path: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/RRBS
 labels_dict_path: App/labels_dict.json
 
 # Features mask in npz format - used to select features from the aggregated dmr matrix to be used with deconvolution models
-features_mask_path: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/RRBS/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_d041_postfiltered_min_length_50_hard_labels_minibatch_balanced/pseudobulk/features_mask_3.05_cutoff.npz
+features_mask_path: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/RRBS/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_d041_postfiltered_min_length_50_hard_labels_minibatch_balanced/pseudobulk/features_mask_999_cutoff.npz
 
 # Optional cell type name matching dict (atlas target name -> labels_dict name)
 # If atlas uses different naming than labels_dict, this maps between them.
@@ -30,7 +30,7 @@ atlas_path: ../UXM_deconv/supplemental/Atlas.U25.l4.hg19.full.tsv
 # Input configuration
 input:
   # Input type: "bam" for raw BAM files, "processed_reads" for pre-processed pickle
-  type: parsed_reads
+  type: predicted_reads
   # type: bam
   # Path to input BAM file (used when type: bam)
   bam_path: null

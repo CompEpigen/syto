@@ -20,14 +20,14 @@ for filepath in "$INPUT_DIR"/*; do
     filename=$(basename "$filepath")
     sample_name="${filename%.*}"          # strip extension
     sample_name="${sample_name/_reads/}"  # remove _reads
-    output_dir="/home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/RRBS/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_d041_postfiltered_min_length_50_soft_labels_pooled_jakkard/pseudobulk/deconvolutions/${sample_name}"
+    output_dir="/home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/RRBS/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_d041_postfiltered_min_length_50_hard_labels_minibatch_balanced/pseudobulk/deconvolutions/${sample_name}"
     temp_config="${TEMP_CONFIG_DIR}/inference_${sample_name}.yaml"
 
-    # Skip if output directory already exists and contains predictions
-    if [ -d "$output_dir" ] && [ -f "$output_dir/predictions.pkl" ]; then
-        echo "[SKIP] Already processed: $filename ($output_dir/predictions.pkl exists)"
-        continue
-    fi
+    # # Skip if output directory already exists and contains predictions
+    # if [ -d "$output_dir" ] && [ -f "$output_dir/predictions.pkl" ]; then
+    #     echo "[SKIP] Already processed: $filename ($output_dir/predictions.pkl exists)"
+    #     continue
+    # fi
 
     echo "============================================"
     echo "Processing: $filename"

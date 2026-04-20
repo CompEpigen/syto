@@ -4,17 +4,19 @@ MethylDL Main Application Entry Point
 Supports pretraining, fine-tuning, and inference for multiple model architectures
 """
 
+import logging
 import argparse
 import sys
 import os
 from pathlib import Path
-import yaml
-import logging
 from typing import Dict, Any, Optional
+
+import yaml
 
 # Add parent directory to path for imports
 sys.path.append(str(Path(__file__).parent.parent))
 
+# pylint: disable=wrong-import-position
 from methyldl.modelling.experiment_wrappers import (
     DismirMLflowExperiment,
     EpigenBERT2MLflowExperiment,
@@ -45,7 +47,7 @@ def setup_logging(verbose: bool = False, log_file: str = None):
 
 def load_config(config_path: str) -> Dict[str, Any]:
     """Load configuration from YAML file."""
-    with open(config_path, "r") as f:
+    with open(config_path, "r", encoding="utf-8") as f:
         config = yaml.safe_load(f)
     return config
 
@@ -73,6 +75,12 @@ def validate_config(config: Dict[str, Any], task: str) -> None:
             "output_dir",
             "labels_dict_path",
         ],
+        "fit_calibration": [
+            "ios_feature_selected_path",
+            "deconvolvers_dir",
+            "output_dir",
+            "labels_dict_path",
+        ],
     }
 
     if task not in required_fields:
@@ -83,7 +91,7 @@ def validate_config(config: Dict[str, Any], task: str) -> None:
             raise ValueError(f"Missing required field '{field}' for task '{task}'")
 
     # Validate model-specific configuration (not needed for generate_pseudobulk or fit_deconvolution)
-    if task not in ("generate_pseudobulk", "fit_deconvolution"):
+    if task not in ("generate_pseudobulk", "fit_deconvolution", "fit_calibration"):
         model = config["model"]["architecture"].lower()
         if model not in ["dismir", "epigenbert2", "methylbert"]:
             raise ValueError(f"Unknown model architecture: {model}")
@@ -268,6 +276,15 @@ def run_deconvolution_fitting(config: Dict[str, Any], logger: logging.Logger) ->
     pipeline.run()
 
 
+def run_calibration_fitting(config: Dict[str, Any], logger: logging.Logger) -> None:
+    """Run calibrator fitting based on configuration."""
+    from calibration_pipeline import CalibratorFittingPipeline
+
+    logger.info("Starting calibration fitting pipeline")
+    pipeline = CalibratorFittingPipeline(config=config, logger=logger)
+    pipeline.run()
+
+
 def main():
     """Main entry point for the application."""
     parser = argparse.ArgumentParser(
@@ -290,7 +307,14 @@ Examples:
     # Required arguments
     parser.add_argument(
         "--task",
-        choices=["pretrain", "fine_tune", "inference", "generate_pseudobulk", "fit_deconvolution"],
+        choices=[
+            "pretrain",
+            "fine_tune",
+            "inference",
+            "generate_pseudobulk",
+            "fit_deconvolution",
+            "fit_calibration",
+        ],
         required=True,
         help="Task to perform",
     )
@@ -330,8 +354,12 @@ Examples:
     parser.add_argument(
         "--datasets", nargs="+", help="Specific datasets to train on (default: all)"
     )
-    parser.add_argument("--log-file", type=str, default=None,
-                    help="Path to log file. If not set, logs go to stdout only.")
+    parser.add_argument(
+        "--log-file",
+        type=str,
+        default=None,
+        help="Path to log file. If not set, logs go to stdout only.",
+    )
 
     # MLflow overrides
     parser.add_argument("--mlflow-uri", type=str, help="MLflow tracking URI")
@@ -432,6 +460,8 @@ Examples:
             run_pseudobulk_generation(config, logger)
         elif args.task == "fit_deconvolution":
             run_deconvolution_fitting(config, logger)
+        elif args.task == "fit_calibration":
+            run_calibration_fitting(config, logger)
 
         logger.info("Task completed successfully")
         return 0

@@ -602,12 +602,15 @@ def run_ios_generation_parallel(
 
         # Submit all batches
         futures = {
-            executor.submit(worker_task, batch): i
-            for i, batch in enumerate(batches)
+            executor.submit(worker_task, batch): i for i, batch in enumerate(batches)
         }
 
         # Process results as they complete
-        with tqdm(total=n_io_examples, desc="Generating examples",initial=start_checkpoint_idx) as pbar:
+        with tqdm(
+            total=n_io_examples,
+            desc="Generating examples",
+            initial=start_checkpoint_idx,
+        ) as pbar:
             for future in as_completed(futures):
                 results, exceptions = future.result()
                 all_ios.extend(results)
@@ -627,9 +630,7 @@ def run_ios_generation_parallel(
     # Final flush of remaining examples
     if all_ios:
         checkpoint_idx += len(all_ios)
-        with open(
-            file_name.replace(".pkl", f"_{checkpoint_idx}.pkl"), "wb"
-        ) as f:
+        with open(file_name.replace(".pkl", f"_{checkpoint_idx}.pkl"), "wb") as f:
             pickle.dump(all_ios, f)
         all_ios = []
 
@@ -728,6 +729,7 @@ def _consolidate_legacy(
                 part_ios = pickle.load(f)
         except Exception:
             import warnings
+
             warnings.warn(f"{pkl_name} is corrupted and cannot be opened")
             continue
 
