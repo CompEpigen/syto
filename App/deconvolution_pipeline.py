@@ -72,6 +72,7 @@ class DeconvolutionFittingPipeline:
         os.makedirs(self.output_dir, exist_ok=True)
 
         # Feature selection
+        self.top_features = config.get("top_features", None)
         self.cutoff = config.get("feature_cutoff", 1.1)
         self.splits = config.get("splits", ["train", "valid", "test"])
         self.guarantee_diagonal = config.get("guarantee_diagonal_selection", False)
@@ -152,27 +153,47 @@ class DeconvolutionFittingPipeline:
         self, pure_profiles: list
     ) -> Dict[str, np.ndarray]:
         """Compute feature mask and apply to full IO matrices."""
-        self.logger.info(
-            f"Stage 2: Feature selection with cutoff={self.cutoff} ..."
-        )
+        if getattr(self, "top_features", None) is not None:
+            self.logger.info(
+                f"Stage 2: Feature selection for top {self.top_features} features ..."
+            )
+        else:
+            self.logger.info(
+                f"Stage 2: Feature selection with cutoff={self.cutoff} ..."
+            )
 
         # Compute mask from validation split
         pure_valid = extract_pure_feature_matrix(
             pure_profiles, self.num_input_labels, self.num_output_labels, split_idx=1,splits =self.splits
         )
         valid_ratios = compute_feature_ratios(pure_valid)
-        mask = compute_feature_mask(
-            valid_ratios,
-            self.cutoff,
-            guarantee_diagonal_selection=self.guarantee_diagonal,
-            guarantee_columns_selection=self.guarantee_columns,
-        )
+        
+        if getattr(self, "top_features", None) is not None:
+            mask, calc_cutoff = compute_feature_mask(
+                valid_ratios,
+                cutoff=None,
+                guarantee_diagonal_selection=self.guarantee_diagonal,
+                guarantee_columns_selection=self.guarantee_columns,
+                top_features=self.top_features,
+                return_cutoff=True
+            )
+            self.cutoff = calc_cutoff
+            self.logger.info(
+                f"  Automatic cutoff evaluated as {self.cutoff:.4f}"
+            )
+        else:
+            mask = compute_feature_mask(
+                valid_ratios,
+                self.cutoff,
+                guarantee_diagonal_selection=self.guarantee_diagonal,
+                guarantee_columns_selection=self.guarantee_columns,
+            )
 
         n_selected = int(mask.sum())
         total = self.num_output_labels * self.num_input_labels
         self.logger.info(
             f"  Selected {n_selected}/{total} features "
-            f"(cutoff={self.cutoff})"
+            f"(dynamic_cutoff={self.cutoff:.4f})"
         )
 
         # Save mask
@@ -215,7 +236,8 @@ class DeconvolutionFittingPipeline:
                 master_names=master_names,
                 guarantee_diagonal_selection=self.guarantee_diagonal,
                 guarantee_columns_selection=self.guarantee_columns,
-                splits =self.splits
+                splits =self.splits,
+                top_features=getattr(self, "top_features", None)
             )
 
         return feature_data
