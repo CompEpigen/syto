@@ -95,12 +95,14 @@ class CalibratorFittingPipeline:
         ios_data = self._stage1_load_data()
         deconvolvers = self._stage1_load_deconvolvers()
 
-        features_valid = ios_data["features_valid"]
-        features_test = ios_data["features_test"]
-        proportions = ios_data["proportions"]
+        # Extract features per split, resolving variant-aware keys
+        features_dict, proportions_dict = self._resolve_features_and_proportions(ios_data)
 
-        y_valid = proportions
-        y_test = proportions
+        features_valid = features_dict["valid"]
+        y_valid = proportions_dict["valid"]
+
+        features_test = features_dict.get("test", features_valid)
+        y_test = proportions_dict.get("test", y_valid)
 
         results: Dict[str, Any] = {}
 
@@ -136,22 +138,101 @@ class CalibratorFittingPipeline:
     # ═══════════════════════════════════════════════════════════════
 
     def _stage1_load_data(self) -> Dict[str, np.ndarray]:
-        """Load the IOs (already feature selected)."""
+        """Load the IOs (already feature selected).
+
+        Supports both legacy key layout (``proportions``,
+        ``features_{split}``) and the new variant-aware layout
+        (``proportions_{split}``, ``features_{split}_{variant}``).
+        """
         ios_path = self.config["ios_feature_selected_path"]
         self.logger.info(f"Stage 1a: Loading IOs from {ios_path}")
 
         data = np.load(ios_path)
+        ios_data = {k: data[k] for k in data.files}
+        self.logger.info(f"  Available keys: {list(ios_data.keys())}")
+        return ios_data
+
+    def _resolve_features_and_proportions(
+        self, ios_data: Dict[str, np.ndarray]
+    ) -> Tuple[Dict[str, np.ndarray], Dict[str, np.ndarray]]:
+        """Resolve variant-aware feature and per-split proportion keys.
+
+        Config options
+        --------------
+        preferred_dmr_variant : str or dict, optional
+            A global variant name (e.g. ``"uniform"``) or a per-split
+            mapping (e.g. ``{"valid": "uniform", "test": "uniform_multimodal"}``).
+            When omitted, the first variant found alphabetically is used.
+
+        Returns
+        -------
+        features_dict : dict
+            ``{split_name: np.ndarray}``
+        proportions_dict : dict
+            ``{split_name: np.ndarray}``
+        """
+        preferred_variant = self.config.get("preferred_dmr_variant")
+
+        # ── Features ──────────────────────────────────────────────
+        features_dict: Dict[str, np.ndarray] = {}
+        for key, val in ios_data.items():
+            if not key.startswith("features_"):
+                continue
+            remainder = key[len("features_"):]
+            parts = remainder.split("_")
+
+            if len(parts) > 1:
+                # Variant-aware key: features_{split}_{variant}
+                split_name, variant = parts[0], "_".join(parts[1:])
+
+                target_variant = preferred_variant
+                if isinstance(preferred_variant, dict):
+                    target_variant = preferred_variant.get(split_name)
+
+                if target_variant and variant != target_variant:
+                    continue
+                if split_name not in features_dict:
+                    features_dict[split_name] = val
+            else:
+                # Legacy key: features_{split}
+                features_dict[remainder] = val
+
+        self.logger.info(f"  Resolved feature splits: {list(features_dict.keys())}")
+
+        if "valid" not in features_dict:
+            raise ValueError(
+                "'valid' split is required for calibration but was not found "
+                f"in the loaded data. Available: {list(features_dict.keys())}"
+            )
+
+        # ── Proportions ───────────────────────────────────────────
+        splits = self.config.get("splits", ["train", "valid", "test"])
+        proportions_dict: Dict[str, np.ndarray] = {}
+        for split_name in splits:
+            pkey = f"proportions_{split_name}"
+            if pkey in ios_data:
+                proportions_dict[split_name] = ios_data[pkey]
+            elif "proportions" in ios_data:
+                proportions_dict[split_name] = ios_data["proportions"]
+
+        if "valid" not in proportions_dict:
+            raise ValueError(
+                "Proportions for 'valid' split are required for calibration."
+            )
+
         self.logger.info(
-            f"  proportions: {data['proportions'].shape}, "
-            f"features_valid: {data['features_valid'].shape}, "
-            f"features_test: {data['features_test'].shape}"
+            f"  Resolved proportion splits: {list(proportions_dict.keys())}"
         )
-        return {
-            "proportions": data["proportions"],
-            "features_train": data["features_train"],
-            "features_valid": data["features_valid"],
-            "features_test": data["features_test"],
-        }
+
+        for split_name in features_dict:
+            f_shape = features_dict[split_name].shape
+            if split_name in proportions_dict:
+                p_shape = proportions_dict[split_name].shape
+                self.logger.info(
+                    f"  {split_name}: features={f_shape}, proportions={p_shape}"
+                )
+
+        return features_dict, proportions_dict
 
     def _stage1_load_deconvolvers(
         self,
