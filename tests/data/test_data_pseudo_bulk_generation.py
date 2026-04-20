@@ -795,7 +795,8 @@ class TestDMRSamplingStrategies(PseudoBulkGenerationTestBase):
         """Build grouped splits from prepared data."""
         return {
             "train": self.prepared_train.groupby(
-                ["original_label", "dmr_ctype_label"], sort=False,
+                ["original_label", "dmr_ctype_label"],
+                sort=False,
             ),
         }
 
@@ -850,14 +851,18 @@ class TestComputeSamplesPerDmr(unittest.TestCase):
 
     def test_uniform_returns_dict_of_ints(self):
         result = pseudo_bulk_generation_module._compute_samples_per_dmr_uniform(
-            labels=[0, 1], n_samples_list=[390, 195], num_labels=39,
+            labels=[0, 1],
+            n_samples_list=[390, 195],
+            num_labels=39,
         )
         self.assertEqual(result[0], 10)  # 390 / 39
-        self.assertEqual(result[1], 5)   # 195 / 39
+        self.assertEqual(result[1], 5)  # 195 / 39
 
     def test_random_returns_dict_of_lists(self):
         result = pseudo_bulk_generation_module._compute_samples_per_dmr_random(
-            labels=[0], n_samples_list=[390], num_labels=39,
+            labels=[0],
+            n_samples_list=[390],
+            num_labels=39,
         )
         self.assertIsInstance(result[0], list)
         self.assertEqual(len(result[0]), 39)
@@ -940,6 +945,7 @@ class TestConsolidateVariantAware(PseudoBulkGenerationTestBase):
         with tempfile.TemporaryDirectory() as tmpdir:
             pkl_path = os.path.join(tmpdir, "ios_1.pkl")
             import pickle
+
             with open(pkl_path, "wb") as f:
                 pickle.dump(ios, f)
 
@@ -976,6 +982,7 @@ class TestConsolidateVariantAware(PseudoBulkGenerationTestBase):
         with tempfile.TemporaryDirectory() as tmpdir:
             pkl_path = os.path.join(tmpdir, "ios_1.pkl")
             import pickle
+
             with open(pkl_path, "wb") as f:
                 pickle.dump(ios, f)
 

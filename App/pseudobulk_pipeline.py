@@ -189,9 +189,7 @@ class PseudoBulkPipeline:
             )
         else:
             # ── Legacy shared generation mode ─────────────────────
-            self._run_shared_generation(
-                splits_data, generate_uxm_in_ios
-            )
+            self._run_shared_generation(splits_data, generate_uxm_in_ios)
 
         # ── Stage 5: Consolidate ──────────────────────────────────
         self.logger.info("Stage 5: Consolidating partial pickles ...")
@@ -204,9 +202,7 @@ class PseudoBulkPipeline:
                 split_ios_dir = os.path.join(self.ios_dir, split_name)
                 if not os.path.isdir(split_ios_dir):
                     continue
-                pkl_files = [
-                    f for f in os.listdir(split_ios_dir) if f.endswith(".pkl")
-                ]
+                pkl_files = [f for f in os.listdir(split_ios_dir) if f.endswith(".pkl")]
                 if not pkl_files:
                     continue
 
@@ -217,7 +213,7 @@ class PseudoBulkPipeline:
                     ios_dir=split_ios_dir,
                     output_path=split_output,
                     num_labels=self.num_labels,
-                    labels_dict=self.labels_dict
+                    labels_dict=self.labels_dict,
                 )
                 merged_result.update(part)
 
@@ -229,7 +225,7 @@ class PseudoBulkPipeline:
                 ios_dir=self.ios_dir,
                 output_path=self.consolidated_path,
                 num_labels=self.num_labels,
-                labels_dict=self.labels_dict
+                labels_dict=self.labels_dict,
             )
 
         # Log summary — handle both legacy and variant-aware key schemes
@@ -243,8 +239,7 @@ class PseudoBulkPipeline:
             else:
                 n_examples = 0
         self.logger.info(
-            f"  Consolidated {n_examples} examples to "
-            f"{self.consolidated_path}"
+            f"  Consolidated {n_examples} examples to " f"{self.consolidated_path}"
         )
 
         return result
@@ -271,19 +266,20 @@ class PseudoBulkPipeline:
             "chromosome",
             "label",
         ]
-        
+
         if generate_uxm_in_ios:
             base_cols.extend(["name", "record_M", "record_U", "record_X"])
 
         for split_name, df in splits_data.items():
             pred_cols = [
-                c for c in df.columns 
+                c
+                for c in df.columns
                 if c.startswith("prediction_") and c[11:].isdigit()
             ]
             # Keep only columns that exist in the dataframe to avoid KeyErrors
             keep_cols = [c for c in base_cols + pred_cols if c in df.columns]
-            
-            # Select the columns in-place conceptually 
+
+            # Select the columns in-place conceptually
             # (assigning a sub-slice reference back to the dict)
             splits_data[split_name] = df[keep_cols]
 
@@ -404,9 +400,7 @@ class PseudoBulkPipeline:
             # Build per-split kwargs — pass only this split's data
             split_ios_dir = os.path.join(self.ios_dir, split_name)
             os.makedirs(split_ios_dir, exist_ok=True)
-            ios_base_path = os.path.join(
-                split_ios_dir, "ios_deconvolution_data.pkl"
-            )
+            ios_base_path = os.path.join(split_ios_dir, "ios_deconvolution_data.pkl")
 
             shared_kwargs = dict(
                 splits={split_name: splits_data[split_name]},
@@ -454,18 +448,14 @@ class PseudoBulkPipeline:
 
             self._log_generation_exceptions(exceptions)
 
-    def _log_generation_exceptions(
-        self, exceptions: List[Any]
-    ) -> None:
+    def _log_generation_exceptions(self, exceptions: List[Any]) -> None:
         """Log a summary of generation exceptions."""
         if exceptions:
             self.logger.warning(
                 f"  {len(exceptions)} example(s) failed during generation."
             )
             for lbl, prop, err in exceptions[:5]:
-                self.logger.warning(
-                    f"    labels={lbl}, proportions={prop}: {err}"
-                )
+                self.logger.warning(f"    labels={lbl}, proportions={prop}: {err}")
 
     # ═══════════════════════════════════════════════════════════════
     #  Internal helpers

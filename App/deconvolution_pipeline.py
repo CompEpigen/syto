@@ -160,10 +160,14 @@ class DeconvolutionFittingPipeline:
 
         # Compute mask from validation split
         pure_valid = extract_pure_feature_matrix(
-            pure_profiles, self.num_input_labels, self.num_output_labels, split_idx=1,splits =self.splits
+            pure_profiles,
+            self.num_input_labels,
+            self.num_output_labels,
+            split_idx=1,
+            splits=self.splits,
         )
         valid_ratios = compute_feature_ratios(pure_valid)
-        
+
         if getattr(self, "top_features", None) is not None:
             mask, calc_cutoff = compute_feature_mask(
                 valid_ratios,
@@ -171,12 +175,10 @@ class DeconvolutionFittingPipeline:
                 guarantee_diagonal_selection=self.guarantee_diagonal,
                 guarantee_columns_selection=self.guarantee_columns,
                 top_features=self.top_features,
-                return_cutoff=True
+                return_cutoff=True,
             )
             self.cutoff = calc_cutoff
-            self.logger.info(
-                f"  Automatic cutoff evaluated as {self.cutoff:.4f}"
-            )
+            self.logger.info(f"  Automatic cutoff evaluated as {self.cutoff:.4f}")
         else:
             mask = compute_feature_mask(
                 valid_ratios,
@@ -209,7 +211,7 @@ class DeconvolutionFittingPipeline:
             mask=mask,
             output_path=filtered_path,
             cutoff=self.cutoff,
-            splits =self.splits
+            splits=self.splits,
         )
         feature_data["mask"] = mask
 
@@ -231,8 +233,8 @@ class DeconvolutionFittingPipeline:
                 master_names=master_names,
                 guarantee_diagonal_selection=self.guarantee_diagonal,
                 guarantee_columns_selection=self.guarantee_columns,
-                splits =self.splits,
-                top_features=getattr(self, "top_features", None)
+                splits=self.splits,
+                top_features=getattr(self, "top_features", None),
             )
 
         return feature_data
@@ -261,7 +263,7 @@ class DeconvolutionFittingPipeline:
         for key, val in feature_data.items():
             if not key.startswith("features_"):
                 continue
-            remainder = key[len("features_"):]
+            remainder = key[len("features_") :]
             # Determine if this is a variant key (split_variant) or legacy (split)
             parts = remainder.rsplit("_", 1)
             if len(parts) == 2 and parts[1] in ("uniform", "random"):
@@ -276,7 +278,9 @@ class DeconvolutionFittingPipeline:
                 features_dict[remainder] = val
 
         if "train" not in features_dict or "valid" not in features_dict:
-            raise ValueError("Both 'train' and 'valid' splits are required for fitting deconvolvers.")
+            raise ValueError(
+                "Both 'train' and 'valid' splits are required for fitting deconvolvers."
+            )
 
         # Resolve proportions — legacy key first, then per-split fallback
         if "proportions" in feature_data:
@@ -314,7 +318,13 @@ class DeconvolutionFittingPipeline:
                     )
                 elif name in ("nnls", "psls"):
                     model, metrics = self._fit_ls(
-                        name, deconv_cfg, pure_profiles, mask, features_dict, proportions, self.splits
+                        name,
+                        deconv_cfg,
+                        pure_profiles,
+                        mask,
+                        features_dict,
+                        proportions,
+                        self.splits,
                     )
                 else:
                     self.logger.warning(f"  Unknown deconvolver '{name}', skipping")
@@ -370,8 +380,10 @@ class DeconvolutionFittingPipeline:
         )
 
         model.fit(
-            X_train, y,
-            X_val, y,
+            X_train,
+            y,
+            X_val,
+            y,
             verbose=1,
         )
 
@@ -454,7 +466,7 @@ class DeconvolutionFittingPipeline:
         X_train = features["train"]
         X_val = features["valid"]
         X_test = features.get("test")
-        
+
         n_input_features = X_train.shape[1]
 
         model = self._build_nn_model(name, n_input_features, params)
@@ -519,7 +531,7 @@ class DeconvolutionFittingPipeline:
         mask: np.ndarray,
         features: Dict[str, np.ndarray],
         y: np.ndarray,
-        splits: List
+        splits: List,
     ) -> Tuple[Any, dict]:
         """Fit NNLS or PSLS deconvolver.
 
@@ -531,7 +543,11 @@ class DeconvolutionFittingPipeline:
 
         # Build reference matrix from train-split pure profiles
         pure_train = extract_pure_feature_matrix(
-            pure_profiles, self.num_input_labels, self.num_output_labels, split_idx=0, splits=splits
+            pure_profiles,
+            self.num_input_labels,
+            self.num_output_labels,
+            split_idx=0,
+            splits=splits,
         )
         # pure_train shape: (n_cell_types, n_dmr_groups, n_pred_classes)
         # Apply mask to each cell type's profile
@@ -563,9 +579,7 @@ class DeconvolutionFittingPipeline:
             test_pred = model.predict(eval_X, n_workers=n_workers)
 
         metrics = compute_deconvolution_metrics(test_pred, y)
-        self.logger.info(
-            f"    {name.upper()} {eval_name} MAE: {metrics['mae']:.6f}"
-        )
+        self.logger.info(f"    {name.upper()} {eval_name} MAE: {metrics['mae']:.6f}")
 
         # Save
         save_path = os.path.join(self.output_dir, f"{name}_deconvolver.joblib")
@@ -606,15 +620,12 @@ class DeconvolutionFittingPipeline:
         calibrator.fit(val_pred, y)
 
         # Get test predictions and calibrate
-        test_pred = self._predict_with_model(
-            deconv_name, model, eval_X, cfg
-        )
+        test_pred = self._predict_with_model(deconv_name, model, eval_X, cfg)
         calibrated_pred, _ = calibrator.predict(test_pred)
 
         metrics = compute_deconvolution_metrics(calibrated_pred, y)
         self.logger.info(
-            f"    {deconv_name}_calibrated {eval_name} MAE: "
-            f"{metrics['mae']:.6f}"
+            f"    {deconv_name}_calibrated {eval_name} MAE: " f"{metrics['mae']:.6f}"
         )
 
         # Save calibrator
@@ -713,6 +724,7 @@ class DeconvolutionFittingPipeline:
     def _save_summary_csv(self, results: Dict[str, Any]) -> None:
         """Save a CSV with one row per model."""
         import pandas as pd
+
         rows: list = []
         for model_name, data in results.items():
             if "metrics" not in data:
@@ -728,7 +740,7 @@ class DeconvolutionFittingPipeline:
                     "worst_class_loa_upper": m.get("worst_class_loa_upper"),
                     "mae": m["mae"],
                     "mse": m["mse"],
-                    "kl": m.get("kl")
+                    "kl": m.get("kl"),
                 }
             )
 

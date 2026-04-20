@@ -17,7 +17,7 @@ from methyldl.deconvolution.uxm import (
 from methyldl.modelling.prediction_aggregation import (
     aggregate_predictions_by_dmr,
     aggregate_predictions_by_dmr_optimized,
-    _fill_in_missing_labels
+    _fill_in_missing_labels,
 )
 
 # Global variables for worker processes (initialized once per worker)
@@ -313,9 +313,7 @@ def _compute_samples_per_dmr_uniform(labels, n_samples_list, num_labels):
     dict
         ``{label: int}`` with reads per DMR group for each label.
     """
-    return {
-        label: int(n / num_labels) for label, n in zip(labels, n_samples_list)
-    }
+    return {label: int(n / num_labels) for label, n in zip(labels, n_samples_list)}
 
 
 # def _compute_samples_per_dmr_random(labels, n_samples_list, num_labels):
@@ -347,12 +345,13 @@ def _compute_samples_per_dmr_uniform(labels, n_samples_list, num_labels):
 #         result[label] = counts
 #     return result
 
+
 def _compute_samples_per_dmr_multinomial(labels, n_samples_list, num_labels):
     """Realistic DMR allocation using multinomial sampling.
 
-    Simulates natural sequencing noise by randomly distributing each 
-    cell type's total reads across the available DMRs. This causes 
-    total depth to fluctuate per locus, but guarantees the local 
+    Simulates natural sequencing noise by randomly distributing each
+    cell type's total reads across the available DMRs. This causes
+    total depth to fluctuate per locus, but guarantees the local
     proportions correctly center around the global mixture proportions.
 
     Parameters
@@ -370,16 +369,17 @@ def _compute_samples_per_dmr_multinomial(labels, n_samples_list, num_labels):
         ``{label: list[int]}`` with per-DMR read counts for each label.
     """
     result = {}
-    
+
     # Assumption: A read has an equal baseline probability of landing in any DMR
-    pvals = [1.0 / num_labels] * num_labels 
-    
+    pvals = [1.0 / num_labels] * num_labels
+
     for label, n in zip(labels, n_samples_list):
         # np.random.multinomial perfectly distributes 'n' items into 'num_labels' bins
         counts = np.random.multinomial(n, pvals).tolist()
         result[label] = counts
-        
+
     return result
+
 
 def generate_pseudo_bulk_optimized(
     total_samples,
@@ -416,9 +416,10 @@ def generate_pseudo_bulk_optimized(
         ``"uniform"``.
     """
     assert np.round(np.sum(proportions), 4) == 1, "Proportions must sum up to one"
-    assert dmr_sampling in ("uniform", "uniform_multinomial"), (
-        f"dmr_sampling must be 'uniform' or 'random', got '{dmr_sampling}'"
-    )
+    assert dmr_sampling in (
+        "uniform",
+        "uniform_multinomial",
+    ), f"dmr_sampling must be 'uniform' or 'random', got '{dmr_sampling}'"
 
     n_samples_list = [int(total_samples * x) for x in proportions]
     sample_name = "pseudo_bulk_sample"
@@ -432,7 +433,6 @@ def generate_pseudo_bulk_optimized(
         samples_per_dmr = _compute_samples_per_dmr_multinomial(
             labels, n_samples_list, num_labels
         )
-
 
     subs = {}
     uxm_data = {}
@@ -688,9 +688,7 @@ def consolidate_ios_pickles(
     """
     pred_cols = [f"prediction_{i}_wavg" for i in range(num_labels)]
 
-    pkl_files = sorted(
-        f for f in os.listdir(ios_dir) if f.endswith(".pkl")
-    )
+    pkl_files = sorted(f for f in os.listdir(ios_dir) if f.endswith(".pkl"))
 
     # Detect whether any tuple has a variant tag
     has_variants = False
@@ -710,10 +708,14 @@ def consolidate_ios_pickles(
 
     if not has_variants:
         # ── Legacy consolidation (unchanged behaviour) ─────────────
-        return _consolidate_legacy(ios_dir, output_path, num_labels, pred_cols, pkl_files)
+        return _consolidate_legacy(
+            ios_dir, output_path, num_labels, pred_cols, pkl_files
+        )
 
     # ── Variant-aware consolidation ────────────────────────────────
-    return _consolidate_variant_aware(ios_dir, output_path, num_labels, pred_cols, pkl_files,labels_dict)
+    return _consolidate_variant_aware(
+        ios_dir, output_path, num_labels, pred_cols, pkl_files, labels_dict
+    )
 
 
 def _consolidate_legacy(
@@ -767,7 +769,7 @@ def _consolidate_variant_aware(
     num_labels: int,
     pred_cols: list,
     pkl_files: list,
-    labels_dict: dict
+    labels_dict: dict,
 ):
     """Variant-aware consolidation for ``(proportions, subs, uxm_data, variant)`` tuples.
 
@@ -787,6 +789,7 @@ def _consolidate_variant_aware(
                 part_ios = pickle.load(f)
         except Exception:
             import warnings
+
             warnings.warn(f"{pkl_name} is corrupted and cannot be opened")
             continue
 
@@ -808,8 +811,12 @@ def _consolidate_variant_aware(
                 if variant not in features_by_split_variant[split_name]:
                     features_by_split_variant[split_name][variant] = []
                     proportions_by_split_variant[split_name][variant] = []
-                if df.shape[0]<num_labels:
-                    df = _fill_in_missing_labels(df,group_cols=["dmr_ctype_label", "dmr_ctype"],labels_dict=labels_dict)
+                if df.shape[0] < num_labels:
+                    df = _fill_in_missing_labels(
+                        df,
+                        group_cols=["dmr_ctype_label", "dmr_ctype"],
+                        labels_dict=labels_dict,
+                    )
                 features_by_split_variant[split_name][variant].append(
                     np.expand_dims(df[pred_cols].to_numpy(), 0)
                 )
@@ -843,9 +850,7 @@ def _consolidate_variant_aware(
     prop_keys = [k for k in result if k.startswith("proportions_")]
     if len(prop_keys) >= 2:
         first = result[prop_keys[0]]
-        all_same = all(
-            np.array_equal(first, result[k]) for k in prop_keys[1:]
-        )
+        all_same = all(np.array_equal(first, result[k]) for k in prop_keys[1:])
         if all_same:
             result["proportions"] = first
 
