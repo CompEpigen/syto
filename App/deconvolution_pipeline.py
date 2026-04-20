@@ -152,7 +152,11 @@ class DeconvolutionFittingPipeline:
 
         # Compute mask from validation split
         pure_valid = extract_pure_feature_matrix(
-            pure_profiles, self.num_input_labels, self.num_output_labels, split_idx=1,splits =self.splits
+            pure_profiles,
+            self.num_input_labels,
+            self.num_output_labels,
+            split_idx=1,
+            splits=self.splits,
         )
         valid_ratios = compute_feature_ratios(pure_valid)
         mask = compute_feature_mask(
@@ -185,7 +189,7 @@ class DeconvolutionFittingPipeline:
             mask=mask,
             output_path=filtered_path,
             cutoff=self.cutoff,
-            splits =self.splits
+            splits=self.splits,
         )
         feature_data["mask"] = mask
 
@@ -207,7 +211,7 @@ class DeconvolutionFittingPipeline:
                 master_names=master_names,
                 guarantee_diagonal_selection=self.guarantee_diagonal,
                 guarantee_columns_selection=self.guarantee_columns,
-                splits =self.splits
+                splits=self.splits,
             )
 
         return feature_data
@@ -559,15 +563,12 @@ class DeconvolutionFittingPipeline:
         calibrator.fit(val_pred, y)
 
         # Get test predictions and calibrate
-        test_pred = self._predict_with_model(
-            deconv_name, model, eval_X, cfg
-        )
+        test_pred = self._predict_with_model(deconv_name, model, eval_X, cfg)
         calibrated_pred, _ = calibrator.predict(test_pred)
 
         metrics = compute_deconvolution_metrics(calibrated_pred, y)
         self.logger.info(
-            f"    {deconv_name}_calibrated {eval_name} MAE: "
-            f"{metrics['mae']:.6f}"
+            f"    {deconv_name}_calibrated {eval_name} MAE: " f"{metrics['mae']:.6f}"
         )
 
         # Save calibrator
