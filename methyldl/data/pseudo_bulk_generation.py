@@ -805,6 +805,7 @@ def _consolidate_variant_aware(
                     proportions_by_split_variant[split_name][variant] = []
                 if df.shape[0]<num_labels:
                     df = _fill_in_missing_labels(df,group_cols=["dmr_ctype_label", "dmr_ctype"],labels_dict=labels_dict)
+                    df = df.sort_values("dmr_ctype_label").reset_index(drop=True)
                 features_by_split_variant[split_name][variant].append(
                     np.expand_dims(df[pred_cols].to_numpy(), 0)
                 )
@@ -815,15 +816,10 @@ def _consolidate_variant_aware(
     # Build per-split proportions (deduplicated: same across variants for one split)
     for split_name, variant_dict in proportions_by_split_variant.items():
         # Collect all proportion arrays across variants for this split
-        all_props = []
-        for variant, props_list in sorted(variant_dict.items()):
-            all_props.extend(props_list)
-        # Deduplicate: proportions should be the same across variants
-        # (each proportion vector appears once per variant), so we take
-        # every N-th where N = number of variants
-        n_variants = len(variant_dict)
-        deduplicated = all_props[::n_variants]
-        result[f"proportions_{split_name}"] = np.concatenate(deduplicated, axis=0)
+        first_variant = sorted(variant_dict.keys())[0]
+        result[f"proportions_{split_name}"] = np.concatenate(
+            variant_dict[first_variant], axis=0
+        )
 
     # Build per-split-per-variant features
     for split_name, variant_dict in features_by_split_variant.items():
