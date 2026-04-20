@@ -335,6 +335,7 @@ class DeconvolutionFittingPipeline:
 
         # Log summary
         self._log_summary(results)
+        self._save_summary_csv(results)
 
         return results
 
@@ -688,19 +689,50 @@ class DeconvolutionFittingPipeline:
 
     def _log_summary(self, results: Dict[str, Any]) -> None:
         """Log a summary of all fitted models and their test metrics."""
-        self.logger.info("=" * 60)
+        self.logger.info("=" * 70)
         self.logger.info("DECONVOLUTION FITTING SUMMARY")
-        self.logger.info("=" * 60)
+        self.logger.info("=" * 70)
 
         for model_name, data in results.items():
-            metrics = data["metrics"]
-            self.logger.info(
-                f"  {model_name:25s}  "
-                f"MAE={metrics['mae']:.6f}  "
-                f"MSE={metrics['mse']:.6f}  "
-                f"CosSim={metrics['cosine_sim']:.6f}"
+            if "metrics" in data:
+                m = data["metrics"]
+                self.logger.info(
+                    f"  {model_name:30s}  "
+                    f"R2={m.get('overall_r2', 0.0):.6f}  "
+                    f"LoA=[{m.get('loa_lower', 0.0):.6f}, {m.get('loa_upper', 0.0):.6f}]  "
+                    f"LoA(worst)=[{m.get('worst_class_loa_lower', 0.0):.6f}, {m.get('worst_class_loa_upper', 0.0):.6f}]  "
+                    f"MAE={m['mae']:.6f}  "
+                    f"MSE={m['mse']:.6f}  "
+                    f"KLDiv={m.get('kl', 0.0):.6f}"
+                )
+
+        self.logger.info("=" * 70)
+        self.logger.info(f"  Output directory: {self.output_dir}")
+        self.logger.info("=" * 70)
+
+    def _save_summary_csv(self, results: Dict[str, Any]) -> None:
+        """Save a CSV with one row per model."""
+        import pandas as pd
+        rows: list = []
+        for model_name, data in results.items():
+            if "metrics" not in data:
+                continue
+            m = data["metrics"]
+            rows.append(
+                {
+                    "model": model_name,
+                    "overall_r2": m.get("overall_r2"),
+                    "loa_lower": m.get("loa_lower"),
+                    "loa_upper": m.get("loa_upper"),
+                    "worst_class_loa_lower": m.get("worst_class_loa_lower"),
+                    "worst_class_loa_upper": m.get("worst_class_loa_upper"),
+                    "mae": m["mae"],
+                    "mse": m["mse"],
+                    "kl": m.get("kl")
+                }
             )
 
-        self.logger.info("=" * 60)
-        self.logger.info(f"  Output directory: {self.output_dir}")
-        self.logger.info("=" * 60)
+        df = pd.DataFrame(rows)
+        csv_path = os.path.join(self.output_dir, "deconvolution_summary.csv")
+        df.to_csv(csv_path, index=False)
+        self.logger.info(f"Saved deconvolution summary CSV to {csv_path}")
