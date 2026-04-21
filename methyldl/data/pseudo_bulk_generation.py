@@ -61,8 +61,6 @@ def generate_pseudo_bulk(
         Cell-type labels to include in the pseudo-bulk mixture.
     proportions : list[float]
         Mixture proportions associated with ``labels``. They must sum to 1.
-    proportions : list[float]
-        Mixture proportions associated with ``labels``. They must sum to 1.
     splits : dict
         Dict of read-level prediction dataframe for the splits.
     atlas : pd.DataFrame
