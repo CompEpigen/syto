@@ -335,9 +335,17 @@ class LookupClassifier:
         candidates = self._region_index.get(region)
 
         if not candidates:
-            # Region completely unseen — return uniform
-            logger.warning("Region '%s' not in lookup; returning uniform.", region)
-            return [1.0 / num_classes] * num_classes
+            if self.config.label_mode == "soft":
+                # Region completely unseen — return uniform
+                logger.warning("Region '%s' not in lookup; returning uniform.", region)
+                return [1.0 / num_classes] * num_classes
+            elif self.config.label_mode == "hard":
+                # Region completely unseen — return one hot of rejection class (last class)
+                logger.warning("Region '%s' not in lookup; returning rejection class.", region)
+                rejection_class = num_classes - 1
+                label_vec = np.zeros(num_classes)
+                label_vec[rejection_class] = 1.0
+                return label_vec.tolist()
 
         # Find minimum distance
         best_dist = float("inf")
