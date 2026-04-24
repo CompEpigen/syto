@@ -477,7 +477,7 @@ class PseudoBulkPipeline:
                     with open(pickle_paths[split_name], "rb") as f:
                         splits_data[split_name] = pickle.load(f)
             else: 
-                predicted_dict_path = os.path.join("_".join(first_pickle_file.split("/")[:-1]), "predicted_reads.pkl")
+                predicted_dict_path = os.path.join("/".join(first_pickle_file.split("/")[:-1]), "predicted_reads.pkl")
                 with open(predicted_dict_path, "rb") as f:
                     splits_data = pickle.load(f)
                 if len(set(splits_data.keys()).intersection(splits_cfg))==len(splits_cfg):
