@@ -470,13 +470,14 @@ class PseudoBulkPipeline:
                 splits_data[split_name] = pd.read_parquet(os.path.join(data_path, f"{split_name}.parquet"))
         elif input_type == "pre_predicted":
             pickle_paths = self.config["pickle_paths"]
+            first_pickle_file = pickle_paths[list(pickle_paths.keys())[0]]
             # Check if file exists and if not, try to switch for a likely alternative
-            if os.path.isfile(pickle_paths[list(pickle_paths.keys())[0]]):
+            if os.path.isfile(first_pickle_file):
                 for split_name in splits_cfg:
                     with open(pickle_paths[split_name], "rb") as f:
                         splits_data[split_name] = pickle.load(f)
             else: 
-                predicted_dict_path = os.path.join("_".join(pickle_paths[0].split("/")[:-1]), "predicted_reads.pkl")
+                predicted_dict_path = os.path.join("_".join(first_pickle_file.split("/")[:-1]), "predicted_reads.pkl")
                 with open(predicted_dict_path, "rb") as f:
                     splits_data = pickle.load(f)
                 if len(set(splits_data.keys()).intersection(splits_cfg))==len(splits_cfg):
