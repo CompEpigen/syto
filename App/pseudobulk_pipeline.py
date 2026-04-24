@@ -471,7 +471,7 @@ class PseudoBulkPipeline:
         elif input_type == "pre_predicted":
             pickle_paths = self.config["pickle_paths"]
             # Check if file exists and if not, try to switch for a likely alternative
-            if os.path.isfile(pickle_paths[0]):
+            if os.path.isfile(pickle_paths[list(pickle_paths.keys())[0]]):
                 for split_name in splits_cfg:
                     with open(pickle_paths[split_name], "rb") as f:
                         splits_data[split_name] = pickle.load(f)
