@@ -470,10 +470,21 @@ class PseudoBulkPipeline:
                 splits_data[split_name] = pd.read_parquet(os.path.join(data_path, f"{split_name}.parquet"))
         elif input_type == "pre_predicted":
             pickle_paths = self.config["pickle_paths"]
-            for split_name in splits_cfg:
-                with open(pickle_paths[split_name], "rb") as f:
-                    splits_data[split_name] = pickle.load(f)
-
+            # Check if file exists and if not, try to switch for a likely alternative
+            if os.path.isfile(pickle_paths[0]):
+                for split_name in splits_cfg:
+                    with open(pickle_paths[split_name], "rb") as f:
+                        splits_data[split_name] = pickle.load(f)
+            else: 
+                predicted_dict_path = os.path.join("_".join(pickle_paths[0].split("/")[:-1]), "predicted_reads.pkl")
+                with open(predicted_dict_path, "rb") as f:
+                    splits_data = pickle.load(f)
+                if len(set(splits_data.keys()).intersection(splits_cfg))==len(splits_cfg):
+                    pass
+                else:
+                    raise ValueError(
+                        "The target per split files were not found and Predictions dictionary file was used instead, but dict split names do not match the target splits names"
+                    )
         else:
             raise ValueError(
                 f"Unknown input_type: '{input_type}'. " "Must be 'parquet' or 'pickle'."
