@@ -1,0 +1,13 @@
+
+calibration_results_dir: /staging/leuven/stg_00118/methylDL/experiments/ExtendedProportions/pseudobulk/CancerDetector/train_freq_prior/pseudobulk/fitted_deconvolvers_unifrorm_multinomial_all_top156_features/callibration
+
+# ── Labels ────────────────────────────────────────────────────────
+labels_dict_path: App/labels_dict.json
+
+# ── Deconvolvers to evaluate ──────────────────────────────────────
+deconvolvers:
+  - name: psls
+  - name: nnls
+  - name: xgb
+  - name: swn
+  - name: mlp
