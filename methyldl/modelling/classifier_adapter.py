@@ -52,6 +52,7 @@ class ClassifierAdapter:
         checkpoint_path: str,
         labels_dict: dict,
         num_labels: int = 39,
+        num_dmr_labels: int=39,
         seq_length: int = 150,
         # MethylBERT-specific
         foundation_model_path: str = "hanyangii/methylbert_hg19_12l",
@@ -85,6 +86,7 @@ class ClassifierAdapter:
         self.batch_size = batch_size
         self.soft_labels = soft_labels
         self._model = None
+        self.num_dmr_labels = num_dmr_labels
 
     def _lazy_load_model(self):
         """Load the model on first use."""
@@ -137,9 +139,10 @@ class ClassifierAdapter:
             custom_config=rrms_config,
             foundation_model_path=self.foundation_model_path,
             num_labels=self.num_labels,
-            num_dmr_labels=(
-                self.num_labels if self.soft_labels else self.num_labels - 1
-            ),  # Will be overridden per-split if needed
+            # num_dmr_labels=(
+            #     self.num_labels if self.soft_labels else self.num_labels - 1
+            # ),  # Will be overridden per-split if needed
+            num_dmr_labels = self.num_dmr_labels,
             fine_tuned_model_path=self.checkpoint_path,
             classifier_implementation=self.classifier_head_implementation,
             soft_labels=self.soft_labels,
@@ -231,15 +234,16 @@ class ClassifierAdapter:
                 flavour=self.dismir_flavor,
                 num_labels=self.num_labels,
                 classifier_type=self.classifier_head_implementation,
-                num_dmr_labels=(
-                    self.num_labels
-                    if self.soft_labels
-                    else (
-                        self.num_labels - 1
-                        if self.classifier_head_implementation == "dmr_attention_based"
-                        else None
-                    )
-                ),
+                # num_dmr_labels=(
+                #     self.num_labels
+                #     if self.soft_labels
+                #     else (
+                #         self.num_labels - 1
+                #         if self.classifier_head_implementation == "dmr_attention_based"
+                #         else None
+                #     )
+                # ),
+                num_dmr_labels = self.num_dmr_labels,
                 dmr_label_col=(
                     self.dmr_label_column
                     if self.classifier_head_implementation == "dmr_attention_based"
