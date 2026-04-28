@@ -2,6 +2,8 @@
 App/mlruns/*
 App/output/*
 output/*
+poetry.toml
+*.code-workspace
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
