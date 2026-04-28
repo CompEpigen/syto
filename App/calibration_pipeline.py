@@ -223,6 +223,9 @@ class CalibratorFittingPipeline:
         self.logger.info(
             f"  Resolved proportion splits: {list(proportions_dict.keys())}"
         )
+        for (key,value) in proportions_dict.items():
+            value = np.array([y[:self.num_output_labels] for y in value])
+            proportions_dict[key] = value
 
         for split_name in features_dict:
             f_shape = features_dict[split_name].shape
