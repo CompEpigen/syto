@@ -24,10 +24,16 @@ from methyldl.modelling.prediction_aggregation import (
 _worker_data = {}
 
 
-def _build_target_columns(num_labels: int = 39) -> list:
-    """Build the default list of target columns for DMR-aggregated output."""
+def _build_target_columns(num_prediction_classes: int = 39) -> list:
+    """Build the default list of target columns for DMR-aggregated output.
+
+    Parameters
+    ----------
+    num_prediction_classes : int
+        Number of classifier output classes (including background if present).
+    """
     cols = ["dmr_ctype_label", "dmr_ctype"]
-    cols += [f"prediction_{i}_wavg" for i in range(num_labels)]
+    cols += [f"prediction_{i}_wavg" for i in range(num_prediction_classes)]
     cols += ["methylation_level_wavg", "total_weight", "n_reads", "chromosome", "label"]
     return cols
 
@@ -43,6 +49,7 @@ def generate_pseudo_bulk(
     labels_dict_reversed,
     return_reads=False,
     num_labels=39,
+    num_prediction_classes=None,
 ):
     """Generate pseudo-bulk mixtures for the train, validation, and test splits.
 
@@ -74,7 +81,10 @@ def generate_pseudo_bulk(
     return_reads : bool, default=False
         If True, also return the sampled read-level pseudo-bulk dataframes.
     num_labels : int, default=39
-        Number of cell-type labels.
+        Number of DMR cell-type groups.
+    num_prediction_classes : int, optional
+        Number of classifier output classes (including background).
+        Defaults to ``num_labels`` when not provided.
 
     Returns
     -------
@@ -95,9 +105,11 @@ def generate_pseudo_bulk(
     ``int(n / num_labels)`` samples per DMR group, so small rounding losses
     are expected when distributing reads across DMR types.
     """
+    if num_prediction_classes is None:
+        num_prediction_classes = num_labels
     assert np.round(np.sum(proportions), 4) == 1, "Proportions must sum up to one"
     n_samples_list = [int(total_samples * x) for x in proportions]
-    target_columns = _build_target_columns(num_labels)
+    target_columns = _build_target_columns(num_prediction_classes)
     subs = {}
     uxm_data = {}
     reads = {}
@@ -157,7 +169,7 @@ def generate_pseudo_bulk(
 
     # ensure that we have a proportion for each of the num_labels labels, filling in 0 for any missing ones
     proportions_dict = {x: y for x, y in zip(labels, proportions)}
-    proportions_full = [proportions_dict.get(x, 0) for x in range(num_labels)]
+    proportions_full = [proportions_dict.get(x, 0) for x in range(num_prediction_classes)]
     if return_reads:
         return labels, proportions_full, subs, uxm_data, reads
 
@@ -170,6 +182,7 @@ def init_worker(
     n_cells_max,
     n_read_per_split,
     num_labels=39,
+    num_prediction_classes=None,
     generate_uxm_inputs=True,
     target_proportions=None,
     dmr_sampling_variants=None,
@@ -187,7 +200,10 @@ def init_worker(
     n_read_per_split : int
         Total reads to sample per split per IO example.
     num_labels : int
-        Number of cell-type labels.  Default 39.
+        Number of DMR cell-type groups.  Default 39.
+    num_prediction_classes : int, optional
+        Number of classifier output classes (including background).
+        Defaults to ``num_labels``.
     generate_uxm_inputs : bool
         Whether to compute UXM sf/counts tables.  Default True.
     target_proportions : list, optional
@@ -200,6 +216,8 @@ def init_worker(
 
     global _worker_data
 
+    if num_prediction_classes is None:
+        num_prediction_classes = num_labels
     if dmr_sampling_variants is None:
         dmr_sampling_variants = ["uniform"]
 
@@ -228,7 +246,8 @@ def init_worker(
     _worker_data["generate_uxm_inputs"] = generate_uxm_inputs
     _worker_data["target_proportions"] = target_proportions
     _worker_data["dmr_sampling_variants"] = dmr_sampling_variants
-    _worker_data["target_columns"] = _build_target_columns(num_labels)
+    _worker_data["num_prediction_classes"] = num_prediction_classes
+    _worker_data["target_columns"] = _build_target_columns(num_prediction_classes)
 
 
 def worker_task(batch_args):
@@ -279,6 +298,7 @@ def worker_task(batch_args):
                     _worker_data["grouped_splits"],
                     _worker_data["target_columns"],
                     num_labels=_worker_data["num_labels"],
+                    num_prediction_classes=_worker_data["num_prediction_classes"],
                     generate_uxm_inputs=_worker_data["generate_uxm_inputs"],
                     dmr_sampling=variant,
                 )
@@ -383,6 +403,7 @@ def generate_pseudo_bulk_optimized(
     grouped_splits,
     target_columns,
     num_labels=39,
+    num_prediction_classes=None,
     generate_uxm_inputs=True,
     dmr_sampling="uniform",
 ):
@@ -401,7 +422,10 @@ def generate_pseudo_bulk_optimized(
     target_columns : list[str]
         Columns to keep in aggregated output.
     num_labels : int
-        Number of cell-type labels. Default 39.
+        Number of DMR cell-type groups. Default 39.
+    num_prediction_classes : int, optional
+        Number of classifier output classes (including background).
+        Defaults to ``num_labels``.
     generate_uxm_inputs : bool
         If True, compute UXM sf/counts tables. Default True.
     dmr_sampling : str
@@ -410,6 +434,8 @@ def generate_pseudo_bulk_optimized(
         normalizes them, and multiplies by the target count.  Default
         ``"uniform"``.
     """
+    if num_prediction_classes is None:
+        num_prediction_classes = num_labels
     assert np.round(np.sum(proportions), 4) == 1, "Proportions must sum up to one"
     assert dmr_sampling in ("uniform", "uniform_multinomial"), (
         f"dmr_sampling must be 'uniform' or 'random', got '{dmr_sampling}'"
@@ -488,7 +514,7 @@ def generate_pseudo_bulk_optimized(
             subs[split_name] = sub
 
     proportions_dict = dict(zip(labels, proportions))
-    proportions_full = [proportions_dict.get(x, 0) for x in range(num_labels)]
+    proportions_full = [proportions_dict.get(x, 0) for x in range(num_prediction_classes)]
 
     return labels, proportions_full, subs, uxm_data
 
@@ -505,6 +531,7 @@ def run_ios_generation_parallel(
     n_cells_max=10,
     n_read_per_split=None,
     num_labels=39,
+    num_prediction_classes=None,
     generate_uxm_inputs=True,
     target_proportions=None,
     dmr_sampling_variants=None,
@@ -535,7 +562,10 @@ def run_ios_generation_parallel(
     n_read_per_split : int, optional
         Reads to sample per split.  Default: ``int(4.75e5)``.
     num_labels : int
-        Number of cell-type labels.  Default 39.
+        Number of DMR cell-type groups.  Default 39.
+    num_prediction_classes : int, optional
+        Number of classifier output classes (including background).
+        Defaults to ``num_labels``.
     generate_uxm_inputs : bool
         Compute UXM sf/counts tables.  Default True.
     target_proportions : list of list[float], optional
@@ -545,6 +575,8 @@ def run_ios_generation_parallel(
         List of DMR sampling strategies (``"uniform"`` and/or
         ``"random"``).  Default ``["uniform"]``.
     """
+    if num_prediction_classes is None:
+        num_prediction_classes = num_labels
     if n_workers is None:
         n_workers = max(1, mp.cpu_count() - 1)
     if allowed_labels is None:
@@ -594,6 +626,7 @@ def run_ios_generation_parallel(
             n_cells_max,
             n_read_per_split,
             num_labels,
+            num_prediction_classes,
             generate_uxm_inputs,
             None,  # target_proportions stored per-batch, not globally
             dmr_sampling_variants,
@@ -642,6 +675,7 @@ def consolidate_ios_pickles(
     output_path: str,
     labels_dict: dict,
     num_labels: int = 39,
+    num_prediction_classes: int = None,
 ):
     """Load partial pickle checkpoints and consolidate into a single ``.npz``.
 
@@ -674,14 +708,19 @@ def consolidate_ios_pickles(
     output_path : str
         Path for the output ``.npz`` file.
     num_labels : int
-        Number of cell-type labels.  Default 39.
+        Number of DMR cell-type groups.  Default 39.
+    num_prediction_classes : int, optional
+        Number of classifier output classes (including background).
+        Defaults to ``num_labels``.
 
     Returns
     -------
     dict
         Numpy arrays keyed as described above.
     """
-    pred_cols = [f"prediction_{i}_wavg" for i in range(num_labels)]
+    if num_prediction_classes is None:
+        num_prediction_classes = num_labels
+    pred_cols = [f"prediction_{i}_wavg" for i in range(num_prediction_classes)]
 
     pkl_files = sorted(
         f for f in os.listdir(ios_dir) if f.endswith(".pkl")

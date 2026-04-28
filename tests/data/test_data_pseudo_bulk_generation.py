@@ -354,6 +354,10 @@ class TestInitWorker(PseudoBulkGenerationTestBase):
             pseudo_bulk_generation_module._worker_data["target_columns"],
             self.target_columns,
         )
+        self.assertEqual(
+            pseudo_bulk_generation_module._worker_data["num_prediction_classes"],
+            39,
+        )
 
         grouped_splits = pseudo_bulk_generation_module._worker_data["grouped_splits"]
         grouped_train = grouped_splits["train"]
@@ -419,6 +423,7 @@ class TestWorkerTask(PseudoBulkGenerationTestBase):
                     "test": "grouped_test"
                 },
                 "num_labels": 39,
+                "num_prediction_classes": 39,
                 "generate_uxm_inputs": True,
                 "target_columns": self.target_columns,
                 "dmr_sampling_variants": ["uniform"],
@@ -609,6 +614,7 @@ class TestRunIosGenerationParallel(PseudoBulkGenerationTestBase):
                 list(range(39)),
                 10,
                 int(4.75 * 1e5),
+                39,
                 39,
                 True,
                 None,
@@ -892,6 +898,7 @@ class TestWorkerTaskMultipleVariants(PseudoBulkGenerationTestBase):
                 "n_read_per_split": 100,
                 "grouped_splits": {"train": "grouped"},
                 "num_labels": 39,
+                "num_prediction_classes": 39,
                 "generate_uxm_inputs": False,
                 "target_columns": self.target_columns,
                 "dmr_sampling_variants": ["uniform", "random"],

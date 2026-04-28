@@ -49,6 +49,9 @@ class PseudoBulkPipeline:
             raw = json.load(f)
             self.labels_dict: Dict[int, str] = {int(k): v for k, v in raw.items()}
         self.num_labels = config.get("num_labels", len(self.labels_dict))
+        self.num_prediction_classes = config.get(
+            "num_prediction_classes", None
+        )  # Auto-detected from data if not set
 
         # Cell-type matching dict
         self.cell_type_match_dict = config.get(
@@ -165,6 +168,22 @@ class PseudoBulkPipeline:
         self.logger.info("  Filtering unused columns to optimize RAM usage ...")
         self._filter_split_columns(splits_data, generate_uxm_in_ios)
 
+        # Auto-detect num_prediction_classes from actual data if not set
+        if self.num_prediction_classes is None:
+            sample_df = next(iter(splits_data.values()))
+            pred_cols = [
+                c for c in sample_df.columns
+                if c.startswith("prediction_") and c[11:].isdigit()
+            ]
+            self.num_prediction_classes = (
+                len(pred_cols) if pred_cols else self.num_labels
+            )
+            self.logger.info(
+                f"  Auto-detected num_prediction_classes="
+                f"{self.num_prediction_classes} "
+                f"(num_labels={self.num_labels})"
+            )
+
         split_generation = self.config.get("split_generation")
 
         if split_generation is not None:
@@ -202,6 +221,7 @@ class PseudoBulkPipeline:
                     ios_dir=split_ios_dir,
                     output_path=split_output,
                     num_labels=self.num_labels,
+                    num_prediction_classes=self.num_prediction_classes,
                     labels_dict=self.labels_dict
                 )
                 merged_result.update(part)
@@ -214,6 +234,7 @@ class PseudoBulkPipeline:
                 ios_dir=self.ios_dir,
                 output_path=self.consolidated_path,
                 num_labels=self.num_labels,
+                num_prediction_classes=self.num_prediction_classes,
                 labels_dict=self.labels_dict
             )
 
@@ -287,6 +308,7 @@ class PseudoBulkPipeline:
             start_checkpoint_idx=self.config.get("start_checkpoint_idx", 0),
             n_read_per_split=self.config.get("n_read_per_split"),
             num_labels=self.num_labels,
+            num_prediction_classes=self.num_prediction_classes,
             generate_uxm_inputs=generate_uxm_in_ios,
         )
 
@@ -405,6 +427,7 @@ class PseudoBulkPipeline:
                 ),
                 n_read_per_split=self.config.get("n_read_per_split"),
                 num_labels=self.num_labels,
+                num_prediction_classes=self.num_prediction_classes,
                 generate_uxm_inputs=generate_uxm_in_ios,
             )
 
