@@ -694,7 +694,7 @@ class InferencePipeline:
         return proportions_aligned
 
     @staticmethod
-    def _extract_diag_and_rej(matrix):
+    def _extract_diag_and_bckg(matrix):
         return np.reshape(np.concat([np.diag(matrix), matrix[:, -1]], axis=0), (1, 78))
 
     @staticmethod
@@ -733,7 +733,7 @@ class InferencePipeline:
             available = [c for c in agg.columns if c.startswith("prediction_")]
             matrix = agg[available].values
 
-        return self._extract_diag_and_rej(matrix)
+        return self._extract_diag_and_bckg(matrix)
 
     def _build_uxm_input(
         self, uxm_atlas: pd.DataFrame, ref_cells: list
