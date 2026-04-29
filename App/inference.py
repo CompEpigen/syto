@@ -265,18 +265,22 @@ class InferencePipeline:
         self.logger.info(f"Loading pre-parsed reads from {path}")
         if ".csv" in path:
             df = pd.read_csv(path, sep="\t")
-            df.rename(columns={"ref_name":"chromosome"}, inplace=True)
-            df.rename(columns={"ref_pos":"read_start"}, inplace=True)
-            df.rename(columns={"methyl_seq":"methylation_encoding"}, inplace=True)
-            df.rename(columns={"original_seq":"seq"}, inplace=True)
+            df.rename(columns={"ref_name": "chromosome"}, inplace=True)
+            df.rename(columns={"ref_pos": "read_start"}, inplace=True)
+            df.rename(columns={"methyl_seq": "methylation_encoding"}, inplace=True)
+            df.rename(columns={"original_seq": "seq"}, inplace=True)
             df["read_end"] = df["read_start"] + df["seq"].apply(len)
             df["read_name"] = range(len(df))
-            df["label"] = 0 # TODO: temporary set here to avoid eval loop crashing the predict. MUST FIX IN THE FUTURE IN THE EVAL LOOP!!!
+            df["label"] = (
+                0  # TODO: temporary set here to avoid eval loop crashing the predict. MUST FIX IN THE FUTURE IN THE EVAL LOOP!!!
+            )
         else:
             with open(path, "rb") as f:
                 df = pickle.load(f)
             if not isinstance(df, pd.DataFrame):
-                raise TypeError(f"Expected a pandas DataFrame in {path}, got {type(df)}")
+                raise TypeError(
+                    f"Expected a pandas DataFrame in {path}, got {type(df)}"
+                )
         return df
 
     def _load_reads_with_predictions(self) -> pd.DataFrame:
@@ -424,7 +428,8 @@ class InferencePipeline:
             batch_size=batch_size,
         )
         predictions_pd = pd.DataFrame(
-            predictions[0], columns=["prediction_" + str(x) for x in range(self.num_labels)]
+            predictions[0],
+            columns=["prediction_" + str(x) for x in range(self.num_labels)],
         )
         predictions_pd["read_name"] = [x[-3] for x in self.prepared_reads_chuncked[1:]]
         predictions_pd["ncpgs_marked"] = [
@@ -512,7 +517,9 @@ class InferencePipeline:
 
                 if method_cfg.get("use_callibration", False):
                     calibrator = LinearCalibrator()
-                    calibrator.load_calibration_parameters(method_cfg["callibrator_path"])
+                    calibrator.load_calibration_parameters(
+                        method_cfg["callibrator_path"]
+                    )
                     if proportions.ndim == 1:
                         proportions = np.expand_dims(proportions, 0)
                     calib_proportions = calibrator.predict(proportions)
@@ -534,7 +541,11 @@ class InferencePipeline:
         flavor = method_cfg["flavor"]
         self.logger.info(f"Loading {flavor} from {checkpoint_path}")
         X = self._extract_features_by_mask(
-            np.array(self.dmr_aggregated[[f"prediction_{i}_wavg" for i in range(self.num_labels)]]),
+            np.array(
+                self.dmr_aggregated[
+                    [f"prediction_{i}_wavg" for i in range(self.num_labels)]
+                ]
+            ),
             self.features_mask,
         )
         X = X.flatten()
@@ -574,7 +585,11 @@ class InferencePipeline:
         # Build the prediction matrix from DMR-aggregated data
         # prediction_matrix = self._build_prediction_matrix()
         X = self._extract_features_by_mask(
-            np.array(self.dmr_aggregated[[f"prediction_{i}_wavg" for i in range(self.num_labels)]]),
+            np.array(
+                self.dmr_aggregated[
+                    [f"prediction_{i}_wavg" for i in range(self.num_labels)]
+                ]
+            ),
             self.features_mask,
         )
         deconv_preds = deconvolver._predict_raw(X)
@@ -649,7 +664,9 @@ class InferencePipeline:
         X = torch.FloatTensor(
             self._extract_features_by_mask(
                 np.array(
-                    self.dmr_aggregated[[f"prediction_{i}_wavg" for i in range(self.num_labels)]]
+                    self.dmr_aggregated[
+                        [f"prediction_{i}_wavg" for i in range(self.num_labels)]
+                    ]
                 ),
                 self.features_mask,
             )

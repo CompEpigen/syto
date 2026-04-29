@@ -56,13 +56,12 @@ def extract_pure_feature_matrix(
         split_idx = splits[split_idx]
 
     return np.array(
-            [
-                pure_profiles[i][1][split_idx][target_columns].to_numpy()
-                for i in range(num_output_labels)
-                if pure_profiles[i] is not None
-            ]
-        )
-
+        [
+            pure_profiles[i][1][split_idx][target_columns].to_numpy()
+            for i in range(num_output_labels)
+            if pure_profiles[i] is not None
+        ]
+    )
 
 
 def compute_feature_ratios(pure_matrix: np.ndarray) -> np.ndarray:
@@ -123,7 +122,7 @@ def compute_feature_mask(
     guaranteed_mask = np.zeros_like(ratios, dtype=int)
     if guarantee_diagonal_selection:
         np.fill_diagonal(guaranteed_mask, 1)
-        
+
     if guarantee_columns_selection:
         for c in guarantee_columns_selection:
             if 0 <= c < ratios.shape[1]:
@@ -133,27 +132,27 @@ def compute_feature_mask(
         # Give priority to guaranteed features by inflating their ratios
         modified_ratios = ratios.copy()
         modified_ratios[guaranteed_mask == 1] += 1e9
-        
+
         flat_ratios = modified_ratios.flatten()
         # Handle Nans
         flat_ratios[np.isnan(flat_ratios)] = -np.inf
-        
+
         # Find indices of top `top_features` features
         sorted_idx = np.argsort(flat_ratios)[::-1]
         actual_top_features = min(top_features, len(flat_ratios))
         selected_idx = sorted_idx[:actual_top_features]
-        
+
         mask_flat = np.zeros_like(flat_ratios, dtype=int)
         mask_flat[selected_idx] = 1
         mask = mask_flat.reshape(ratios.shape)
-        
+
         # Calculate the appropriate cutoff (minimum original ratio among selected non-guaranteed features)
         selected_non_guaranteed = (mask == 1) & (guaranteed_mask == 0)
         if selected_non_guaranteed.any():
             calc_cutoff = float(ratios[selected_non_guaranteed].min())
         else:
             calc_cutoff = float(ratios[mask == 1].min()) if (mask == 1).any() else 0.0
-            
+
         if return_cutoff:
             return mask, calc_cutoff
         return mask
@@ -163,7 +162,7 @@ def compute_feature_mask(
         val_cutoff = cutoff if cutoff is not None else 1.1
         mask = (ratios > val_cutoff).astype(int)
         mask[guaranteed_mask == 1] = 1
-        
+
         if return_cutoff:
             return mask, float(val_cutoff)
         return mask
@@ -205,11 +204,7 @@ def apply_feature_mask(
 
 
 def apply_mask_to_ios(
-    ios_path: str,
-    mask: np.ndarray,
-    output_path: str,
-    cutoff: float,
-    splits: list
+    ios_path: str, mask: np.ndarray, output_path: str, cutoff: float, splits: list
 ) -> dict:
     """Load full IO matrices, apply the feature mask, and save.
 
@@ -279,7 +274,7 @@ def generate_feature_selection_plot(
     guarantee_diagonal_selection: bool = False,
     guarantee_columns_selection: Optional[List[int]] = None,
     splits: List = ["train", "valid", "test"],
-    top_features: Optional[int] = None
+    top_features: Optional[int] = None,
 ) -> str:
     """Generate a heatmap comparing feature masks across splits.
 
@@ -321,12 +316,19 @@ def generate_feature_selection_plot(
     split_ratios = {}
     for idx, split_name in enumerate(splits):
         pure_matrix = extract_pure_feature_matrix(
-            pure_profiles, num_input_labels, num_output_labels,
-            split_idx=idx, splits=splits,
+            pure_profiles,
+            num_input_labels,
+            num_output_labels,
+            split_idx=idx,
+            splits=splits,
         )
         ratios = compute_feature_ratios(pure_matrix)
         binary = compute_feature_mask(
-            ratios, cutoff, guarantee_diagonal_selection, guarantee_columns_selection, top_features=top_features
+            ratios,
+            cutoff,
+            guarantee_diagonal_selection,
+            guarantee_columns_selection,
+            top_features=top_features,
         )
         split_ratios[split_name] = ratios
         split_bins[split_name] = binary
@@ -334,14 +336,18 @@ def generate_feature_selection_plot(
     # Maximal binary mask across all splits (for reporting)
     maximal_ratios = np.array(list(split_ratios.values())).max(axis=0)
     maximal_bin = compute_feature_mask(
-        maximal_ratios, cutoff, guarantee_diagonal_selection, guarantee_columns_selection, top_features=top_features
+        maximal_ratios,
+        cutoff,
+        guarantee_diagonal_selection,
+        guarantee_columns_selection,
+        top_features=top_features,
     )
 
     # Difference mask: positions where not all splits agree
     all_bins = list(split_bins.values())
     agreement = np.ones_like(all_bins[0], dtype=bool)
     for b in all_bins[1:]:
-        agreement &= (all_bins[0] == b)
+        agreement &= all_bins[0] == b
     diff_mask = ~agreement
 
     # --- Axis labels ------------------------------------------------------

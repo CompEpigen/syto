@@ -52,7 +52,7 @@ class ClassifierAdapter:
         checkpoint_path: str,
         labels_dict: dict,
         num_labels: int = 39,
-        num_dmr_labels: int=39,
+        num_dmr_labels: int = 39,
         seq_length: int = 150,
         # MethylBERT-specific
         foundation_model_path: str = "hanyangii/methylbert_hg19_12l",
@@ -142,7 +142,7 @@ class ClassifierAdapter:
             # num_dmr_labels=(
             #     self.num_labels if self.soft_labels else self.num_labels - 1
             # ),  # Will be overridden per-split if needed
-            num_dmr_labels = self.num_dmr_labels,
+            num_dmr_labels=self.num_dmr_labels,
             fine_tuned_model_path=self.checkpoint_path,
             classifier_implementation=self.classifier_head_implementation,
             soft_labels=self.soft_labels,
@@ -243,7 +243,7 @@ class ClassifierAdapter:
                 #         else None
                 #     )
                 # ),
-                num_dmr_labels = self.num_dmr_labels,
+                num_dmr_labels=self.num_dmr_labels,
                 dmr_label_col=(
                     self.dmr_label_column
                     if self.classifier_head_implementation == "dmr_attention_based"
@@ -328,14 +328,16 @@ class ClassifierAdapter:
         from methyldl.modelling.classifiers.lookup import LookupClassifier
 
         self._model = LookupClassifier.load(self.checkpoint_path)
-        logger.info("LookupClassifier model loaded with checkpoint: %s", self.checkpoint_path)
+        logger.info(
+            "LookupClassifier model loaded with checkpoint: %s", self.checkpoint_path
+        )
 
     def _predict_lookup(self, split_df: pd.DataFrame) -> pd.DataFrame:
         """Run LookupClassifier prediction on a single split."""
         model = self._model
         if model is None:
             raise ValueError("LookupClassifier model is not loaded.")
-        
+
         return model.predict(split_df)
 
     # ─── Public API ─────────────────────────────────────────────────

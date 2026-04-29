@@ -128,8 +128,10 @@ class MethylBertTrainer(Trainer):
         self._custom_loss_ce_eval_steps = 0
 
     def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
-        loss, outputs = super().compute_loss(model, inputs, return_outputs=True, **kwargs)
-        
+        loss, outputs = super().compute_loss(
+            model, inputs, return_outputs=True, **kwargs
+        )
+
         if hasattr(outputs, "loss_ce") and outputs.loss_ce is not None:
             if model.training:
                 self._custom_loss_ce_train += outputs.loss_ce.item()
@@ -137,12 +139,14 @@ class MethylBertTrainer(Trainer):
             else:
                 self._custom_loss_ce_eval += outputs.loss_ce.item()
                 self._custom_loss_ce_eval_steps += 1
-            
+
         return (loss, outputs) if return_outputs else loss
 
     def log(self, logs: dict, *args, **kwargs) -> None:
         if "loss" in logs and getattr(self, "_custom_loss_ce_train_steps", 0) > 0:
-            logs["loss_ce"] = self._custom_loss_ce_train / self._custom_loss_ce_train_steps
+            logs["loss_ce"] = (
+                self._custom_loss_ce_train / self._custom_loss_ce_train_steps
+            )
             self._custom_loss_ce_train = 0.0
             self._custom_loss_ce_train_steps = 0
         super().log(logs, *args, **kwargs)
@@ -151,18 +155,24 @@ class MethylBertTrainer(Trainer):
         metric_key_prefix = kwargs.get("metric_key_prefix", "eval")
         if len(args) >= 5:
             metric_key_prefix = args[4]
-            
+
         self._custom_loss_ce_eval = 0.0
         self._custom_loss_ce_eval_steps = 0
-        
+
         output = super().evaluation_loop(*args, **kwargs)
-        
-        if getattr(self, "_custom_loss_ce_eval_steps", 0) > 0 and output.metrics is not None:
-            output.metrics[f"{metric_key_prefix}_loss_ce"] = self._custom_loss_ce_eval / self._custom_loss_ce_eval_steps
+
+        if (
+            getattr(self, "_custom_loss_ce_eval_steps", 0) > 0
+            and output.metrics is not None
+        ):
+            output.metrics[f"{metric_key_prefix}_loss_ce"] = (
+                self._custom_loss_ce_eval / self._custom_loss_ce_eval_steps
+            )
             self._custom_loss_ce_eval = 0.0
             self._custom_loss_ce_eval_steps = 0
-            
+
         return output
+
 
 class BalancedTrainer(MethylBertTrainer):
     """
@@ -591,7 +601,7 @@ class MethylBertEmbeddedDMR(BertPreTrainedModel):
                     )
                 else:
                     loss = self.classification_loss_fct(ctype_logits, labels.float())
-                
+
                 if self.loss == "focal_bce":
                     loss_ce = F.cross_entropy(ctype_logits, labels.float())
                 elif self.loss == "ce":

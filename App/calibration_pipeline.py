@@ -96,7 +96,9 @@ class CalibratorFittingPipeline:
         deconvolvers = self._stage1_load_deconvolvers()
 
         # Extract features per split, resolving variant-aware keys
-        features_dict, proportions_dict = self._resolve_features_and_proportions(ios_data)
+        features_dict, proportions_dict = self._resolve_features_and_proportions(
+            ios_data
+        )
 
         features_valid = features_dict["valid"]
         y_valid = proportions_dict["valid"]
@@ -178,7 +180,7 @@ class CalibratorFittingPipeline:
         for key, val in ios_data.items():
             if not key.startswith("features_"):
                 continue
-            remainder = key[len("features_"):]
+            remainder = key[len("features_") :]
             parts = remainder.split("_")
 
             if len(parts) > 1:
@@ -223,8 +225,8 @@ class CalibratorFittingPipeline:
         self.logger.info(
             f"  Resolved proportion splits: {list(proportions_dict.keys())}"
         )
-        for (key,value) in proportions_dict.items():
-            value = np.array([y[:self.num_output_labels] for y in value])
+        for key, value in proportions_dict.items():
+            value = np.array([y[: self.num_output_labels] for y in value])
             proportions_dict[key] = value
 
         for split_name in features_dict:

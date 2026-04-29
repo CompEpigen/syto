@@ -71,8 +71,10 @@ def generate_pure_profiles(
             df.rename(columns={"chr": "chromosome"}, inplace=True)
         if "direction" not in df.columns:
             df["direction"] = "U"
-            
-        grouped_splits[name] = df.groupby(["original_label", "dmr_ctype_label"], sort=False)
+
+        grouped_splits[name] = df.groupby(
+            ["original_label", "dmr_ctype_label"], sort=False
+        )
 
     target_columns = _build_target_columns(num_input_labels)
 

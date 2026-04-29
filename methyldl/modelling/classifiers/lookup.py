@@ -31,6 +31,7 @@ logger = logging.getLogger(__name__)
 # Config
 # ──────────────────────────────────────────────────────────────────────
 
+
 @dataclass
 class SoftLabelConfig:
     """All tuneable knobs live here."""
@@ -53,6 +54,7 @@ class SoftLabelConfig:
 # ──────────────────────────────────────────────────────────────────────
 # Classifier
 # ──────────────────────────────────────────────────────────────────────
+
 
 class LookupClassifier:
     """Lookup-table classifier backed by soft labels.
@@ -165,9 +167,7 @@ class LookupClassifier:
         path = Path(path)
         payload = {
             "config": self.config.to_dict(),
-            "lookup": {
-                self._key_to_str(k): v for k, v in self._lookup.items()
-            },
+            "lookup": {self._key_to_str(k): v for k, v in self._lookup.items()},
         }
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "wb") as f:
@@ -183,9 +183,7 @@ class LookupClassifier:
         config = SoftLabelConfig.from_dict(payload["config"])
         clf = cls(config)
 
-        clf._lookup = {
-            cls._str_to_key(k): v for k, v in payload["lookup"].items()
-        }
+        clf._lookup = {cls._str_to_key(k): v for k, v in payload["lookup"].items()}
 
         # Rebuild per-region index
         clf._region_index = {}
@@ -193,9 +191,7 @@ class LookupClassifier:
             clf._region_index.setdefault(region, []).append((sig, entry))
 
         clf._is_fitted = True
-        logger.info(
-            "Loaded classifier with %d keys from %s", len(clf._lookup), path
-        )
+        logger.info("Loaded classifier with %d keys from %s", len(clf._lookup), path)
         return clf
 
     # ================================================================== private
@@ -218,13 +214,9 @@ class LookupClassifier:
 
         # Build base counts
         base_counts = (
-            df.groupby(["name", "cpg_sig", cfg.label_col])
-            .size()
-            .unstack(fill_value=0)
+            df.groupby(["name", "cpg_sig", cfg.label_col]).size().unstack(fill_value=0)
         )
-        base_counts = base_counts.reindex(
-            columns=range(cfg.num_classes), fill_value=0
-        )
+        base_counts = base_counts.reindex(columns=range(cfg.num_classes), fill_value=0)
         base_counts = base_counts.reset_index()
         class_cols = list(range(cfg.num_classes))
         base_counts["total_reads"] = base_counts[class_cols].sum(axis=1)

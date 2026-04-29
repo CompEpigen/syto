@@ -166,7 +166,7 @@ class TestGeneratePseudoBulk(PseudoBulkGenerationTestBase):
                 splits={
                     "train": self.raw_train.copy(deep=True),
                     "valid": self.raw_valid.copy(deep=True),
-                    "test": self.raw_test.copy(deep=True)
+                    "test": self.raw_test.copy(deep=True),
                 },
                 atlas=self.atlas,
                 ref_cells=self.ref_cells,
@@ -233,7 +233,7 @@ class TestGeneratePseudoBulk(PseudoBulkGenerationTestBase):
             splits={
                 "train": self.raw_train.copy(deep=True),
                 "valid": self.raw_valid.copy(deep=True),
-                "test": self.raw_test.copy(deep=True)
+                "test": self.raw_test.copy(deep=True),
             },
             atlas=self.atlas,
             ref_cells=self.ref_cells,
@@ -261,7 +261,7 @@ class TestGeneratePseudoBulk(PseudoBulkGenerationTestBase):
                 splits={
                     "train": self.raw_train.copy(deep=True),
                     "valid": self.raw_valid.copy(deep=True),
-                    "test": self.raw_test.copy(deep=True)
+                    "test": self.raw_test.copy(deep=True),
                 },
                 atlas=self.atlas,
                 ref_cells=self.ref_cells,
@@ -330,11 +330,7 @@ class TestInitWorker(PseudoBulkGenerationTestBase):
         )
 
         pseudo_bulk_generation_module.init_worker(
-            splits={
-                "train": train,
-                "valid": valid,
-                "test": test
-            },
+            splits={"train": train, "valid": valid, "test": test},
             allowed_labels=[0, 1],
             n_cells_max=5,
             n_read_per_split=123,
@@ -420,7 +416,7 @@ class TestWorkerTask(PseudoBulkGenerationTestBase):
                 "grouped_splits": {
                     "train": "grouped_train",
                     "valid": "grouped_valid",
-                    "test": "grouped_test"
+                    "test": "grouped_test",
                 },
                 "num_labels": 39,
                 "num_prediction_classes": 39,
@@ -468,7 +464,7 @@ class TestGeneratePseudoBulkOptimized(PseudoBulkGenerationTestBase):
                 grouped_splits={
                     "train": grouped_train,
                     "valid": grouped_valid,
-                    "test": grouped_test
+                    "test": grouped_test,
                 },
                 target_columns=self.target_columns,
             )
@@ -518,7 +514,7 @@ class TestGeneratePseudoBulkOptimized(PseudoBulkGenerationTestBase):
                 grouped_splits={
                     "train": grouped_train,
                     "valid": grouped_valid,
-                    "test": grouped_test
+                    "test": grouped_test,
                 },
                 target_columns=self.target_columns,
             )
@@ -552,7 +548,10 @@ class TestRunIosGenerationParallel(PseudoBulkGenerationTestBase):
         """Derive the default worker count, submit batches, and collect completed outputs."""
         future_one = mock.MagicMock()
         future_one.result.return_value = (
-            [("io_1", {"train": "subs_1"}, {"train": "uxm_1"}), ("io_2", {"train": "subs_2"}, {"train": "uxm_2"})],
+            [
+                ("io_1", {"train": "subs_1"}, {"train": "uxm_1"}),
+                ("io_2", {"train": "subs_2"}, {"train": "uxm_2"}),
+            ],
             [],
         )
 
@@ -597,7 +596,7 @@ class TestRunIosGenerationParallel(PseudoBulkGenerationTestBase):
                     splits={
                         "train": self.raw_train.copy(deep=True),
                         "valid": self.raw_valid.copy(deep=True),
-                        "test": self.raw_test.copy(deep=True)
+                        "test": self.raw_test.copy(deep=True),
                     },
                     file_name="pseudo_bulk.pkl",
                     n_io_examples=3,
@@ -645,7 +644,10 @@ class TestRunIosGenerationParallel(PseudoBulkGenerationTestBase):
         """Write a checkpoint file when the accumulated result count hits the interval."""
         future = mock.MagicMock()
         future.result.return_value = (
-            [("io_1", {"train": "subs_1"}, {"train": "uxm_1"}), ("io_2", {"train": "subs_2"}, {"train": "uxm_2"})],
+            [
+                ("io_1", {"train": "subs_1"}, {"train": "uxm_1"}),
+                ("io_2", {"train": "subs_2"}, {"train": "uxm_2"}),
+            ],
             [],
         )
 
@@ -680,7 +682,7 @@ class TestRunIosGenerationParallel(PseudoBulkGenerationTestBase):
                     splits={
                         "train": self.raw_train.copy(deep=True),
                         "valid": self.raw_valid.copy(deep=True),
-                        "test": self.raw_test.copy(deep=True)
+                        "test": self.raw_test.copy(deep=True),
                     },
                     file_name="pseudo_bulk.pkl",
                     n_io_examples=2,
@@ -696,7 +698,10 @@ class TestRunIosGenerationParallel(PseudoBulkGenerationTestBase):
         mocked_pickle_dump.assert_called_once()
         self.assertEqual(
             mocked_pickle_dump.call_args.args[0],
-            [("io_1", {"train": "subs_1"}, {"train": "uxm_1"}), ("io_2", {"train": "subs_2"}, {"train": "uxm_2"})],
+            [
+                ("io_1", {"train": "subs_1"}, {"train": "uxm_1"}),
+                ("io_2", {"train": "subs_2"}, {"train": "uxm_2"}),
+            ],
         )
         self.assertEqual(all_ios, [])
         self.assertEqual(all_exceptions, [])
@@ -796,7 +801,8 @@ class TestDMRSamplingStrategies(PseudoBulkGenerationTestBase):
         """Build grouped splits from prepared data."""
         return {
             "train": self.prepared_train.groupby(
-                ["original_label", "dmr_ctype_label"], sort=False,
+                ["original_label", "dmr_ctype_label"],
+                sort=False,
             ),
         }
 
@@ -851,14 +857,18 @@ class TestComputeSamplesPerDmr(unittest.TestCase):
 
     def test_uniform_returns_dict_of_ints(self):
         result = pseudo_bulk_generation_module._compute_samples_per_dmr_uniform(
-            labels=[0, 1], n_samples_list=[390, 195], num_labels=39,
+            labels=[0, 1],
+            n_samples_list=[390, 195],
+            num_labels=39,
         )
         self.assertEqual(result[0], 10)  # 390 / 39
-        self.assertEqual(result[1], 5)   # 195 / 39
+        self.assertEqual(result[1], 5)  # 195 / 39
 
     def test_random_returns_dict_of_lists(self):
         result = pseudo_bulk_generation_module._compute_samples_per_dmr_random(
-            labels=[0], n_samples_list=[390], num_labels=39,
+            labels=[0],
+            n_samples_list=[390],
+            num_labels=39,
         )
         self.assertIsInstance(result[0], list)
         self.assertEqual(len(result[0]), 39)
@@ -942,6 +952,7 @@ class TestConsolidateVariantAware(PseudoBulkGenerationTestBase):
         with tempfile.TemporaryDirectory() as tmpdir:
             pkl_path = os.path.join(tmpdir, "ios_1.pkl")
             import pickle
+
             with open(pkl_path, "wb") as f:
                 pickle.dump(ios, f)
 
@@ -978,6 +989,7 @@ class TestConsolidateVariantAware(PseudoBulkGenerationTestBase):
         with tempfile.TemporaryDirectory() as tmpdir:
             pkl_path = os.path.join(tmpdir, "ios_1.pkl")
             import pickle
+
             with open(pkl_path, "wb") as f:
                 pickle.dump(ios, f)
 
