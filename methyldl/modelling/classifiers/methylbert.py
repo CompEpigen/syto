@@ -115,7 +115,66 @@ class BalancedBackgroundBatchSampler(Sampler):
         return n
 
 
-class BalancedTrainer(Trainer):
+class MethylBertTrainer(Trainer):
+    """
+    Custom Trainer that optionally logs an additional loss_ce metric if provided by the model.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._custom_loss_ce_train = 0.0
+        self._custom_loss_ce_train_steps = 0
+        self._custom_loss_ce_eval = 0.0
+        self._custom_loss_ce_eval_steps = 0
+
+    def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
+        loss, outputs = super().compute_loss(
+            model, inputs, return_outputs=True, **kwargs
+        )
+
+        if hasattr(outputs, "loss_ce") and outputs.loss_ce is not None:
+            if model.training:
+                self._custom_loss_ce_train += outputs.loss_ce.item()
+                self._custom_loss_ce_train_steps += 1
+            else:
+                self._custom_loss_ce_eval += outputs.loss_ce.item()
+                self._custom_loss_ce_eval_steps += 1
+
+        return (loss, outputs) if return_outputs else loss
+
+    def log(self, logs: dict, *args, **kwargs) -> None:
+        if "loss" in logs and getattr(self, "_custom_loss_ce_train_steps", 0) > 0:
+            logs["loss_ce"] = (
+                self._custom_loss_ce_train / self._custom_loss_ce_train_steps
+            )
+            self._custom_loss_ce_train = 0.0
+            self._custom_loss_ce_train_steps = 0
+        super().log(logs, *args, **kwargs)
+
+    def evaluation_loop(self, *args, **kwargs):
+        metric_key_prefix = kwargs.get("metric_key_prefix", "eval")
+        if len(args) >= 5:
+            metric_key_prefix = args[4]
+
+        self._custom_loss_ce_eval = 0.0
+        self._custom_loss_ce_eval_steps = 0
+
+        output = super().evaluation_loop(*args, **kwargs)
+
+        if (
+            getattr(self, "_custom_loss_ce_eval_steps", 0) > 0
+            and output.metrics is not None
+        ):
+            output.metrics[f"{metric_key_prefix}_loss_ce"] = (
+                self._custom_loss_ce_eval / self._custom_loss_ce_eval_steps
+            )
+            self._custom_loss_ce_eval = 0.0
+            self._custom_loss_ce_eval_steps = 0
+
+        return output
+
+
+class BalancedTrainer(MethylBertTrainer):
     """
     HF Trainer that uses BalancedBackgroundBatchSampler for training.
     """
@@ -229,7 +288,7 @@ METHYLBERT_PRETRAINED_MODEL_ARCHIVE_MAP = {
 def sigmoid_focal_loss(
     inputs: torch.Tensor,
     targets: torch.Tensor,
-    alpha: float = 0.25,
+    alpha: float = 0.1,
     gamma: float = 2,
     reduction: str = "none",
 ) -> torch.Tensor:
@@ -296,6 +355,7 @@ class MethylBertOutput(ModelOutput):
 
     loss: Optional[torch.FloatTensor] = None
     logits: torch.FloatTensor = None
+    loss_ce: Optional[torch.FloatTensor] = None
     dmr_logits: Optional[torch.FloatTensor] = None
     hidden_states: Optional[Tuple[torch.FloatTensor]] = None
     attentions: Optional[Tuple[torch.FloatTensor]] = None
@@ -527,6 +587,7 @@ class MethylBertEmbeddedDMR(BertPreTrainedModel):
 
         # Calculate loss if labels are provided
         loss = None
+        loss_ce = None
         if labels is not None:
             if self.num_labels == 1:
                 loss = self.classification_loss_fct(
@@ -541,17 +602,27 @@ class MethylBertEmbeddedDMR(BertPreTrainedModel):
                 else:
                     loss = self.classification_loss_fct(ctype_logits, labels.float())
 
+                if self.loss == "focal_bce":
+                    loss_ce = F.cross_entropy(ctype_logits, labels.float())
+                elif self.loss == "ce":
+                    loss_ce = loss
+
             elif self.num_labels >= 2 and self.loss in ["bce", "focal_bce"]:
                 ctype_label_onehot = F.one_hot(
                     labels, num_classes=self.num_labels
                 ).float()
                 loss = self.classification_loss_fct(ctype_logits, ctype_label_onehot)
+                if self.loss == "focal_bce":
+                    loss_ce = F.cross_entropy(ctype_logits, labels)
             else:
                 # Hard labels with CE
                 loss = self.classification_loss_fct(ctype_logits, labels)
+                if self.loss == "ce":
+                    loss_ce = loss
 
         return MethylBertOutput(
             loss=loss,
+            loss_ce=loss_ce,
             logits=ctype_logits,
             dmr_logits=dmr_logits,
             hidden_states=outputs.hidden_states,
@@ -764,7 +835,7 @@ class MethylBert:
 
         if signal_mask is None:
 
-            trainer = Trainer(
+            trainer = MethylBertTrainer(
                 model=self.model,
                 args=self.training_args,
                 train_dataset=train_dataset,

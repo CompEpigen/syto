@@ -44,7 +44,7 @@ class ClassifierAdapter:
         Prediction batch size.  Default: 2200.
     """
 
-    SUPPORTED_CLASSIFIERS = ("methylbert", "dismir", "cancer_detector")
+    SUPPORTED_CLASSIFIERS = ("methylbert", "dismir", "cancer_detector", "lookup")
 
     def __init__(
         self,
@@ -52,6 +52,7 @@ class ClassifierAdapter:
         checkpoint_path: str,
         labels_dict: dict,
         num_labels: int = 39,
+        num_dmr_labels: int = 39,
         seq_length: int = 150,
         # MethylBERT-specific
         foundation_model_path: str = "hanyangii/methylbert_hg19_12l",
@@ -85,6 +86,7 @@ class ClassifierAdapter:
         self.batch_size = batch_size
         self.soft_labels = soft_labels
         self._model = None
+        self.num_dmr_labels = num_dmr_labels
 
     def _lazy_load_model(self):
         """Load the model on first use."""
@@ -97,6 +99,8 @@ class ClassifierAdapter:
             self._load_dismir()
         elif self.classifier_type == "cancer_detector":
             self._load_cancer_detector()
+        elif self.classifier_type == "lookup":
+            self._load_lookup()
 
     # ─── MethylBERT ─────────────────────────────────────────────────
 
@@ -135,9 +139,10 @@ class ClassifierAdapter:
             custom_config=rrms_config,
             foundation_model_path=self.foundation_model_path,
             num_labels=self.num_labels,
-            num_dmr_labels=(
-                self.num_labels if self.soft_labels else self.num_labels - 1
-            ),  # Will be overridden per-split if needed
+            # num_dmr_labels=(
+            #     self.num_labels if self.soft_labels else self.num_labels - 1
+            # ),  # Will be overridden per-split if needed
+            num_dmr_labels=self.num_dmr_labels,
             fine_tuned_model_path=self.checkpoint_path,
             classifier_implementation=self.classifier_head_implementation,
             soft_labels=self.soft_labels,
@@ -229,15 +234,16 @@ class ClassifierAdapter:
                 flavour=self.dismir_flavor,
                 num_labels=self.num_labels,
                 classifier_type=self.classifier_head_implementation,
-                num_dmr_labels=(
-                    self.num_labels
-                    if self.soft_labels
-                    else (
-                        self.num_labels - 1
-                        if self.classifier_head_implementation == "dmr_attention_based"
-                        else None
-                    )
-                ),
+                # num_dmr_labels=(
+                #     self.num_labels
+                #     if self.soft_labels
+                #     else (
+                #         self.num_labels - 1
+                #         if self.classifier_head_implementation == "dmr_attention_based"
+                #         else None
+                #     )
+                # ),
+                num_dmr_labels=self.num_dmr_labels,
                 dmr_label_col=(
                     self.dmr_label_column
                     if self.classifier_head_implementation == "dmr_attention_based"
@@ -316,6 +322,24 @@ class ClassifierAdapter:
             result[col] = pred_df[col].values
         return result
 
+    # ─── Lookup ─────────────────────────────────────────────────────
+
+    def _load_lookup(self):
+        from methyldl.modelling.classifiers.lookup import LookupClassifier
+
+        self._model = LookupClassifier.load(self.checkpoint_path)
+        logger.info(
+            "LookupClassifier model loaded with checkpoint: %s", self.checkpoint_path
+        )
+
+    def _predict_lookup(self, split_df: pd.DataFrame) -> pd.DataFrame:
+        """Run LookupClassifier prediction on a single split."""
+        model = self._model
+        if model is None:
+            raise ValueError("LookupClassifier model is not loaded.")
+
+        return model.predict(split_df)
+
     # ─── Public API ─────────────────────────────────────────────────
 
     def predict_split(
@@ -343,3 +367,5 @@ class ClassifierAdapter:
             return self._predict_dismir(split_df)
         elif self.classifier_type == "cancer_detector":
             return self._predict_cancer_detector(split_df)
+        elif self.classifier_type == "lookup":
+            return self._predict_lookup(split_df)

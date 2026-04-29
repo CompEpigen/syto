@@ -119,6 +119,13 @@ class InferencePipeline:
         # By default the algorithm assumes that we have at least some data for each DMR group.
         self.fill_in_missing_labels = self.config.get("fill_in_missing_labels", False)
 
+        if self.config.get("num_labels", None) is None:
+            self.num_labels = len(self.labels_dict)
+        else:
+            self.num_labels = self.config["num_labels"]
+
+        self.input_length = int(np.sum(self.features_mask))
+
     # ═══════════════════════════════════════════════════════════════════
     #  Public API
     # ═══════════════════════════════════════════════════════════════════
@@ -144,7 +151,7 @@ class InferencePipeline:
         else:
             raise ValueError(
                 f"Unknown input type: {input_cfg['type']}. "
-                "Must be 'bam' or 'processed_reads'."
+                "Must be 'bam' or 'parsed_reads' or 'predicted_reads'."
             )
         if not self.processed_reads is None:
             if not self.skip_classification:
@@ -256,10 +263,24 @@ class InferencePipeline:
         """Load pre-parsed reads from a pickle file."""
         path = self.config["input"]["parsed_reads_path"]
         self.logger.info(f"Loading pre-parsed reads from {path}")
-        with open(path, "rb") as f:
-            df = pickle.load(f)
-        if not isinstance(df, pd.DataFrame):
-            raise TypeError(f"Expected a pandas DataFrame in {path}, got {type(df)}")
+        if ".csv" in path:
+            df = pd.read_csv(path, sep="\t")
+            df.rename(columns={"ref_name": "chromosome"}, inplace=True)
+            df.rename(columns={"ref_pos": "read_start"}, inplace=True)
+            df.rename(columns={"methyl_seq": "methylation_encoding"}, inplace=True)
+            df.rename(columns={"original_seq": "seq"}, inplace=True)
+            df["read_end"] = df["read_start"] + df["seq"].apply(len)
+            df["read_name"] = range(len(df))
+            df["label"] = (
+                0  # TODO: temporary set here to avoid eval loop crashing the predict. MUST FIX IN THE FUTURE IN THE EVAL LOOP!!!
+            )
+        else:
+            with open(path, "rb") as f:
+                df = pickle.load(f)
+            if not isinstance(df, pd.DataFrame):
+                raise TypeError(
+                    f"Expected a pandas DataFrame in {path}, got {type(df)}"
+                )
         return df
 
     def _load_reads_with_predictions(self) -> pd.DataFrame:
@@ -358,9 +379,7 @@ class InferencePipeline:
 
         # ── Load MethylBERT model ──────────────────────────────────────
         self.logger.info(f"Loading MethylBERT from checkpoint: {checkpoint_path}")
-        # num_labels = len(self.labels_dict)+1 #Rejected label
-        # TODO Make it a parameter
-        num_labels = len(self.labels_dict)
+
         num_dmr_labels = dataset.num_dmrs()
 
         rrms_config = OrderedDict(
@@ -394,7 +413,7 @@ class InferencePipeline:
             seq_len=seq_len,
             custom_config=rrms_config.copy(),
             fine_tuned_model_path=checkpoint_path,
-            num_labels=num_labels,
+            num_labels=self.num_labels,
             num_dmr_labels=num_dmr_labels,
             output_dir=os.path.join(self.config["output"]["output_dir"], "tmp_trainer"),
             classifier_implementation="dmr_attention_based",
@@ -409,7 +428,8 @@ class InferencePipeline:
             batch_size=batch_size,
         )
         predictions_pd = pd.DataFrame(
-            predictions[0], columns=["prediction_" + str(x) for x in range(num_labels)]
+            predictions[0],
+            columns=["prediction_" + str(x) for x in range(self.num_labels)],
         )
         predictions_pd["read_name"] = [x[-3] for x in self.prepared_reads_chuncked[1:]]
         predictions_pd["ncpgs_marked"] = [
@@ -475,19 +495,37 @@ class InferencePipeline:
             self.logger.info(f"Running deconvolution method: {name}")
 
             try:
+                base_name = name
+                if name == "ls":
+                    base_name = method_cfg["flavor"]
+
                 if name == "xgboost":
-                    results[name] = self._run_xgboost_deconvolution(method_cfg)
+                    proportions = self._run_xgboost_deconvolution(method_cfg)
                 elif name == "uxm":
-                    results[name] = self._run_uxm_deconvolution(method_cfg)
+                    proportions = self._run_uxm_deconvolution(method_cfg)
                 elif name in ["3Layer_MLP", "Shallow_Wide_Network"]:
-                    results[name] = self._run_nn_deconvolution(method_cfg)
+                    proportions = self._run_nn_deconvolution(method_cfg)
                 elif name == "ls":
-                    flavor = method_cfg["flavor"]
-                    results[flavor] = self._run_ls_deconvolution(method_cfg)
+                    proportions = self._run_ls_deconvolution(method_cfg)
                 else:
                     self.logger.warning(
                         f"Unknown deconvolution method: {name}, skipping"
                     )
+                    continue
+
+                results[base_name] = proportions
+
+                if method_cfg.get("use_callibration", False):
+                    calibrator = LinearCalibrator()
+                    calibrator.load_calibration_parameters(
+                        method_cfg["callibrator_path"]
+                    )
+                    if proportions.ndim == 1:
+                        proportions = np.expand_dims(proportions, 0)
+                    calib_proportions = calibrator.predict(proportions)
+                    calib_proportions = np.round(calib_proportions, 4)
+                    results[f"{base_name}_callibrated"] = calib_proportions
+
             except Exception as e:
                 self.logger.error(
                     f"Deconvolution method '{name}' failed: {e}", exc_info=True
@@ -503,7 +541,11 @@ class InferencePipeline:
         flavor = method_cfg["flavor"]
         self.logger.info(f"Loading {flavor} from {checkpoint_path}")
         X = self._extract_features_by_mask(
-            np.array(self.dmr_aggregated[[f"prediction_{i}_wavg" for i in range(39)]]),
+            np.array(
+                self.dmr_aggregated[
+                    [f"prediction_{i}_wavg" for i in range(self.num_labels)]
+                ]
+            ),
             self.features_mask,
         )
         X = X.flatten()
@@ -543,7 +585,11 @@ class InferencePipeline:
         # Build the prediction matrix from DMR-aggregated data
         # prediction_matrix = self._build_prediction_matrix()
         X = self._extract_features_by_mask(
-            np.array(self.dmr_aggregated[[f"prediction_{i}_wavg" for i in range(39)]]),
+            np.array(
+                self.dmr_aggregated[
+                    [f"prediction_{i}_wavg" for i in range(self.num_labels)]
+                ]
+            ),
             self.features_mask,
         )
         deconv_preds = deconvolver._predict_raw(X)
@@ -574,7 +620,7 @@ class InferencePipeline:
             #     nn.Softmax(dim=-1)
             # )
             deconvolver = nn.Sequential(
-                nn.Linear(152, 1024),
+                nn.Linear(self.input_length, 1024),
                 nn.GELU(),
                 nn.Dropout(0.2),
                 nn.Linear(1024, 39),
@@ -595,16 +641,16 @@ class InferencePipeline:
             #     nn.Softmax(dim=-1)
             # )
             deconvolver = nn.Sequential(
-                nn.Linear(152, 512),
+                nn.Linear(self.input_length, 512),
                 nn.GELU(),
                 nn.Dropout(0.2),
                 nn.Linear(512, 256),
                 nn.GELU(),
                 nn.Dropout(0.2),
-                nn.Linear(256, 152),
+                nn.Linear(256, self.input_length),
                 nn.GELU(),
                 nn.Dropout(0.1),
-                nn.Linear(152, 39),
+                nn.Linear(self.input_length, 39),
                 nn.Softmax(dim=-1),
             )
         else:
@@ -618,7 +664,9 @@ class InferencePipeline:
         X = torch.FloatTensor(
             self._extract_features_by_mask(
                 np.array(
-                    self.dmr_aggregated[[f"prediction_{i}_wavg" for i in range(39)]]
+                    self.dmr_aggregated[
+                        [f"prediction_{i}_wavg" for i in range(self.num_labels)]
+                    ]
                 ),
                 self.features_mask,
             )
@@ -663,7 +711,7 @@ class InferencePipeline:
         return proportions_aligned
 
     @staticmethod
-    def _extract_diag_and_rej(matrix):
+    def _extract_diag_and_bckg(matrix):
         return np.reshape(np.concat([np.diag(matrix), matrix[:, -1]], axis=0), (1, 78))
 
     @staticmethod
@@ -702,7 +750,7 @@ class InferencePipeline:
             available = [c for c in agg.columns if c.startswith("prediction_")]
             matrix = agg[available].values
 
-        return self._extract_diag_and_rej(matrix)
+        return self._extract_diag_and_bckg(matrix)
 
     def _build_uxm_input(
         self, uxm_atlas: pd.DataFrame, ref_cells: list

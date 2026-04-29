@@ -195,6 +195,8 @@ cython_debug/
 /EDA/*.pkl
 /EDA/*.pt
 /EDA/*/*.png
+/App/config/rrbs/tmp_configs
+/App/config/*
 
 # Singularity/Docker artifacts
 *.sif

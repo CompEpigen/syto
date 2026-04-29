@@ -7,51 +7,51 @@
 # ── Input data ──────────────────────────────────────────────────
 # Paths to predicted splits (output of pseudobulk pipeline stage 3)
 predicted_splits:
-  train: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/pseudobulk/Dismir_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_hard_labels/pseudobulk/train_predicted.pkl
-  valid: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/pseudobulk/Dismir_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_hard_labels/pseudobulk/valid_predicted.pkl
-  test: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/pseudobulk/Dismir_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_hard_labels/pseudobulk/test_predicted.pkl
+  train: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/pseudobulk/LookupClassifier_SoftLabels_Ours/pseudobulk/train_predicted.pkl
+  valid: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/pseudobulk/LookupClassifier_SoftLabels_Ours/pseudobulk/valid_predicted.pkl
+  test: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/pseudobulk/LookupClassifier_SoftLabels_Ours/pseudobulk/test_predicted.pkl
 
 # Full IO matrices from pseudobulk generation (stage 5 output)
-ios_full_matrices_path: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/pseudobulk/Dismir_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_hard_labels/pseudobulk/ios_full_matrices.npz
+ios_full_matrices_path: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/pseudobulk/LookupClassifier_SoftLabels_Ours/pseudobulk/ios_full_matrices.npz
 
 # ── Labels ──────────────────────────────────────────────────────
 labels_dict_path: App/labels_dict.json
-num_input_labels: 40
+num_input_labels: 39
 num_output_labels: 39
 
 # ── Pure profile generation (Stage 1) ──────────────────────────
 # If set, Stage 1 is skipped and profiles are loaded from this path
-pure_profiles_path: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/pseudobulk/Dismir_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_hard_labels/pseudobulk/pure_profiles.pkl
+pure_profiles_path: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/pseudobulk/LookupClassifier_SoftLabels_Ours/pseudobulk/pure_profiles.pkl
 # Number of reads to sample per split per pure profile
 n_read_per_split: 475000
 
 # ── Feature selection (Stage 2) ────────────────────────────────
 # Cutoff for selecting discriminative features (max/mean ratio)
-feature_cutoff: 6.33
+feature_cutoff: 1.703
 guarantee_diagonal_selection: true
 #guarantee_columns_selection: [39]
 
 # Whether to generate the 2x2 heatmap comparing feature masks
 # across train/valid/test splits
-generate_feature_selection_plot: true
+generate_feature_selection_plot: false
 
 # ── Deconvolvers (Stage 3) ─────────────────────────────────────
 # Each entry defines a deconvolver to fit.  Supported names:
 #   xgb, swn, mlp, nnls, psls
 # Set calibrate: true to also fit a linear calibrator on top.
 deconvolvers:
-  # - name: xgb
-  #   calibrate: true
-  #   params:
-  #     n_estimators: 500
-  #     max_depth: 15
-  #     learning_rate: 0.05
-  #     subsample: 0.7
-  #     colsample_bytree: 1.0
-  #     min_child_weight: 5
-  #     reg_alpha: 0.1
-  #     reg_lambda: 1.0
-  #     random_state: 42
+  - name: xgb
+    calibrate: true
+    params:
+      n_estimators: 500
+      max_depth: 15
+      learning_rate: 0.05
+      subsample: 0.7
+      colsample_bytree: 1.0
+      min_child_weight: 5
+      reg_alpha: 0.1
+      reg_lambda: 1.0
+      random_state: 42
 
   - name: swn
     calibrate: true
@@ -79,17 +79,17 @@ deconvolvers:
       weight_decay: 0.001
       early_stopping_metric: val_mae
       early_stopping_patience: 1000
-      scheduler_type: plateau
+      scheduler_type: none
       device: cuda
 
-  # - name: nnls
-  #   calibrate: true
+  - name: nnls
+    calibrate: true
 
-  # - name: psls
-  #   calibrate: true
-  #   params:
-  #     solver_type: cvxpy
-  #     n_workers: 2
+  - name: psls
+    calibrate: true
+    params:
+      solver_type: cvxpy
+      n_workers: 2
 
 # ── Output ──────────────────────────────────────────────────────
-output_dir: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/pseudobulk/Dismir_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_hard_labels/pseudobulk/
+output_dir: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/pseudobulk/LookupClassifier_SoftLabels_Ours/pseudobulk/

@@ -12,9 +12,7 @@ import pandas as pd
 
 
 def prepare_splits_for_pseudobulk(
-    train_split: pd.DataFrame,
-    valid_split: pd.DataFrame,
-    test_split: pd.DataFrame,
+    splits: Dict[str, pd.DataFrame],
     labels_dict: Dict[int, str],
     target_columns: Optional[List[str]] = None,
     num_labels: int = 39,
@@ -24,7 +22,7 @@ def prepare_splits_for_pseudobulk(
     seq_column: str = "seq",
     methylation_pattern_column: str = "pattern",
     read_name_column: str = "read_name",
-) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+) -> Dict[str, pd.DataFrame]:
     """
     Add derived columns needed by ``generate_pseudo_bulk*`` and
     optionally run ``prepare_reads_for_uxm``.
@@ -43,6 +41,8 @@ def prepare_splits_for_pseudobulk(
     Parameters
     ----------
     train_split, valid_split, test_split : pd.DataFrame
+        Input split DataFrames. (Deprecated parameters removed)
+    splits : Dict[str, pd.DataFrame]
         Input split DataFrames.
     labels_dict : dict
         ``{int_label: cell_type_name}`` mapping.
@@ -62,17 +62,17 @@ def prepare_splits_for_pseudobulk(
 
     Returns
     -------
-    tuple of pd.DataFrame
-        ``(train, valid, test)`` — enriched DataFrames.
+    Dict[str, pd.DataFrame]
+        ``{"train": df_train, "valid": df_valid, ...}`` — enriched DataFrames.
     """
     if target_columns is None:
         target_columns = [f"prediction_{i}" for i in range(num_labels)]
 
     labels_dict_reversed = {v: int(k) for k, v in labels_dict.items()}
 
-    splits = [train_split.copy(), valid_split.copy(), test_split.copy()]
+    splits_copy = {name: df.copy() for name, df in splits.items()}
 
-    for df in splits:
+    for split_name, df in splits_copy.items():
         # Derived columns from predictions
         if "original_label" in df.columns and "dmr_ctype_label" in df.columns:
             df["is_cell_informative_region"] = (
@@ -117,9 +117,8 @@ def prepare_splits_for_pseudobulk(
             by=["chr", "start", "end"], ascending=True
         ).reset_index(drop=True)
 
-        prepared = []
-        split_names = ["train", "valid", "test"]
-        for df, split_name in zip(splits, split_names):
+        prepared = {}
+        for split_name, df in splits_copy.items():
             df_sorted = df.sort_values(
                 by=["chromosome", "read_start", "read_end"], ascending=True
             ).reset_index(drop=True)
@@ -135,7 +134,7 @@ def prepare_splits_for_pseudobulk(
                 read_name_column=read_name_column,
                 progress_prefix=f"[{split_name.capitalize()}] ",
             )
-            prepared.append(uxm_df)
-        return tuple(prepared)
+            prepared[split_name] = uxm_df
+        return prepared
 
-    return tuple(splits)
+    return splits_copy
