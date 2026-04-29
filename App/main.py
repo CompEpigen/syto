@@ -58,7 +58,7 @@ def validate_config(config: Dict[str, Any], task: str) -> None:
         "fine_tune": ["model", "data_path", "max_sequence_length"],
         "pretrain": ["model", "data_path"],  # Add pretrain requirements
         "inference": [
-            "model",
+            "classifier",
             "checkpoint_path",
             "labels_dict_path",
             "atlas_path",
@@ -92,8 +92,8 @@ def validate_config(config: Dict[str, Any], task: str) -> None:
 
     # Validate model-specific configuration (not needed for generate_pseudobulk or fit_deconvolution)
     if task not in ("generate_pseudobulk", "fit_deconvolution", "fit_calibration"):
-        model = config["model"]["architecture"].lower()
-        if model not in ["dismir", "epigenbert2", "methylbert"]:
+        model = config["classifier"]["classifier_type"].lower()
+        if model not in ["methylbert", "dismir", "cancer_detector", "lookup"]:
             raise ValueError(f"Unknown model architecture: {model}")
 
 
@@ -221,7 +221,7 @@ def run_inference(config: Dict[str, Any], logger: logging.Logger) -> None:
     logger.info("=" * 60)
     logger.info("INFERENCE RESULTS SUMMARY")
     logger.info("=" * 60)
-    for method_name, proportions in results.items():
+    for deconvolver, calibrator, proportions in results:
         # Flatten the proportions array if it is 2D (e.g., shape (1, 39))
         flat_props = proportions.flatten()
         # 1. Pair the labels with their values
@@ -235,8 +235,9 @@ def run_inference(config: Dict[str, Any], logger: logging.Logger) -> None:
         # 3. Take the top 5
         top_5 = cell_contributions[:5]
         # 4. Format and log
+        label = f"{deconvolver} (calibrator={calibrator})"
         top5_str = ", ".join([f"{name}: {val:.4f}" for name, val in top_5])
-        logger.info(f"  {method_name} Top 5: {top5_str}")
+        logger.info(f"  {label} Top 5: {top5_str}")
         logger.info("=" * 60)
 
 

@@ -1,9 +1,10 @@
 """
-MethylBERT Inference Pipeline
+Inference Pipeline
 
 End-to-end pipeline for processing BAM files (or pre-processed reads),
-running MethylBERT classifier predictions, and performing deconvolution
-using multiple methods simultaneously.
+running classifier predictions (MethylBERT, Dismir, CancerDetector,
+or LookupClassifier), and performing deconvolution using multiple
+methods simultaneously.
 """
 
 import os
@@ -13,7 +14,6 @@ import pickle
 import logging
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
-from collections import OrderedDict
 import torch.nn as nn
 import torch
 
@@ -25,24 +25,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from copy import deepcopy
 
-from methyldl.modelling.classifiers.methylbert import (
-    MethylBert,
-    MethylVocab,
-    MethylBertFinetuneDataset,
-    methylbert_finetune_collator,
-    default_methylbert_config,
-)
-
 from methyldl.data import LOYFER_CELL_TYPE_MATCH_DICT
 from methyldl.data.sequencing.bam_processing import process_bam_with_chunking
-from methyldl.modelling.data_preprocessing_for_inference import (
-    prepare_methylbert_list_inference,
-)
 from methyldl.modelling.prediction_aggregation import (
     aggregate_predictions_by_dmr,
-    aggregate_chuncked_predictions_weighted,
 )
-from methyldl.data.sequencing.genome import generate_kmer_str_with_overlap
+from methyldl.modelling.classifier_adapter import ClassifierAdapter
 
 from methyldl.deconvolution.uxm import (
     prepare_reads_for_uxm,
@@ -61,16 +49,22 @@ from methyldl.deconvolution.xgbdeconvolver import (
 )
 
 from methyldl.deconvolution.linear_calibrator import LinearCalibrator
+from methyldl.deconvolution.vector_scaling_calibrator import (
+    VectorScalingCalibratorCV,
+)
+
+LINEAR_NORM_METHODS = ["clip01-normalize", "clip0-normalize", "simplex-projection"]
 
 
 class InferencePipeline:
     """
-    Orchestrates the full MethylBERT inference pipeline.
+    Orchestrates the full inference pipeline.
 
     Stages:
         1. BAM → processed reads (or load pre-processed)
         2. Reads × atlas → region-overlapped, annotated reads
-        3. Annotated reads → MethylBERT classifier predictions
+        3. Annotated reads → classifier predictions
+           (MethylBERT / Dismir / CancerDetector / LookupClassifier)
         4. Read-level predictions → DMR-level aggregation
         5. DMR-level predictions → deconvolution proportions
 
@@ -119,6 +113,11 @@ class InferencePipeline:
         # By default the algorithm assumes that we have at least some data for each DMR group.
         self.fill_in_missing_labels = self.config.get("fill_in_missing_labels", False)
 
+        # Resolve classifier type early so it's available even when
+        # classification is skipped (e.g. predicted_reads input).
+        classifier_cfg = config.get("classifier", config.get("model", {}))
+        self.classifier_type = classifier_cfg.get("classifier_type", "methylbert")
+
         if self.config.get("num_labels", None) is None:
             self.num_labels = len(self.labels_dict)
         else:
@@ -130,18 +129,20 @@ class InferencePipeline:
     #  Public API
     # ═══════════════════════════════════════════════════════════════════
 
-    def run(self) -> Dict[str, Any]:
+    def run(self) -> List[Tuple[str, str, np.ndarray]]:
         """Execute the full inference pipeline end-to-end."""
 
         self.skip_classification = False
         # ── Stage 1: obtain processed reads ─────────────────────────────
         input_cfg = self.config["input"]
         if input_cfg["type"] == "bam":
-            self.file_name = input_cfg["bam_path"].split("/")[-1]
+            self.file_name = Path(input_cfg["bam_path"]).name
             self.processed_reads = self._process_bam()
         elif input_cfg["type"] == "parsed_reads":
+            self.file_name = Path(input_cfg["parsed_reads_path"]).name
             self.processed_reads = self._load_parsed_reads()
         elif input_cfg["type"] == "predicted_reads":
+            self.file_name = Path(input_cfg["predicted_reads_path"]).name
             self.predictions_df = self._load_reads_with_predictions()
             self.prepared_reads = self.predictions_df  # For UXM to work
             self.logger.info(
@@ -160,15 +161,13 @@ class InferencePipeline:
                 )
 
                 # ── Stage 2: overlap reads with atlas regions ───────────────────
-                self.prepared_reads, self.prepared_reads_chuncked = (
-                    self._prepare_reads()
-                )
+                self.prepared_reads = self._prepare_reads()
                 self.logger.info(
                     f"Stage 2 complete: {len(self.prepared_reads)} atlas-overlapped reads"
                 )
 
-                # ── Stage 3: MethylBERT predictions ─────────────────────────────
-                self.predictions_df = self._predict_methylbert()
+                # ── Stage 3: classifier predictions ─────────────────────────────
+                self.predictions_df = self._predict_classifier()
                 self.logger.info(
                     f"Stage 3 complete: predictions for {len(self.predictions_df)} reads"
                 )
@@ -301,12 +300,20 @@ class InferencePipeline:
         """
         Overlap processed reads with atlas regions and resolve DMR labels.
 
-        Uses ``prepare_reads_for_uxm`` from edautils, which:
+        Uses ``prepare_reads_for_uxm`` which:
         - iterates atlas regions and scans sorted reads for overlaps
         - trims reads to region boundaries
         - computes M / U / X counts
         - resolves ``dmr_ctype_label`` via labels_dict_reversed and
           cell_type_match_dict
+
+        Returns
+        -------
+        pd.DataFrame
+            Prepared reads with atlas-region annotations.  Column names
+            are kept as-is (``seq``, ``pattern``, …) so that the
+            :class:`ClassifierAdapter` can handle any downstream
+            transformations internally.
         """
         df = self.processed_reads.copy()
 
@@ -333,26 +340,67 @@ class InferencePipeline:
                 "No reads overlapped with atlas regions. "
                 "Check that chromosome naming is consistent between BAM and atlas."
             )
-        seq_length = self.config.get("max_sequence_length", 150)
-        prepared_uxm.rename(
-            columns={"seq": "input_ids", "pattern": "methylation_ids"}, inplace=True
-        )
-        chunked_inputs = prepare_methylbert_list_inference(
-            prepared_uxm,
-            "dmr_ctype_label",
-            seq_length=seq_length,
-            stride=int(seq_length / 2),
-        )
 
-        return prepared_uxm, chunked_inputs
+        return prepared_uxm
 
     # ═══════════════════════════════════════════════════════════════════
-    #  Stage 3: MethylBERT predictions
+    #  Stage 3: classifier predictions
     # ═══════════════════════════════════════════════════════════════════
 
-    def _predict_methylbert(self) -> pd.DataFrame:
+    def _build_classifier_adapter(self) -> ClassifierAdapter:
+        """Build a :class:`ClassifierAdapter` from the pipeline config.
+
+        Reads the ``classifier`` (or legacy ``model``) section of the
+        configuration to determine which classifier backend to use and
+        how to initialise it.
+
+        Returns
+        -------
+        ClassifierAdapter
         """
-        Convert prepared reads to MethylBERT format and run the classifier.
+        classifier_cfg = self.config.get("classifier", self.config.get("model", {}))
+        classifier_type = classifier_cfg.get("classifier_type", "methylbert")
+        self.classifier_type = classifier_type
+        checkpoint_path = self.config["checkpoint_path"]
+        seq_len = self.config.get("max_sequence_length", 150)
+        batch_size = self.config.get("prediction_batch_size", 2200)
+
+        adapter = ClassifierAdapter(
+            classifier_type=classifier_type,
+            checkpoint_path=checkpoint_path,
+            labels_dict=self.labels_dict,
+            num_labels=self.num_labels,
+            seq_length=seq_len,
+            foundation_model_path=classifier_cfg.get(
+                "foundation_model", "hanyangii/methylbert_hg19_12l"
+            ),
+            classifier_head_implementation=classifier_cfg.get(
+                "classifier_head_implementation", "dmr_attention_based"
+            ),
+            dmr_label_column=classifier_cfg.get(
+                "dmr_label_column", "dmr_ctype_label"
+            ),
+            dismir_flavor=classifier_cfg.get("dismir_flavor", "lstm"),
+            cancer_detector_prior_type=classifier_cfg.get(
+                "cancer_detector_prior_type", "uniform"
+            ),
+            soft_labels=classifier_cfg.get("soft_labels", False),
+            batch_size=batch_size,
+        )
+
+        self.logger.info(
+            f"Built ClassifierAdapter: type={classifier_type}, "
+            f"checkpoint={checkpoint_path}"
+        )
+        return adapter
+
+    def _predict_classifier(self) -> pd.DataFrame:
+        """
+        Run the configured classifier on the prepared reads.
+
+        Delegates to :class:`ClassifierAdapter` which supports
+        MethylBERT, Dismir, CancerDetector, and LookupClassifier
+        through a unified ``predict_split`` interface.
 
         Returns
         -------
@@ -360,89 +408,16 @@ class InferencePipeline:
             The prepared_reads DataFrame augmented with ``prediction_*``
             columns (one per cell type).
         """
-        model_cfg = self.config["model"]
-        checkpoint_path = self.config["checkpoint_path"]
-        seq_len = self.config.get("max_sequence_length", 150)
-        batch_size = self.config.get("prediction_batch_size", 2200)
+        adapter = self._build_classifier_adapter()
 
-        # ── Build MethylBERT dataset ────────────────────────────────────
-        self.logger.info("Converting reads to MethylBERT format ...")
+        self.logger.info("Running classifier predictions ...")
+        result_df = adapter.predict_split(self.prepared_reads)
 
-        vocab = MethylVocab(k=3)
-        dataset = MethylBertFinetuneDataset(
-            data_source=self.prepared_reads_chuncked,
-            vocab=vocab,
-            seq_len=seq_len,
-            n_cores=10,
-            lazy_tokenization=True,
-        )
-
-        # ── Load MethylBERT model ──────────────────────────────────────
-        self.logger.info(f"Loading MethylBERT from checkpoint: {checkpoint_path}")
-
-        num_dmr_labels = dataset.num_dmrs()
-
-        rrms_config = OrderedDict(
-            [
-                ("lr", 0.0004),
-                ("beta", (0.9, 0.98)),
-                ("weight_decay", 0.1),
-                ("warmup_step", 100),
-                ("eps", 1e-6),
-                ("with_cuda", True),
-                ("log_freq", 200),
-                ("eval_freq", 200),
-                ("n_hidden", None),
-                ("decrease_steps", 200),
-                ("eval", False),
-                ("amp", True),
-                ("gradient_accumulation_steps", 1),
-                ("max_grad_norm", 1.0),
-                ("save_freq", None),
-                ("loss", "ce"),
-                ("adam_beta1", 0.9),
-                ("adam_beta2", 0.98),
-                ("seed", 950410),
-            ]
-        )
-
-        model_instance = MethylBert(
-            foundation_model_path=model_cfg.get(
-                "foundation_model", "hanyangii/methylbert_hg19_12l"
-            ),
-            seq_len=seq_len,
-            custom_config=rrms_config.copy(),
-            fine_tuned_model_path=checkpoint_path,
-            num_labels=self.num_labels,
-            num_dmr_labels=num_dmr_labels,
-            output_dir=os.path.join(self.config["output"]["output_dir"], "tmp_trainer"),
-            classifier_implementation="dmr_attention_based",
-            batch_size=batch_size,
-        )
-
-        # ── Run predictions ────────────────────────────────────────────
-        self.logger.info("Running MethylBERT predictions ...")
-
-        predictions = model_instance.predict(
-            dataset,
-            batch_size=batch_size,
-        )
-        predictions_pd = pd.DataFrame(
-            predictions[0],
-            columns=["prediction_" + str(x) for x in range(self.num_labels)],
-        )
-        predictions_pd["read_name"] = [x[-3] for x in self.prepared_reads_chuncked[1:]]
-        predictions_pd["ncpgs_marked"] = [
-            x[-2] for x in self.prepared_reads_chuncked[1:]
-        ]
-
-        predictions_pd = aggregate_chuncked_predictions_weighted(predictions_pd)
-
-        result_df = pd.merge(self.prepared_reads, predictions_pd, on="read_name")
         result_df = result_df.dropna(
             subset=result_df.columns.difference(["soft_label"])
         )
-        result_df.rename(columns={"M_rate": "methylation_level"}, inplace=True)
+        if "M_rate" in result_df.columns:
+            result_df.rename(columns={"M_rate": "methylation_level"}, inplace=True)
 
         return result_df
 
@@ -472,20 +447,24 @@ class InferencePipeline:
     #  Stage 5: deconvolution
     # ═══════════════════════════════════════════════════════════════════
 
-    def _run_deconvolution(self) -> Dict[str, Any]:
+    def _run_deconvolution(self) -> List[Tuple[str, str, np.ndarray]]:
         """
         Execute all enabled deconvolution methods and return results.
 
+        For each deconvolution method, if a ``calibrators_dir`` is specified,
+        all calibrator files found in that directory are automatically loaded
+        and applied to produce additional calibrated result entries.
+
         Returns
         -------
-        dict
-            Mapping from method name to its output (array of proportions
-            or DataFrame).
+        list of (deconvolver, calibrator, proportions)
+            Each element is a tuple of (deconvolver name, calibrator name
+            or "None", proportions array).
         """
         deconv_cfg = self.config.get("deconvolution", {})
         methods = deconv_cfg.get("methods", [])
 
-        results: Dict[str, Any] = {}
+        results: List[Tuple[str, str, np.ndarray]] = []
 
         for method_cfg in methods:
             if not method_cfg.get("enabled", False):
@@ -513,18 +492,24 @@ class InferencePipeline:
                     )
                     continue
 
-                results[base_name] = proportions
+                # Uncalibrated result
+                results.append((base_name, "None", proportions))
 
-                if method_cfg.get("use_callibration", False):
-                    calibrator = LinearCalibrator()
-                    calibrator.load_calibration_parameters(
-                        method_cfg["callibrator_path"]
+                # ── Apply all discovered calibrators ────────────────────
+                calibrators_dir = method_cfg.get("calibrators_dir", None)
+                # Legacy single-calibrator fallback
+                if calibrators_dir is None and method_cfg.get(
+                    "use_callibration", False
+                ):
+                    calibrators_dir = str(
+                        Path(method_cfg["callibrator_path"]).parent
                     )
-                    if proportions.ndim == 1:
-                        proportions = np.expand_dims(proportions, 0)
-                    calib_proportions = calibrator.predict(proportions)
-                    calib_proportions = np.round(calib_proportions, 4)
-                    results[f"{base_name}_callibrated"] = calib_proportions
+
+                if calibrators_dir is not None:
+                    calibrated = self._apply_all_calibrators(
+                        proportions, calibrators_dir, base_name
+                    )
+                    results.extend(calibrated)
 
             except Exception as e:
                 self.logger.error(
@@ -533,9 +518,102 @@ class InferencePipeline:
 
         return results
 
+    def _apply_all_calibrators(
+        self,
+        proportions: np.ndarray,
+        calibrators_dir: str,
+        base_name: str,
+    ) -> List[Tuple[str, str, np.ndarray]]:
+        """Discover and apply all calibrator files in *calibrators_dir*.
+
+        Parameters
+        ----------
+        proportions : np.ndarray
+            Raw (uncalibrated) deconvolution proportions.  May be 1-D
+            (single sample) or 2-D.
+        calibrators_dir : str
+            Path to the directory that contains calibrator ``.npz`` files
+            produced by :class:`CalibratorFittingPipeline`.
+        base_name : str
+            Deconvolver name, e.g. ``"nnls"``.
+
+        Returns
+        -------
+        list of (deconvolver, calibrator, proportions)
+            Each element is a tuple of (deconvolver name, calibrator
+            description, calibrated proportions array).
+        """
+        results: List[Tuple[str, str, np.ndarray]] = []
+        calibrators_dir = Path(calibrators_dir)
+
+        if not calibrators_dir.is_dir():
+            self.logger.warning(
+                f"Calibrators directory does not exist: {calibrators_dir}"
+            )
+            return results
+
+        # Ensure 2-D input for the calibrators
+        props_2d = proportions
+        if props_2d.ndim == 1:
+            props_2d = np.expand_dims(props_2d, 0)
+
+        # ── Linear calibrator ──────────────────────────────────────
+        linear_path = calibrators_dir / "linear_calibrator.npz"
+        if linear_path.exists():
+            self.logger.info(
+                f"  Loading linear calibrator from {linear_path}"
+            )
+            linear_cal = LinearCalibrator()
+            linear_cal.load_calibration_parameters(str(linear_path))
+
+            for norm_method in LINEAR_NORM_METHODS:
+                short_name = norm_method.replace("-", "_")
+                calibrator_label = f"linear_{short_name}"
+                try:
+                    calib, _ = linear_cal.predict(
+                        props_2d, norm_method=norm_method
+                    )
+                    results.append((base_name, calibrator_label, np.round(calib, 4)))
+                    self.logger.info(f"    ✓ {base_name} + {calibrator_label}")
+                except Exception as e:
+                    self.logger.error(
+                        f"    ✗ {base_name} + {calibrator_label} failed: {e}",
+                        exc_info=True,
+                    )
+
+        # ── Vector-scaling calibrator ──────────────────────────────
+        vs_path = calibrators_dir / "vector_scaling_calibrator.npz"
+        if vs_path.exists():
+            calibrator_label = "vector_scaling"
+            self.logger.info(
+                f"  Loading vector-scaling calibrator from {vs_path}"
+            )
+            try:
+                vs_cal = VectorScalingCalibratorCV()
+                vs_cal.load(str(vs_path))
+                calib = vs_cal.predict_proba(props_2d)
+                results.append((base_name, calibrator_label, np.round(calib, 4)))
+                self.logger.info(f"    ✓ {base_name} + {calibrator_label}")
+            except Exception as e:
+                self.logger.error(
+                    f"    ✗ {base_name} + {calibrator_label} failed: {e}",
+                    exc_info=True,
+                )
+
+        if not results:
+            self.logger.warning(
+                f"  No calibrator files found in {calibrators_dir}"
+            )
+
+        return results
+
     def _run_ls_deconvolution(self, method_cfg: Dict[str, Any]) -> np.ndarray:
         """
-        Run LS based deconvolution on the aggregated predictions selected feature matrices
+        Run LS based deconvolution on the aggregated predictions selected feature matrices.
+
+        Note: calibration is now handled centrally by ``_apply_all_calibrators``
+        via the ``calibrators_dir`` config key.  The legacy inline calibration
+        block has been removed.
         """
         checkpoint_path = method_cfg["checkpoint_path"]
         flavor = method_cfg["flavor"]
@@ -559,11 +637,6 @@ class InferencePipeline:
             raise ValueError(
                 "LS fabily of deconvolvers supports only two flavors: nnls and psls"
             )
-
-        if method_cfg["use_callibration"]:
-            calibrator = LinearCalibrator()
-            calibrator.load_calibration_parameters(method_cfg["callibrator_path"])
-            proportions = calibrator.predict(np.expand_dims(proportions, 0))
 
         proportions = np.round(proportions, 4)
         self.logger.debug(f"{flavor} proportions: {proportions}")
@@ -814,21 +887,34 @@ class InferencePipeline:
                 pickle.dump(self.predictions_df, f)
             self.logger.info(f"Saved predictions to {path}")
 
-        # ── Deconvolution proportions (CSV) ────────────────────────────
+        # ── Deconvolution proportions (single long-format CSV) ──────────
         if output_cfg.get("save_deconvolution", True) and self.deconvolution_results:
-            for method_name, proportions in self.deconvolution_results.items():
-                path = os.path.join(output_dir, f"deconvolution_{method_name}.csv")
+            classifier_name = getattr(self, "classifier_type", "unknown")
+            file_name = getattr(self, "file_name", "unknown")
+            cell_types = list(self.labels_dict.values())
 
-                if isinstance(proportions, np.ndarray):
-                    prop_df = pd.DataFrame(
-                        [list(self.labels_dict.values()), proportions.flatten()]
-                    ).T
-                    prop_df.columns = ["CellType", method_name]
-                elif isinstance(proportions, pd.DataFrame):
-                    prop_df = proportions
+            rows = []
+            for deconvolver, calibrator, proportions in self.deconvolution_results:
+                props_flat = proportions.flatten()
+                for ct, prop in zip(cell_types, props_flat):
+                    rows.append(
+                        {
+                            "FileName": file_name,
+                            "CellType": ct,
+                            "Classifier": classifier_name,
+                            "Deconvolver": deconvolver,
+                            "Calibrator": calibrator,
+                            "PredictedProportion": prop,
+                        }
+                    )
 
-                prop_df.to_csv(path, index=False)
-                self.logger.info(f"Saved {method_name} deconvolution to {path}")
+            results_df = pd.DataFrame(rows)
+            path = os.path.join(output_dir, "deconvolution_results.csv")
+            results_df.to_csv(path, index=False)
+            self.logger.info(
+                f"Saved deconvolution results ({len(self.deconvolution_results)} "
+                f"method/calibrator combinations) to {path}"
+            )
 
         # ── DMR-aggregated predictions (pickle) ────────────────────────
         if self.dmr_aggregated is not None:
