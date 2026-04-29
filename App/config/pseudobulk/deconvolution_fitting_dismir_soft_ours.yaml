@@ -7,9 +7,9 @@
 # ── Input data ──────────────────────────────────────────────────
 # Paths to predicted splits (output of pseudobulk pipeline stage 3)
 predicted_splits:
-  train: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/pseudobulk/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels_pooled_jakkard_no_data_leak_d041/pseudobulk/train_predicted.pkl
-  valid: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/pseudobulk/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels_pooled_jakkard_no_data_leak_d041/pseudobulk/valid_predicted.pkl
-  test: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/pseudobulk/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels_pooled_jakkard_no_data_leak_d041/pseudobulk/test_predicted.pkl
+  train: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/pseudobulk/Dismir_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels_pooled_jakkard_no_data_leak_d041/pseudobulk/train_predicted.pkl
+  valid: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/pseudobulk/Dismir_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels_pooled_jakkard_no_data_leak_d041/pseudobulk/valid_predicted.pkl
+  test: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/pseudobulk/Dismir_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels_pooled_jakkard_no_data_leak_d041/pseudobulk/test_predicted.pkl
 
 # Full IO matrices from pseudobulk generation (stage 5 output)
 ios_full_matrices_path: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/pseudobulk/Dismir_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels_pooled_jakkard_no_data_leak_d041/pseudobulk/ios_full_matrices.npz
