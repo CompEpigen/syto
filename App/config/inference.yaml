@@ -60,6 +60,22 @@ prediction_batch_size: 2200
 # If enabled, the final dmr prediction matrix will be augmented with 0-predictions rows for every missing cell-specific region
 fill_in_missing_labels: true
 
+# Strategy for handling DMR regions with no reads.
+# Options: "zeroes" (default), "prior_blending", "prior_imputation"
+#   - zeroes: fill missing rows with zeros (current default behavior)
+#   - prior_blending: blend all rows with uniform prior weighted by n_reads
+#   - prior_imputation: substitute only zero-read rows with uniform prior
+missing_label_strategy: zeroes
+
+# prior_weight for the blending formula (only used with prior_blending). Default: 1.0
+# prior_weight: 1.0
+
+# Path to pre-computed uniform prior matrix (.npz). Required for prior_blending / prior_imputation
+# uniform_prior_path: path/to/uniform_prior.npz
+
+# Fallback: path to pure profiles pickle (.pkl). Used to compute uniform prior on-the-fly if uniform_prior_path is absent
+# pure_profiles_path: path/to/pure_profiles.pkl
+
 # Deconvolution configuration
 deconvolution:
   methods:

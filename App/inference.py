@@ -113,6 +113,16 @@ class InferencePipeline:
         # By default the algorithm assumes that we have at least some data for each DMR group.
         self.fill_in_missing_labels = self.config.get("fill_in_missing_labels", False)
 
+        # ── Missing-label substitution strategy ──────────────────────────
+        self.missing_label_strategy = self.config.get(
+            "missing_label_strategy", "zeroes"
+        )
+        self.prior_weight = float(self.config.get("prior_weight", 1.0))
+        self.uniform_prior: Optional[pd.DataFrame] = None
+
+        if self.missing_label_strategy != "zeroes":
+            self.uniform_prior = self._load_or_compute_uniform_prior()
+
         # Resolve classifier type early so it's available even when
         # classification is skipped (e.g. predicted_reads input).
         classifier_cfg = config.get("classifier", config.get("model", {}))
@@ -421,9 +431,67 @@ class InferencePipeline:
 
         return result_df
 
-    # ═══════════════════════════════════════════════════════════════════
+    def _load_or_compute_uniform_prior(self) -> pd.DataFrame:
+        """Load or compute the uniform prior matrix for missing-label substitution.
+
+        Resolution order:
+        1. ``uniform_prior_path`` — load from pre-computed ``.npz``.
+        2. ``pure_profiles_path`` — load pure profiles ``.pkl``, compute the
+           prior on-the-fly, and optionally cache it next to the profiles.
+
+        Raises
+        ------
+        ValueError
+            If neither path is configured.
+        """
+        from methyldl.data.pure_profile_generation import (
+            compute_uniform_prior_matrix,
+            load_uniform_prior,
+            save_uniform_prior,
+        )
+
+        uniform_prior_path = self.config.get("uniform_prior_path", None)
+        pure_profiles_path = self.config.get("pure_profiles_path", None)
+
+        # Option 1: direct .npz
+        if uniform_prior_path and os.path.exists(uniform_prior_path):
+            self.logger.info(
+                f"Loading uniform prior from {uniform_prior_path}"
+            )
+            return load_uniform_prior(uniform_prior_path)
+
+        # Option 2: compute from pure profiles pickle
+        if pure_profiles_path and os.path.exists(pure_profiles_path):
+            self.logger.info(
+                f"Computing uniform prior from pure profiles: "
+                f"{pure_profiles_path}"
+            )
+            with open(pure_profiles_path, "rb") as f:
+                pure_profiles = pickle.load(f)
+
+            split_key = self.config.get("pure_profiles_split_key", "train")
+            prior = compute_uniform_prior_matrix(
+                pure_profiles,
+                split_key=split_key,
+                num_input_labels=len(self.labels_dict),
+            )
+
+            # Cache for future runs
+            cache_path = str(
+                Path(pure_profiles_path).parent / "uniform_prior.npz"
+            )
+            save_uniform_prior(prior, cache_path)
+            self.logger.info(f"Cached uniform prior to {cache_path}")
+            return prior
+
+        raise ValueError(
+            f"missing_label_strategy='{self.missing_label_strategy}' requires "
+            f"either 'uniform_prior_path' or 'pure_profiles_path' in config."
+        )
+
+    # ═════════════════════════════════════════════════════════════════
     #  Stage 4: aggregate predictions by DMR
-    # ═══════════════════════════════════════════════════════════════════
+    # ═════════════════════════════════════════════════════════════════
 
     def _aggregate_to_dmr(self) -> pd.DataFrame:
         """
@@ -439,6 +507,9 @@ class InferencePipeline:
             create_weight_from_cpgs=False,
             fill_in_missing_labels=self.fill_in_missing_labels,
             labels_dict=self.labels_dict,
+            substitution_strategy=self.missing_label_strategy,
+            uniform_prior=self.uniform_prior,
+            prior_weight=self.prior_weight,
         )
 
         return aggregated
