@@ -33,7 +33,7 @@
             "Blood-T": 4839,
             "Blood-B": 93,
             "Blood-Granul": 2299,
-            "Endothelium": 2076,
+            "Endothel": 2076,
             "unmapped": 303,
             "Eryth-prog": 5,
             "Dermal-Fibro": 4133,
@@ -101,7 +101,7 @@
             "Epid-Kerat": 1182,
             "Blood-T": 6167,
             "Blood-Mono+Macro": 2462,
-            "Endothelium": 2291,
+            "Endothel": 2291,
             "Dermal-Fibro": 4467,
             "Eryth-prog": 1,
             "Blood-Granul": 288,
@@ -158,7 +158,7 @@
             "Blood-B": 929,
             "Blood-T": 2421,
             "Blood-Mono+Macro": 5949,
-            "Endothelium": 1774,
+            "Endothel": 1774,
             "Eryth-prog": 1021,
             "Dermal-Fibro": 161,
             "unmapped": 1033,
@@ -202,7 +202,7 @@
             "Blood-B": 66,
             "Blood-T": 658,
             "Blood-Mono+Macro": 2036,
-            "Endothelium": 2325,
+            "Endothel": 2325,
             "Dermal-Fibro": 194,
             "Blood-Granul": 9,
             "Blood-NK": 50,
@@ -260,7 +260,7 @@
             "Blood-T": 10595,
             "Blood-B": 1595,
             "Small-Int-Ep": 27902,
-            "Endothelium": 257,
+            "Endothel": 257,
             "unmapped": 262,
             "Dermal-Fibro": 493,
             "Blood-Mono+Macro": 444,
@@ -299,7 +299,7 @@
         "loyfer_counts": {
             "Blood-B": 6364,
             "Blood-T": 7762,
-            "Endothelium": 550,
+            "Endothel": 550,
             "Small-Int-Ep": 25,
             "unmapped": 1672,
             "Dermal-Fibro": 6545,
@@ -357,7 +357,7 @@
             "Epid-Kerat": 4015,
             "Blood-Granul": 1696,
             "Smooth-Musc": 351,
-            "Endothelium": 10648,
+            "Endothel": 10648,
             "Blood-T": 4185,
             "Blood-Mono+Macro": 21873,
             "Lung-Ep-Bron": 4036,
@@ -409,7 +409,7 @@
             "Blood-T": 17393,
             "Blood-B": 15082,
             "Blood-Mono+Macro": 16140,
-            "Endothelium": 6966,
+            "Endothel": 6966,
             "Eryth-prog": 356,
             "Dermal-Fibro": 25969,
             "unmapped": 2385,
@@ -462,7 +462,7 @@
         "loyfer_counts": {
             "Blood-B": 53,
             "Blood-Granul": 345,
-            "Endothelium": 7876,
+            "Endothel": 7876,
             "Blood-T": 2137,
             "unmapped": 26361,
             "Eryth-prog": 124,
@@ -505,7 +505,7 @@
         "loyfer_counts": {
             "Blood-B": 1689,
             "Bladder-Ep": 27241,
-            "Endothelium": 709,
+            "Endothel": 709,
             "Blood-T": 7520,
             "Eryth-prog": 106,
             "Dermal-Fibro": 13766,
@@ -540,7 +540,7 @@
         "loyfer_counts": {
             "Blood-B": 499,
             "Blood-T": 853,
-            "Endothelium": 101,
+            "Endothel": 101,
             "Blood-Mono+Macro": 422,
             "Kidney-Ep": 9278,
             "Blood-NK": 201,
@@ -595,16 +595,16 @@
             "Smooth-Musc": 7913,
             "Blood-T": 100,
             "Blood-Mono+Macro": 411,
-            "Endothelium": 1724,
+            "Endothel": 1724,
             "unmapped": 2248,
             "Head-Neck-Ep": 235,
             "Eryth-prog": 1,
             "Blood-Granul": 20,
-            "Ovary+Endom-Ep": 36282
+            "Ovary-Ep": 36282
         },
         "unmapped_proportion": 0.046,
         "biggest_proportion": 0.741,
-        "dominating_cell_type": "Ovary+Endom-Ep"
+        "dominating_cell_type": "Ovary-Ep"
     },
     "prostate": {
         "cfsort_name": "prostate",
@@ -629,7 +629,7 @@
             "Blood-B": 101,
             "Prostate-Ep": 14147,
             "Blood-T": 3133,
-            "Endothelium": 1205,
+            "Endothel": 1205,
             "Eryth-prog": 139,
             "Dermal-Fibro": 519,
             "Blood-Mono+Macro": 1022,
@@ -663,7 +663,7 @@
         "loyfer_counts": {
             "Blood-B": 1,
             "Blood-T": 5,
-            "Endothelium": 53,
+            "Endothel": 53,
             "unmapped": 7397,
             "Blood-Mono+Macro": 56,
             "Blood-Granul": 1
@@ -709,8 +709,8 @@
             "unmapped": 1467,
             "Blood-B": 69,
             "Blood-T": 2034,
-            "Endothelium": 4703,
-            "Ovary+Endom-Ep": 1417,
+            "Endothel": 4703,
+            "Ovary-Ep": 1417,
             "Dermal-Fibro": 6593,
             "Blood-Granul": 169,
             "Blood-Mono+Macro": 955,
@@ -766,7 +766,7 @@
             "Blood-Granul": 14903,
             "Blood-T": 18090,
             "Blood-Mono+Macro": 10904,
-            "Endothelium": 1350,
+            "Endothel": 1350,
             "Eryth-prog": 476,
             "Dermal-Fibro": 1,
             "unmapped": 247,
@@ -809,7 +809,7 @@
         "loyfer_counts": {
             "Blood-B": 216,
             "Blood-Granul": 1843,
-            "Endothelium": 6443,
+            "Endothel": 6443,
             "Blood-T": 2791,
             "Blood-Mono+Macro": 7971,
             "Eryth-prog": 83,
@@ -851,7 +851,7 @@
         },
         "loyfer_counts": {
             "Blood-B": 19,
-            "Endothelium": 10092,
+            "Endothel": 10092,
             "Blood-T": 388,
             "Eryth-prog": 143,
             "Heart-Fibro": 1947,
@@ -865,6 +865,6 @@
         },
         "unmapped_proportion": 0.085,
         "biggest_proportion": 0.391,
-        "dominating_cell_type": "Endothelium"
+        "dominating_cell_type": "Endothel"
     }
 }
