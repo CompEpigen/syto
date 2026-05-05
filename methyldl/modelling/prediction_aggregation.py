@@ -3,7 +3,6 @@ from typing import List, Optional
 import numpy as np
 import pandas as pd
 
-
 # Valid substitution strategies for missing DMR labels.
 VALID_SUBSTITUTION_STRATEGIES = ("zeroes", "prior_blending", "prior_imputation")
 
@@ -110,7 +109,8 @@ def _apply_prior_substitution(
     """
     # Identify prediction columns present in both df and prior
     pred_cols = [
-        c for c in df.columns
+        c
+        for c in df.columns
         if (c.startswith("prediction_") and (c.endswith("_wavg") or c.endswith("_avg")))
         or c == "methylation_level_wavg"
         or c == "methylation_level_avg"
@@ -132,10 +132,15 @@ def _apply_prior_substitution(
         alpha = n_reads / (n_reads + prior_weight)  # weight for observed
 
         for col in prior_cols:
-            prior_values = df["dmr_ctype_label"].map(
-                prior_indexed[col] if col in prior_indexed.columns
-                else pd.Series(dtype=float)
-            ).values.astype(float)
+            prior_values = (
+                df["dmr_ctype_label"]
+                .map(
+                    prior_indexed[col]
+                    if col in prior_indexed.columns
+                    else pd.Series(dtype=float)
+                )
+                .values.astype(float)
+            )
             observed = df[col].values.astype(float)
             df[col] = alpha * observed + (1.0 - alpha) * prior_values
 
@@ -145,7 +150,8 @@ def _apply_prior_substitution(
         if zero_mask.any():
             for col in prior_cols:
                 prior_values = df.loc[zero_mask, "dmr_ctype_label"].map(
-                    prior_indexed[col] if col in prior_indexed.columns
+                    prior_indexed[col]
+                    if col in prior_indexed.columns
                     else pd.Series(dtype=float)
                 )
                 df.loc[zero_mask, col] = prior_values.values
