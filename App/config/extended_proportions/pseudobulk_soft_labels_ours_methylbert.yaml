@@ -84,7 +84,7 @@ n_io_examples: 100000
 n_workers: 20
 batch_size: 100
 checkpoint_interval: 2000
-start_checkpoint_idx: 0
+start_checkpoint_idx: 100000
 resume_from_checkpoint: false
 # Reads to sample per split per IO example (null → int(4.75e5))
 n_read_per_split: 475000

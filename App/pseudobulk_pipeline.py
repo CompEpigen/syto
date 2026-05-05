@@ -49,6 +49,9 @@ class PseudoBulkPipeline:
             raw = json.load(f)
             self.labels_dict: Dict[int, str] = {int(k): v for k, v in raw.items()}
         self.num_labels = config.get("num_labels", len(self.labels_dict))
+        self.num_prediction_classes = config.get(
+            "num_prediction_classes", None
+        )  # Auto-detected from data if not set
 
         # Cell-type matching dict
         self.cell_type_match_dict = config.get(
@@ -133,11 +136,9 @@ class PseudoBulkPipeline:
                 pickle.dump(splits_data, f)
         elif self.config["input_type"] == "uxm_prepared":
             self.logger.info("Skipping Stage 1 and 2: Loading uxm prepared reads ...")
-            uxm_path = self.config.get(
-                "uxm_prepared_reads_path",
-                os.path.join(self.output_dir, "uxm_prepared_reads.pkl"),
-            )
-            with open(uxm_path, "rb") as f:
+            with open(
+                os.path.join(self.output_dir, "uxm_prepared_reads.pkl"), "rb"
+            ) as f:
                 splits_data = pickle.load(f)
             sizes = ", ".join(f"{name}={len(df)}" for name, df in splits_data.items())
             self.logger.info(f"  After loading: {sizes}")
@@ -168,8 +169,9 @@ class PseudoBulkPipeline:
 
                 splits_data[name] = predicted
 
-            with open(os.path.join(self.output_dir, "predicted_reads.pkl"), "wb") as f:
-                pickle.dump(splits_data, f)
+            # Redundant save
+            # with open(os.path.join(self.output_dir, "predicted_reads.pkl"), "wb") as f:
+            #     pickle.dump(splits_data, f)
         else:
             self.logger.info("Stage 3: Skipped (input already has predictions)")
 
@@ -179,6 +181,23 @@ class PseudoBulkPipeline:
 
         self.logger.info("  Filtering unused columns to optimize RAM usage ...")
         self._filter_split_columns(splits_data, generate_uxm_in_ios)
+
+        # Auto-detect num_prediction_classes from actual data if not set
+        if self.num_prediction_classes is None:
+            sample_df = next(iter(splits_data.values()))
+            pred_cols = [
+                c
+                for c in sample_df.columns
+                if c.startswith("prediction_") and c[11:].isdigit()
+            ]
+            self.num_prediction_classes = (
+                len(pred_cols) if pred_cols else self.num_labels
+            )
+            self.logger.info(
+                f"  Auto-detected num_prediction_classes="
+                f"{self.num_prediction_classes} "
+                f"(num_labels={self.num_labels})"
+            )
 
         split_generation = self.config.get("split_generation")
 
@@ -213,6 +232,7 @@ class PseudoBulkPipeline:
                     ios_dir=split_ios_dir,
                     output_path=split_output,
                     num_labels=self.num_labels,
+                    num_prediction_classes=self.num_prediction_classes,
                     labels_dict=self.labels_dict,
                 )
                 merged_result.update(part)
@@ -225,6 +245,7 @@ class PseudoBulkPipeline:
                 ios_dir=self.ios_dir,
                 output_path=self.consolidated_path,
                 num_labels=self.num_labels,
+                num_prediction_classes=self.num_prediction_classes,
                 labels_dict=self.labels_dict,
             )
 
@@ -298,6 +319,7 @@ class PseudoBulkPipeline:
             start_checkpoint_idx=self.config.get("start_checkpoint_idx", 0),
             n_read_per_split=self.config.get("n_read_per_split"),
             num_labels=self.num_labels,
+            num_prediction_classes=self.num_prediction_classes,
             generate_uxm_inputs=generate_uxm_in_ios,
         )
 
@@ -414,6 +436,7 @@ class PseudoBulkPipeline:
                 ),
                 n_read_per_split=self.config.get("n_read_per_split"),
                 num_labels=self.num_labels,
+                num_prediction_classes=self.num_prediction_classes,
                 generate_uxm_inputs=generate_uxm_in_ios,
             )
 
@@ -477,10 +500,26 @@ class PseudoBulkPipeline:
                 )
         elif input_type == "pre_predicted":
             pickle_paths = self.config["pickle_paths"]
-            for split_name in splits_cfg:
-                with open(pickle_paths[split_name], "rb") as f:
-                    splits_data[split_name] = pickle.load(f)
-
+            first_pickle_file = pickle_paths[list(pickle_paths.keys())[0]]
+            # Check if file exists and if not, try to switch for a likely alternative
+            if os.path.isfile(first_pickle_file):
+                for split_name in splits_cfg:
+                    with open(pickle_paths[split_name], "rb") as f:
+                        splits_data[split_name] = pickle.load(f)
+            else:
+                predicted_dict_path = os.path.join(
+                    "/".join(first_pickle_file.split("/")[:-1]), "predicted_reads.pkl"
+                )
+                with open(predicted_dict_path, "rb") as f:
+                    splits_data = pickle.load(f)
+                if len(set(splits_data.keys()).intersection(splits_cfg)) == len(
+                    splits_cfg
+                ):
+                    pass
+                else:
+                    raise ValueError(
+                        "The target per split files were not found and Predictions dictionary file was used instead, but dict split names do not match the target splits names"
+                    )
         else:
             raise ValueError(
                 f"Unknown input_type: '{input_type}'. " "Must be 'parquet' or 'pickle'."

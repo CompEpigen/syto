@@ -198,6 +198,7 @@ cython_debug/
 /EDA/*.pt
 /EDA/*/*.png
 /App/config/rrbs/tmp_configs
+/App/config/*
 
 # Singularity/Docker artifacts
 *.sif

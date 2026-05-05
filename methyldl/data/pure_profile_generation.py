@@ -102,3 +102,123 @@ def generate_pure_profiles(
             pure_profiles.append(None)
 
     return pure_profiles
+
+
+def compute_uniform_prior_matrix(
+    pure_profiles: List[Tuple[np.ndarray, Dict[str, pd.DataFrame], list]],
+    split_key: str = "train",
+    num_input_labels: int = 39,
+) -> pd.DataFrame:
+    """Compute a uniform-mixture prior by averaging DMR predictions across pure profiles.
+
+    For each DMR row, this function averages the weighted-average prediction
+    columns (``prediction_*_wavg``) across all non-``None`` pure profiles,
+    producing a matrix that represents how the aggregated DMR table would look
+    for a mixture composed uniformly of all cell types.
+
+    Parameters
+    ----------
+    pure_profiles : list[tuple]
+        Output of :func:`generate_pure_profiles`.  Each element is a tuple
+        ``(proportions, subs_dict, uxm_data)`` or ``None`` for failed profiles.
+    split_key : str
+        Key into ``subs_dict`` (e.g. ``"train"``, ``"valid"``, ``"test"``).
+    num_input_labels : int
+        Number of prediction classes to average over.
+
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame indexed by ``dmr_ctype_label`` with columns
+        ``prediction_0_wavg … prediction_{N-1}_wavg`` and
+        ``methylation_level_wavg``.  Each row represents the average
+        prediction profile for that DMR group across all cell types.
+    """
+    pred_cols = [f"prediction_{i}_wavg" for i in range(num_input_labels)]
+    all_cols = pred_cols + ["methylation_level_wavg"]
+
+    valid_profiles = [p for p in pure_profiles if p is not None]
+    if not valid_profiles:
+        raise ValueError("No valid pure profiles provided; all entries are None.")
+
+    # Collect per-profile DataFrames for the requested split
+    dfs: List[pd.DataFrame] = []
+    for proportions, subs, uxm_data in valid_profiles:
+        if split_key not in subs:
+            raise KeyError(
+                f"Split key '{split_key}' not found in pure profile subs. "
+                f"Available keys: {list(subs.keys())}"
+            )
+        df = subs[split_key].copy()
+        # Ensure consistent index
+        df = df.sort_values("dmr_ctype_label").reset_index(drop=True)
+        dfs.append(df[["dmr_ctype_label", "dmr_ctype"] + all_cols])
+
+    # Stack and average across all profiles for each DMR row
+    combined = pd.concat(dfs, ignore_index=True)
+    prior = combined.groupby(["dmr_ctype_label", "dmr_ctype"])[all_cols].mean()
+    prior = prior.reset_index().sort_values("dmr_ctype_label").reset_index(drop=True)
+
+    logger.info(
+        f"Computed uniform prior matrix with {len(prior)} DMR rows "
+        f"from {len(valid_profiles)} pure profiles (split='{split_key}')"
+    )
+    return prior
+
+
+def save_uniform_prior(prior: pd.DataFrame, path: str) -> None:
+    """Save a uniform prior matrix to an ``.npz`` file.
+
+    Parameters
+    ----------
+    prior : pd.DataFrame
+        Output of :func:`compute_uniform_prior_matrix`.
+    path : str
+        Destination ``.npz`` file path.
+    """
+    import os
+
+    os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
+
+    pred_cols = [c for c in prior.columns if c.startswith("prediction_")]
+    all_value_cols = pred_cols
+    if "methylation_level_wavg" in prior.columns:
+        all_value_cols = all_value_cols + ["methylation_level_wavg"]
+
+    np.savez_compressed(
+        path,
+        values=prior[all_value_cols].to_numpy(),
+        dmr_ctype_labels=prior["dmr_ctype_label"].to_numpy(),
+        dmr_ctypes=prior["dmr_ctype"].to_numpy().astype(str),
+        column_names=np.array(all_value_cols, dtype=str),
+    )
+    logger.info(f"Saved uniform prior matrix to {path}")
+
+
+def load_uniform_prior(path: str) -> pd.DataFrame:
+    """Load a uniform prior matrix from an ``.npz`` file.
+
+    Parameters
+    ----------
+    path : str
+        Path to the ``.npz`` file created by :func:`save_uniform_prior`.
+
+    Returns
+    -------
+    pd.DataFrame
+        Reconstructed prior DataFrame with ``dmr_ctype_label``,
+        ``dmr_ctype``, and prediction value columns.
+    """
+    data = np.load(path, allow_pickle=True)
+    column_names = list(data["column_names"])
+    df = pd.DataFrame(data["values"], columns=column_names)
+    df["dmr_ctype_label"] = data["dmr_ctype_labels"]
+    df["dmr_ctype"] = data["dmr_ctypes"]
+
+    # Re-order columns for consistency
+    meta_cols = ["dmr_ctype_label", "dmr_ctype"]
+    df = df[meta_cols + column_names]
+    df = df.sort_values("dmr_ctype_label").reset_index(drop=True)
+
+    logger.info(f"Loaded uniform prior matrix ({len(df)} rows) from {path}")
+    return df

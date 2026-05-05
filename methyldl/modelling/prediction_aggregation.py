@@ -3,13 +3,59 @@ from typing import List, Optional
 import numpy as np
 import pandas as pd
 
+# Valid substitution strategies for missing DMR labels.
+VALID_SUBSTITUTION_STRATEGIES = ("zeroes", "prior_blending", "prior_imputation")
+
 
 def _fill_in_missing_labels(
-    df: pd.DataFrame, group_cols: List[str], labels_dict: dict
+    df: pd.DataFrame,
+    group_cols: List[str],
+    labels_dict: dict,
+    substitution_strategy: str = "zeroes",
+    uniform_prior: Optional[pd.DataFrame] = None,
+    prior_weight: float = 1.0,
 ) -> pd.DataFrame:
+    """Fill in missing DMR labels and optionally substitute predictions.
+
+    After inserting synthetic zero rows for any labels in *labels_dict*
+    that are absent from *df*, an optional post-processing step is applied
+    depending on *substitution_strategy*:
+
+    * ``"zeroes"`` – leave synthetic rows as zeros (current default).
+    * ``"prior_blending"`` – blend **every** row with the uniform prior
+      using the per-row ``n_reads`` count:
+      ``blended = (n / (n + w)) * observed + (w / (n + w)) * prior``
+      where *w* = *prior_weight*.  Rows with ``n_reads == 0`` collapse
+      entirely to the prior.
+    * ``"prior_imputation"`` – replace only rows with ``n_reads == 0``
+      with the corresponding prior row; all other rows are untouched.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        DMR-aggregated predictions (output of ``aggregate_predictions_by_dmr``).
+    group_cols : list[str]
+        Columns used for grouping during aggregation.
+    labels_dict : dict
+        ``{int: str}`` mapping from label id to cell-type name.
+    substitution_strategy : str
+        One of ``"zeroes"``, ``"prior_blending"``, ``"prior_imputation"``.
+    uniform_prior : pd.DataFrame or None
+        Pre-computed uniform prior matrix (required for ``prior_blending``
+        and ``prior_imputation``).
+    prior_weight : float
+        Weight of the prior in the blending formula.  Default ``1.0``.
     """
-    Helper to fill in missing labels, if present.
-    """
+    if substitution_strategy not in VALID_SUBSTITUTION_STRATEGIES:
+        raise ValueError(
+            f"Unknown substitution_strategy '{substitution_strategy}'. "
+            f"Must be one of {VALID_SUBSTITUTION_STRATEGIES}."
+        )
+    if substitution_strategy != "zeroes" and uniform_prior is None:
+        raise ValueError(
+            f"uniform_prior must be provided when substitution_strategy="
+            f"'{substitution_strategy}'."
+        )
 
     labels_dict_pd = pd.DataFrame(labels_dict, index=["dmr_ctype"]).T.reset_index()
     labels_dict_pd.columns = ["dmr_ctype_label", "dmr_ctype"]
@@ -32,6 +78,84 @@ def _fill_in_missing_labels(
         df.loc[:, fill_columns] = df.loc[:, fill_columns].fillna(0)
         df.loc[synthetic_rows, "label"] = -1
         df["total_weight"] = df["total_weight"].apply(lambda x: max(x, 1))
+
+    # ── Apply substitution strategy ─────────────────────────────────────
+    if substitution_strategy in ("prior_blending", "prior_imputation"):
+        df = _apply_prior_substitution(
+            df, uniform_prior, substitution_strategy, prior_weight
+        )
+
+    return df
+
+
+def _apply_prior_substitution(
+    df: pd.DataFrame,
+    uniform_prior: pd.DataFrame,
+    strategy: str,
+    prior_weight: float,
+) -> pd.DataFrame:
+    """Apply prior-based substitution to prediction columns.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        DMR-aggregated DataFrame (with synthetic rows already inserted).
+    uniform_prior : pd.DataFrame
+        Uniform prior matrix keyed by ``dmr_ctype_label``.
+    strategy : str
+        ``"prior_blending"`` or ``"prior_imputation"``.
+    prior_weight : float
+        Weight of the prior in the blending formula.
+    """
+    # Identify prediction columns present in both df and prior
+    pred_cols = [
+        c
+        for c in df.columns
+        if (c.startswith("prediction_") and (c.endswith("_wavg") or c.endswith("_avg")))
+        or c == "methylation_level_wavg"
+        or c == "methylation_level_avg"
+    ]
+    prior_cols = [c for c in pred_cols if c in uniform_prior.columns]
+
+    if not prior_cols:
+        raise ValueError(
+            "No matching prediction columns found between the aggregated "
+            "DataFrame and the uniform prior."
+        )
+
+    # Build a lookup from dmr_ctype_label -> prior row values
+    prior_indexed = uniform_prior.set_index("dmr_ctype_label")
+
+    if strategy == "prior_blending":
+        # Blend every row:  (n / (n + w)) * observed + (w / (n + w)) * prior
+        n_reads = df["n_reads"].values.astype(float)
+        alpha = n_reads / (n_reads + prior_weight)  # weight for observed
+
+        for col in prior_cols:
+            prior_values = (
+                df["dmr_ctype_label"]
+                .map(
+                    prior_indexed[col]
+                    if col in prior_indexed.columns
+                    else pd.Series(dtype=float)
+                )
+                .values.astype(float)
+            )
+            observed = df[col].values.astype(float)
+            df[col] = alpha * observed + (1.0 - alpha) * prior_values
+
+    elif strategy == "prior_imputation":
+        # Replace only rows where n_reads == 0
+        zero_mask = df["n_reads"] == 0
+        if zero_mask.any():
+            for col in prior_cols:
+                prior_values = df.loc[zero_mask, "dmr_ctype_label"].map(
+                    prior_indexed[col]
+                    if col in prior_indexed.columns
+                    else pd.Series(dtype=float)
+                )
+                df.loc[zero_mask, col] = prior_values.values
+
     return df
 
 
@@ -43,6 +167,9 @@ def aggregate_predictions_by_dmr(
     create_weight_from_cpgs: bool = True,
     fill_in_missing_labels: bool = False,
     labels_dict: dict = None,
+    substitution_strategy: str = "zeroes",
+    uniform_prior: Optional[pd.DataFrame] = None,
+    prior_weight: float = 1.0,
 ) -> pd.DataFrame:
     """
     Aggregate predictions for each class across all reads at the DMR level.
@@ -64,6 +191,14 @@ def aggregate_predictions_by_dmr(
         these rows will be zero
     labels_dict: dict
         Must be provided if fill_in_missing_labels is set to True
+    substitution_strategy : str
+        Strategy for filling missing labels.  One of ``"zeroes"``,
+        ``"prior_blending"``, ``"prior_imputation"``.  Default ``"zeroes"``.
+    uniform_prior : pd.DataFrame or None
+        Pre-computed uniform prior matrix.  Required when
+        *substitution_strategy* is not ``"zeroes"``.
+    prior_weight : float
+        Weight of the prior in the blending formula.  Default ``1.0``.
 
     Returns
     -------
@@ -140,7 +275,14 @@ def aggregate_predictions_by_dmr(
     result.reset_index(inplace=True)
 
     if fill_in_missing_labels:
-        result = _fill_in_missing_labels(result, group_cols, labels_dict)
+        result = _fill_in_missing_labels(
+            result,
+            group_cols,
+            labels_dict,
+            substitution_strategy=substitution_strategy,
+            uniform_prior=uniform_prior,
+            prior_weight=prior_weight,
+        )
 
     return result
 

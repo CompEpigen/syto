@@ -2,6 +2,7 @@ import unittest
 
 import numpy as np
 import torch
+from sklearn.metrics import r2_score
 
 from methyldl.deconvolution.evaluation import (
     compute_combined_loss,
@@ -25,12 +26,15 @@ def _manual_numpy_metrics(pred: np.ndarray, target: np.ndarray, eps: float = 1e-
     target_norm = np.linalg.norm(target_2d, axis=-1)
     cosine_sim = (dot_product / (pred_norm * target_norm + eps)).mean()
 
+    overall_r2 = r2_score(target_2d, pred_2d, multioutput="variance_weighted")
+
     return {
         "mae": float(mae),
         "mse": float(mse),
         "kl": float(kl),
         "max_error": float(max_error),
         "cosine_sim": float(cosine_sim),
+        "overall_r2": float(overall_r2),
     }
 
 
@@ -91,7 +95,10 @@ class TestComputeDeconvolutionMetricsNp(unittest.TestCase):
         expected = _manual_numpy_metrics(pred=pred, target=target)
 
         for key, expected_value in expected.items():
-            self.assertAlmostEqual(result[key], expected_value, places=5)
+            if np.isnan(expected_value):
+                self.assertTrue(np.isnan(result[key]), msg=f"{key} should be nan")
+            else:
+                self.assertAlmostEqual(result[key], expected_value, places=5)
 
     def test_raises_assertion_error_for_shape_mismatch(self):
         """Mismatched NumPy shapes should fail fast with an assertion error."""

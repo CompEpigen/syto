@@ -8,6 +8,8 @@ from methyldl.modelling.prediction_aggregation import (
     aggregate_predictions_by_dmr,
     aggregate_predictions_by_dmr_optimized,
     get_final_prediction,
+    _fill_in_missing_labels,
+    VALID_SUBSTITUTION_STRATEGIES,
 )
 
 
@@ -534,3 +536,342 @@ class TestGetFinalPrediction(unittest.TestCase):
         self.assertIn(
             "No prediction columns found with suffix '_wavg'", str(context.exception)
         )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  Tests for missing-label substitution strategies
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def _build_aggregated_with_missing_label() -> tuple:
+    """Build read-level data with only one DMR label, plus a matching prior.
+
+    The data contains only dmr_ctype_label=0 reads.  When
+    ``fill_in_missing_labels=True`` with ``labels_dict={0: 'ctype_a', 1: 'ctype_b'}``,
+    a synthetic row for label 1 will be inserted.
+
+    Returns (df, labels_dict, uniform_prior).
+    """
+    # Read-level data — only ctype_a present
+    df = pd.DataFrame(
+        [
+            {
+                "dmr_ctype_label": 0,
+                "dmr_ctype": "ctype_a",
+                "prediction_0": 0.8,
+                "prediction_1": 0.2,
+                "methylation_level": 0.6,
+                "total_weight": 5.0,
+                "label": 0,
+                "chromosome": "chr1",
+            },
+            {
+                "dmr_ctype_label": 0,
+                "dmr_ctype": "ctype_a",
+                "prediction_0": 0.7,
+                "prediction_1": 0.3,
+                "methylation_level": 0.6,
+                "total_weight": 5.0,
+                "label": 0,
+                "chromosome": "chr1",
+            },
+        ]
+    )
+    labels_dict = {0: "ctype_a", 1: "ctype_b"}
+
+    uniform_prior = pd.DataFrame(
+        [
+            {
+                "dmr_ctype_label": 0,
+                "dmr_ctype": "ctype_a",
+                "prediction_0_wavg": 0.5,
+                "prediction_1_wavg": 0.5,
+                "methylation_level_wavg": 0.4,
+            },
+            {
+                "dmr_ctype_label": 1,
+                "dmr_ctype": "ctype_b",
+                "prediction_0_wavg": 0.3,
+                "prediction_1_wavg": 0.7,
+                "methylation_level_wavg": 0.35,
+            },
+        ]
+    )
+    return df, labels_dict, uniform_prior
+
+
+class TestSubstitutionStrategyZeroes(unittest.TestCase):
+    """Confirm backward-compatible zeroes strategy."""
+
+    def test_zeroes_strategy_fills_missing_with_zeros(self):
+        df, labels_dict, _ = _build_aggregated_with_missing_label()
+        result = aggregate_predictions_by_dmr(
+            df,
+            group_cols=["dmr_ctype_label", "dmr_ctype"],
+            prediction_cols=["prediction_0", "prediction_1", "methylation_level"],
+            weight_col="total_weight",
+            create_weight_from_cpgs=False,
+            fill_in_missing_labels=True,
+            labels_dict=labels_dict,
+            substitution_strategy="zeroes",
+        )
+        missing = result[result["dmr_ctype_label"] == 1].iloc[0]
+        self.assertEqual(missing["prediction_0_wavg"], 0)
+        self.assertEqual(missing["prediction_1_wavg"], 0)
+        self.assertEqual(missing["n_reads"], 0)
+
+
+class TestSubstitutionStrategyPriorBlending(unittest.TestCase):
+    """Validate the prior_blending formula."""
+
+    def test_blending_zero_reads_collapses_to_prior(self):
+        """Rows with n_reads=0 should be entirely replaced by the prior."""
+        df, labels_dict, prior = _build_aggregated_with_missing_label()
+        result = aggregate_predictions_by_dmr(
+            df,
+            group_cols=["dmr_ctype_label", "dmr_ctype"],
+            prediction_cols=["prediction_0", "prediction_1", "methylation_level"],
+            weight_col="total_weight",
+            create_weight_from_cpgs=False,
+            fill_in_missing_labels=True,
+            labels_dict=labels_dict,
+            substitution_strategy="prior_blending",
+            uniform_prior=prior,
+            prior_weight=1.0,
+        )
+        missing = result[result["dmr_ctype_label"] == 1].iloc[0]
+        # n_reads=0 → alpha=0 → fully prior
+        self.assertAlmostEqual(missing["prediction_0_wavg"], 0.3)
+        self.assertAlmostEqual(missing["prediction_1_wavg"], 0.7)
+        self.assertAlmostEqual(missing["methylation_level_wavg"], 0.35)
+
+    def test_blending_nonzero_reads_mixed(self):
+        """Rows with n_reads>0 should be blended: alpha = n/(n+w)."""
+        df, labels_dict, prior = _build_aggregated_with_missing_label()
+        result = aggregate_predictions_by_dmr(
+            df,
+            group_cols=["dmr_ctype_label", "dmr_ctype"],
+            prediction_cols=["prediction_0", "prediction_1", "methylation_level"],
+            weight_col="total_weight",
+            create_weight_from_cpgs=False,
+            fill_in_missing_labels=True,
+            labels_dict=labels_dict,
+            substitution_strategy="prior_blending",
+            uniform_prior=prior,
+            prior_weight=1.0,
+        )
+        existing = result[result["dmr_ctype_label"] == 0].iloc[0]
+        # n_reads=2 (two read-level rows in the fixture), prior_weight=1 → alpha = 2/3
+        alpha = 2.0 / 3.0
+        expected_p0 = alpha * 0.75 + (1 - alpha) * 0.5
+        expected_p1 = alpha * 0.25 + (1 - alpha) * 0.5
+        self.assertAlmostEqual(existing["prediction_0_wavg"], expected_p0, places=6)
+        self.assertAlmostEqual(existing["prediction_1_wavg"], expected_p1, places=6)
+
+    def test_blending_custom_prior_weight(self):
+        """A higher prior_weight shifts blending toward the prior."""
+        df, labels_dict, prior = _build_aggregated_with_missing_label()
+        result = aggregate_predictions_by_dmr(
+            df,
+            group_cols=["dmr_ctype_label", "dmr_ctype"],
+            prediction_cols=["prediction_0", "prediction_1", "methylation_level"],
+            weight_col="total_weight",
+            create_weight_from_cpgs=False,
+            fill_in_missing_labels=True,
+            labels_dict=labels_dict,
+            substitution_strategy="prior_blending",
+            uniform_prior=prior,
+            prior_weight=5.0,
+        )
+        existing = result[result["dmr_ctype_label"] == 0].iloc[0]
+        # n_reads=2, prior_weight=5 → alpha = 2/7
+        alpha = 2.0 / 7.0
+        expected_p0 = alpha * 0.75 + (1 - alpha) * 0.5
+        self.assertAlmostEqual(existing["prediction_0_wavg"], expected_p0, places=6)
+
+
+class TestSubstitutionStrategyPriorImputation(unittest.TestCase):
+    """Validate prior_imputation: only zero-read rows replaced."""
+
+    def test_imputation_replaces_zero_read_rows(self):
+        df, labels_dict, prior = _build_aggregated_with_missing_label()
+        result = aggregate_predictions_by_dmr(
+            df,
+            group_cols=["dmr_ctype_label", "dmr_ctype"],
+            prediction_cols=["prediction_0", "prediction_1", "methylation_level"],
+            weight_col="total_weight",
+            create_weight_from_cpgs=False,
+            fill_in_missing_labels=True,
+            labels_dict=labels_dict,
+            substitution_strategy="prior_imputation",
+            uniform_prior=prior,
+        )
+        missing = result[result["dmr_ctype_label"] == 1].iloc[0]
+        self.assertAlmostEqual(missing["prediction_0_wavg"], 0.3)
+        self.assertAlmostEqual(missing["prediction_1_wavg"], 0.7)
+
+    def test_imputation_leaves_nonzero_read_rows_intact(self):
+        df, labels_dict, prior = _build_aggregated_with_missing_label()
+        result = aggregate_predictions_by_dmr(
+            df,
+            group_cols=["dmr_ctype_label", "dmr_ctype"],
+            prediction_cols=["prediction_0", "prediction_1", "methylation_level"],
+            weight_col="total_weight",
+            create_weight_from_cpgs=False,
+            fill_in_missing_labels=True,
+            labels_dict=labels_dict,
+            substitution_strategy="prior_imputation",
+            uniform_prior=prior,
+        )
+        existing = result[result["dmr_ctype_label"] == 0].iloc[0]
+        # Original values should be untouched
+        self.assertAlmostEqual(existing["prediction_0_wavg"], 0.75)
+        self.assertAlmostEqual(existing["prediction_1_wavg"], 0.25)
+
+
+class TestSubstitutionStrategyValidation(unittest.TestCase):
+    """Verify error handling for invalid configurations."""
+
+    def test_invalid_strategy_raises(self):
+        df, labels_dict, _ = _build_aggregated_with_missing_label()
+        with self.assertRaises(ValueError) as ctx:
+            aggregate_predictions_by_dmr(
+                df,
+                group_cols=["dmr_ctype_label", "dmr_ctype"],
+                prediction_cols=["prediction_0", "prediction_1", "methylation_level"],
+                weight_col="total_weight",
+                create_weight_from_cpgs=False,
+                fill_in_missing_labels=True,
+                labels_dict=labels_dict,
+                substitution_strategy="unknown_strategy",
+            )
+        self.assertIn("Unknown substitution_strategy", str(ctx.exception))
+
+    def test_prior_strategy_without_prior_raises(self):
+        df, labels_dict, _ = _build_aggregated_with_missing_label()
+        with self.assertRaises(ValueError) as ctx:
+            aggregate_predictions_by_dmr(
+                df,
+                group_cols=["dmr_ctype_label", "dmr_ctype"],
+                prediction_cols=["prediction_0", "prediction_1", "methylation_level"],
+                weight_col="total_weight",
+                create_weight_from_cpgs=False,
+                fill_in_missing_labels=True,
+                labels_dict=labels_dict,
+                substitution_strategy="prior_blending",
+                uniform_prior=None,
+            )
+        self.assertIn("uniform_prior must be provided", str(ctx.exception))
+
+
+class TestComputeUniformPriorMatrix(unittest.TestCase):
+    """Test the compute_uniform_prior_matrix utility from pure_profile_generation."""
+
+    def _make_mock_pure_profiles(self):
+        """Build minimal mock pure profiles: 2 cell types, 2 prediction columns."""
+        from methyldl.data.pure_profile_generation import compute_uniform_prior_matrix
+
+        # Cell type 0: predictions [0.8, 0.2] for both DMR rows
+        subs_0 = {
+            "train": pd.DataFrame(
+                [
+                    {
+                        "dmr_ctype_label": 0,
+                        "dmr_ctype": "ctype_a",
+                        "prediction_0_wavg": 0.8,
+                        "prediction_1_wavg": 0.2,
+                        "methylation_level_wavg": 0.7,
+                    },
+                    {
+                        "dmr_ctype_label": 1,
+                        "dmr_ctype": "ctype_b",
+                        "prediction_0_wavg": 0.6,
+                        "prediction_1_wavg": 0.4,
+                        "methylation_level_wavg": 0.5,
+                    },
+                ]
+            )
+        }
+        profile_0 = (np.array([1.0, 0.0]), subs_0, None)
+
+        # Cell type 1: predictions [0.2, 0.8] for both DMR rows
+        subs_1 = {
+            "train": pd.DataFrame(
+                [
+                    {
+                        "dmr_ctype_label": 0,
+                        "dmr_ctype": "ctype_a",
+                        "prediction_0_wavg": 0.4,
+                        "prediction_1_wavg": 0.6,
+                        "methylation_level_wavg": 0.3,
+                    },
+                    {
+                        "dmr_ctype_label": 1,
+                        "dmr_ctype": "ctype_b",
+                        "prediction_0_wavg": 0.2,
+                        "prediction_1_wavg": 0.8,
+                        "methylation_level_wavg": 0.1,
+                    },
+                ]
+            )
+        }
+        profile_1 = (np.array([0.0, 1.0]), subs_1, None)
+
+        return [profile_0, profile_1]
+
+    def test_averaging_across_profiles(self):
+        from methyldl.data.pure_profile_generation import compute_uniform_prior_matrix
+
+        profiles = self._make_mock_pure_profiles()
+        prior = compute_uniform_prior_matrix(
+            profiles, split_key="train", num_input_labels=2
+        )
+
+        self.assertEqual(len(prior), 2)
+
+        row_a = prior[prior["dmr_ctype_label"] == 0].iloc[0]
+        # Average of 0.8 and 0.4
+        self.assertAlmostEqual(row_a["prediction_0_wavg"], 0.6)
+        # Average of 0.2 and 0.6
+        self.assertAlmostEqual(row_a["prediction_1_wavg"], 0.4)
+        # Average of 0.7 and 0.3
+        self.assertAlmostEqual(row_a["methylation_level_wavg"], 0.5)
+
+        row_b = prior[prior["dmr_ctype_label"] == 1].iloc[0]
+        # Average of 0.6 and 0.2
+        self.assertAlmostEqual(row_b["prediction_0_wavg"], 0.4)
+        # Average of 0.4 and 0.8
+        self.assertAlmostEqual(row_b["prediction_1_wavg"], 0.6)
+
+    def test_save_load_roundtrip(self):
+        import tempfile
+        from methyldl.data.pure_profile_generation import (
+            compute_uniform_prior_matrix,
+            save_uniform_prior,
+            load_uniform_prior,
+        )
+
+        profiles = self._make_mock_pure_profiles()
+        prior = compute_uniform_prior_matrix(
+            profiles, split_key="train", num_input_labels=2
+        )
+
+        with tempfile.NamedTemporaryFile(suffix=".npz", delete=False) as f:
+            path = f.name
+
+        save_uniform_prior(prior, path)
+        loaded = load_uniform_prior(path)
+
+        pd.testing.assert_frame_equal(
+            prior.reset_index(drop=True),
+            loaded.reset_index(drop=True),
+            check_dtype=False,
+        )
+
+    def test_all_none_profiles_raises(self):
+        from methyldl.data.pure_profile_generation import compute_uniform_prior_matrix
+
+        with self.assertRaises(ValueError):
+            compute_uniform_prior_matrix(
+                [None, None], split_key="train", num_input_labels=2
+            )

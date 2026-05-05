@@ -14,7 +14,7 @@ classifier_type: methylbert
 # "uxm_prepared"  — splits already prepared for uxm
 # "pre_predicted"  — pre-predicted splits (already enriched with predictions)
 # input_type: raw_splits
-input_type: pre_predicted
+input_type: uxm_prepared
 
 # Directory containing train.parquet, valid.parquet, test.parquet
 # (used when input_type == parquet)
@@ -24,14 +24,14 @@ splits: ["train", "valid"]
 
 
 # Pre-predicted pickle paths (used when input_type == pickle)
-pickle_paths:
-  train: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/RRBS/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_d041_postfiltered_min_length_50_soft_labels_pooled_jakkard/pseudobulk/train_predicted.pkl
-  valid: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/RRBS/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_d041_postfiltered_min_length_50_soft_labels_pooled_jakkard/pseudobulk/valid_predicted.pkl
-  # test: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/RRBS/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_d041_postfiltered_min_length_50_soft_labels_pooled_jakkard/pseudobulk/test_predicted.pkl
+# pickle_paths:
+#   train: /data/dmytroExperiments/RRBS/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_d041_postfiltered_min_length_50_soft_labels_pooled_jakkard/pseudobulk/train_predicted.pkl
+#   valid: /data/dmytroExperiments/RRBS/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_d041_postfiltered_min_length_50_soft_labels_pooled_jakkard/pseudobulk/valid_predicted.pkl
+#   # test: /data/dmytroExperiments/RRBS/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_d041_postfiltered_min_length_50_soft_labels_pooled_jakkard/pseudobulk/test_predicted.pkl
 
 # ── Classifier checkpoint ────────────────────────────────────────
 # Required when input_type == parquet (classifier must run prediction)
-classifier_checkpoint: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/RRBS/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_d041_postfiltered_min_length_50_soft_labels_pooled_jakkard/checkpoint-800/model.safetensors
+classifier_checkpoint: /data/dmytro/Experiments/cfsort_rrbs/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_d041_postfiltered_min_length_50_soft_labels_pooled_jakkard/checkpoint-800/model.safetensors
 
 classifier_config:
   foundation_model: hanyangii/methylbert_hg19_12l
@@ -74,7 +74,7 @@ generation_mode: target_proportions
 # ── Target proportions mode ──────────────────────────────────────
 # Each entry is a length-num_labels proportion vector summing to 1.
 # Uncomment and populate for target_proportions mode.
-target_proportions_path: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/pseudobulk/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels_pooled/target_proportions.npz
+target_proportions_path: /data/dmytro/Experiments/pseudobulk/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels_pooled/target_proportions.npz
 
 # ── Shared generation parameters ─────────────────────────────────
 n_io_examples: 100000
@@ -87,4 +87,4 @@ resume_from_checkpoint: false
 n_read_per_split: 475000
 
 # ── Output ────────────────────────────────────────────────────────
-output_dir: /home/luna.kuleuven.be/u0169940/Repos/methyldl/Experiments/RRBS/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_d041_postfiltered_min_length_50_soft_labels_pooled_jakkard/pseudobulk
+output_dir: /data/dmytro/Experiments/cfsort_rrbs/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_d041_postfiltered_min_length_50_soft_labels_pooled_jakkard/pseudobulk
