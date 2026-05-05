@@ -96,6 +96,7 @@ def compute_deconvolution_metrics(
                 target * (target.clamp(min=eps).log() - pred.clamp(min=eps).log())
             ).sum(dim=-1).mean().item()
             metrics["kl"] = kl
+            metrics["r2"] = r2_score(target.numpy(force=True), pred.numpy(force=True), multioutput="variance_weighted")
 
             if return_per_sample:
                 metrics["mse_per_sample"] = (diff**2).mean(dim=-1).numpy(force=True)

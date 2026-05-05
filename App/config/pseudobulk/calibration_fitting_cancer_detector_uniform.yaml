@@ -1,0 +1,57 @@
+# ──────────────────────────────────────────────────────────────────
+# Calibration Fitting Configuration
+# ──────────────────────────────────────────────────────────────────
+# Usage:
+#   python App/main.py --task fit_calibration --config App/config/calibration_fitting_example.yaml
+
+# ── Input data ──────────────────────────────────────────────────
+# Full IO matrices from pseudobulk generation (output of pseudobulk pipeline)
+ios_feature_selected_path: /home/nathan/Documents/Scolaire/7_Cesure/2_KU_Leuven/methyldl/output/cancer_detector/uniform/deconvolvers/features_cutoff_1.312.npz
+
+# Directory containing saved deconvolvers (output of deconvolution pipeline)
+# Expected files per model type:
+#   xgb:  xgb_deconvolver.joblib
+#   swn:  swn_best_deconvolver.pt + swn_architecture_meta.json
+#   mlp:  mlp_best_deconvolver.pt + mlp_architecture_meta.json
+#   nnls: nnls_deconvolver.joblib
+#   psls: psls_deconvolver.joblib
+deconvolvers_dir: /home/nathan/Documents/Scolaire/7_Cesure/2_KU_Leuven/methyldl/output/cancer_detector/uniform/deconvolvers
+
+# ── Labels ──────────────────────────────────────────────────────
+labels_dict_path: App/labels_dict.json
+num_output_labels: 39
+
+# ── Deconvolvers to calibrate ──────────────────────────────────
+# Each entry specifies a deconvolver to load and calibrate.
+# For each, the pipeline will:
+#   1. Evaluate uncalibrated predictions on val/test
+#   2. Fit a LinearCalibrator (3 normalisation methods)
+#   3. Fit a VectorScalingCalibratorCV
+deconvolvers:
+  - name: swn
+    params:
+      device: cuda
+
+  - name: mlp
+    params:
+      device: cuda
+
+  - name: xgb
+
+  - name: nnls
+
+  - name: psls
+    params:
+      n_workers: 2
+
+    # Optional: override VectorScaling hyperparameter search grid
+    # vector_scaling:
+    #   reg_lambda_list: [0.0, 1e-4, 1e-3]
+    #   lr_list: [1e-3, 1e-2]
+    #   max_iter_list: [1000]
+    #   n_folds: 5
+    #   patience: 50
+    #   verbose: true
+
+# ── Output ──────────────────────────────────────────────────────
+output_dir: /home/nathan/Documents/Scolaire/7_Cesure/2_KU_Leuven/methyldl/output/cancer_detector/uniform/calibration/
