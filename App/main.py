@@ -213,14 +213,14 @@ def run_inference(config: Dict[str, Any], logger: logging.Logger) -> None:
     """Run inference based on configuration."""
     from inference import InferencePipeline
 
-    logger.info("Starting inference pipeline")
+    logger.debug("Starting inference pipeline")
     pipeline = InferencePipeline(config=config, logger=logger)
     results = pipeline.run()
 
     # Log summary
-    logger.info("=" * 60)
-    logger.info("INFERENCE RESULTS SUMMARY")
-    logger.info("=" * 60)
+    logger.debug("=" * 60)
+    logger.debug("INFERENCE RESULTS SUMMARY")
+    logger.debug("=" * 60)
     for deconvolver, calibrator, proportions in results:
         # Flatten the proportions array if it is 2D (e.g., shape (1, 39))
         flat_props = proportions.flatten()
@@ -237,8 +237,8 @@ def run_inference(config: Dict[str, Any], logger: logging.Logger) -> None:
         # 4. Format and log
         label = f"{deconvolver} (calibrator={calibrator})"
         top5_str = ", ".join([f"{name}: {val:.4f}" for name, val in top_5])
-        logger.info(f"  {label} Top 5: {top5_str}")
-        logger.info("=" * 60)
+        logger.debug(f"  {label} Top 5: {top5_str}")
+        logger.debug("=" * 60)
 
 
 def run_pretraining(config: Dict[str, Any], logger: logging.Logger) -> None:
