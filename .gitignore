@@ -194,6 +194,8 @@ cython_debug/
 /test_container_tmp
 /EDA/*.pkl
 /EDA/*.pt
+/EDA/*.pdf
+/EDA/*/*.pdf
 /EDA/*/*.png
 /App/config/rrbs/tmp_configs
 /App/config/*
@@ -217,3 +219,6 @@ outputs/
 *.out
 *.err
 slurm-*.out
+
+# Local .sh
+run_multiple_jobs.sh

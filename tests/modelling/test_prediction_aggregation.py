@@ -875,4 +875,3 @@ class TestComputeUniformPriorMatrix(unittest.TestCase):
             compute_uniform_prior_matrix(
                 [None, None], split_key="train", num_input_labels=2
             )
-

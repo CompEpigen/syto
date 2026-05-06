@@ -1,28 +1,28 @@
-# MethylBERT Inference Configuration
+# Inference Configuration
 # This configuration provides settings for running the inference pipeline.
+#  python App/main.py --task inference --config App/config/rrbs/inference.yaml
 
 # Model Configuration
 classifier:
-  classifier_type: "dismir"  # "methylbert", "dismir", "cancer_detector", "lookup"
+  classifier_type: "methylbert"  # "methylbert", "dismir", "cancer_detector", "lookup"
   # MethylBERT-specific:
   foundation_model: "hanyangii/methylbert_hg19_12l"
   classifier_head_implementation: "dmr_attention_based"
   # Dismir-specific:
   dismir_flavor: "lstm"          # or "mingru"
   # Shared:
-  soft_labels: true
+  soft_labels: false
 
 
-# Path to fine-tuned MethylBERT classifier checkpoint
-checkpoint_path: /data/dmytro/Experiments/cfsort_rrbs/Dismir_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels_pooled_jakkard_d041/weight.pt
+# Path to fine-tuned classifier checkpoint
+checkpoint_path: /data/dmytro/Experiments/cfsort_rrbs/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_no_data_lea_postfiltered_min_length_50_soft_labels_NOPOOLING_v2/checkpoint-2800
 
 # Labels dictionary: JSON file mapping int label -> cell type name
 # e.g. {"0": "B-cells", "1": "T-cells", ...}
 labels_dict_path: App/labels_dict.json
 
 # Features mask in npz format - used to select features from the aggregated dmr matrix to be used with deconvolution models
-features_mask_path: /data/dmytro/Experiments/ExtendedProportions/rrbs/Dismir_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels_pooled_jakkard_d041/pseudobulk/pseudobulk/fitted_deconvolvers_unifrorm_multinomial_all_top156_features/features_mask_1.1696227884041566_cutoff.npz
-# Optional cell type name matching dict (atlas target name -> labels_dict name)
+features_mask_path: /data/dmytro/Experiments/ExtendedProportions/rrbs/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_no_data_lea_postfiltered_min_length_50_soft_labels_NOPOOLING_v2/pseudobulk/fitted_deconvolvers_unifrorm_multinomial_all_top156_features/features_mask_1.162750731358269_cutoff.npz
 # If atlas uses different naming than labels_dict, this maps between them.
 # Set to null if names already match.
 cell_type_match_dict_path: null
@@ -35,15 +35,15 @@ atlas_path: ../UXM_deconv/supplemental/Atlas.U25.l4.hg19.full.tsv
 
 # Input configuration
 input:
-  # Input type: "bam" for raw BAM files, "processed_reads" for pre-processed pickle
+  # Input type: "bam" for raw BAM files, "parsed_reads" for pre-processed pickle
   type: parsed_reads
   # type: bam
   # Path to input BAM file (used when type: bam)
   bam_path: null
-  # Path to pre-processed reads pickle (used when type: processed_reads)
+  # Path to pre-processed reads pickle (used when type: parsed_reads)
   # Must match output format of process_bam_with_chunking()
   parsed_reads_path: /data/dmytro/cfSortData/RecoveredReads/GSM7427265_GTEX-14JG1-0826-SM-L36ZF_reads.csv
-  predicted_reads_path: null
+  #predicted_reads_path:  /data/dmytro/Experiments/ExtendedProportions/rrbs/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_no_data_lea_postfiltered_min_length_50_soft_labels_NOPOOLING_v2/pseudobulk/fitted_deconvolvers_unifrorm_multinomial_all_top156_features/deconvolutions_prior_blending/GSM7427265_GTEX-14JG1-0826-SM-L36ZF/predictions.pkl
   # Path to reference genome FASTA (required for WGBS BAMs)
   reference_path: ../wgbs_tools/references/hg19/hg19.fa.gz
   # Data type: null for auto-detect, or "ont" / "wgbs"
@@ -68,6 +68,11 @@ prediction_batch_size: 2200
 
 # If enabled, the final dmr prediction matrix will be augmented with 0-predictions rows for every missing cell-specific region
 fill_in_missing_labels: true
+missing_label_strategy: prior_blending # prior_blending, zeroes or prior_imputation
+pure_profiles_path: /data/dmytro/Experiments/ExtendedProportions/rrbs/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_no_data_lea_postfiltered_min_length_50_soft_labels_NOPOOLING_v2/pseudobulk/fitted_deconvolvers_unifrorm_multinomial_all_top156_features/pure_profiles.pkl 
+
+# Path to pre-computed uniform prior matrix (.npz). Required for prior_blending / prior_imputation
+uniform_prior_path: /data/dmytro/Experiments/ExtendedProportions/rrbs/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_no_data_lea_postfiltered_min_length_50_soft_labels_NOPOOLING_v2/pseudobulk/fitted_deconvolvers_unifrorm_multinomial_all_top156_features/uniform_prior.npz
 
 # Deconvolution configuration
 deconvolution:
@@ -75,38 +80,36 @@ deconvolution:
     - name: xgboost
       enabled: true
       use_callibration: true
-      checkpoint_path: /data/dmytro/Experiments/ExtendedProportions/rrbs/Dismir_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels_pooled_jakkard_d041/pseudobulk/pseudobulk/fitted_deconvolvers_unifrorm_multinomial_all_top156_features/xgb_deconvolver.joblib
-      calibrators_dir: /data/dmytro/Experiments/ExtendedProportions/rrbs/Dismir_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels_pooled_jakkard_d041/pseudobulk/pseudobulk/fitted_deconvolvers_unifrorm_multinomial_all_top156_features/calibration/xgb_calibrators_and_predictions
-    - name: uxm
-      enabled: true
+      checkpoint_path: /data/dmytro/Experiments/ExtendedProportions/rrbs/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_no_data_lea_postfiltered_min_length_50_soft_labels_NOPOOLING_v2/pseudobulk/fitted_deconvolvers_unifrorm_multinomial_all_top156_features/xgb_deconvolver.joblib
+      calibrators_dir: /data/dmytro/Experiments/ExtendedProportions/rrbs/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_no_data_lea_postfiltered_min_length_50_soft_labels_NOPOOLING_v2/pseudobulk/fitted_deconvolvers_unifrorm_multinomial_all_top156_features/calibration/xgb_calibrators_and_predictions
     - name: 3Layer_MLP
       enabled: true
       use_callibration: true
-      checkpoint_path: /data/dmytro/Experiments/ExtendedProportions/rrbs/Dismir_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels_pooled_jakkard_d041/pseudobulk/pseudobulk/fitted_deconvolvers_unifrorm_multinomial_all_top156_features/mlp_best_deconvolver.pt
-      calibrators_dir: /data/dmytro/Experiments/ExtendedProportions/rrbs/Dismir_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels_pooled_jakkard_d041/pseudobulk/pseudobulk/fitted_deconvolvers_unifrorm_multinomial_all_top156_features/calibration/mlp_calibrators_and_predictions
+      checkpoint_path: /data/dmytro/Experiments/ExtendedProportions/rrbs/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_no_data_lea_postfiltered_min_length_50_soft_labels_NOPOOLING_v2/pseudobulk/fitted_deconvolvers_unifrorm_multinomial_all_top156_features/mlp_best_deconvolver.pt
+      calibrators_dir: /data/dmytro/Experiments/ExtendedProportions/rrbs/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_no_data_lea_postfiltered_min_length_50_soft_labels_NOPOOLING_v2/pseudobulk/fitted_deconvolvers_unifrorm_multinomial_all_top156_features/calibration/mlp_calibrators_and_predictions
     - name: Shallow_Wide_Network
       enabled: true
       use_callibration: true
-      checkpoint_path: /data/dmytro/Experiments/ExtendedProportions/rrbs/Dismir_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels_pooled_jakkard_d041/pseudobulk/pseudobulk/fitted_deconvolvers_unifrorm_multinomial_all_top156_features/swn_best_deconvolver.pt
-      calibrators_dir: /data/dmytro/Experiments/ExtendedProportions/rrbs/Dismir_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels_pooled_jakkard_d041/pseudobulk/pseudobulk/fitted_deconvolvers_unifrorm_multinomial_all_top156_features/calibration/swn_calibrators_and_predictions
+      checkpoint_path: /data/dmytro/Experiments/ExtendedProportions/rrbs/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_no_data_lea_postfiltered_min_length_50_soft_labels_NOPOOLING_v2/pseudobulk/fitted_deconvolvers_unifrorm_multinomial_all_top156_features/swn_best_deconvolver.pt
+      calibrators_dir: /data/dmytro/Experiments/ExtendedProportions/rrbs/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_no_data_lea_postfiltered_min_length_50_soft_labels_NOPOOLING_v2/pseudobulk/fitted_deconvolvers_unifrorm_multinomial_all_top156_features/calibration/swn_calibrators_and_predictions
     - name: ls
       flavor: nnls
       enabled: true
       use_callibration: true
-      checkpoint_path: /data/dmytro/Experiments/ExtendedProportions/rrbs/Dismir_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels_pooled_jakkard_d041/pseudobulk/pseudobulk/fitted_deconvolvers_unifrorm_multinomial_all_top156_features/nnls_deconvolver.joblib
-      calibrators_dir: /data/dmytro/Experiments/ExtendedProportions/rrbs/Dismir_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels_pooled_jakkard_d041/pseudobulk/pseudobulk/fitted_deconvolvers_unifrorm_multinomial_all_top156_features/calibration/nnls_calibrators_and_predictions
+      checkpoint_path: /data/dmytro/Experiments/ExtendedProportions/rrbs/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_no_data_lea_postfiltered_min_length_50_soft_labels_NOPOOLING_v2/pseudobulk/fitted_deconvolvers_unifrorm_multinomial_all_top156_features/nnls_deconvolver.joblib
+      calibrators_dir: /data/dmytro/Experiments/ExtendedProportions/rrbs/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_no_data_lea_postfiltered_min_length_50_soft_labels_NOPOOLING_v2/pseudobulk/fitted_deconvolvers_unifrorm_multinomial_all_top156_features/calibration/nnls_calibrators_and_predictions
     - name: ls
       flavor: psls
       enabled: true
       use_callibration: true
-      checkpoint_path: /data/dmytro/Experiments/ExtendedProportions/rrbs/Dismir_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels_pooled_jakkard_d041/pseudobulk/pseudobulk/fitted_deconvolvers_unifrorm_multinomial_all_top156_features/psls_deconvolver.joblib
-      calibrators_dir: /data/dmytro/Experiments/ExtendedProportions/rrbs/Dismir_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels_pooled_jakkard_d041/pseudobulk/pseudobulk/fitted_deconvolvers_unifrorm_multinomial_all_top156_features/calibration/psls_calibrators_and_predictions
+      checkpoint_path: /data/dmytro/Experiments/ExtendedProportions/rrbs/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_no_data_lea_postfiltered_min_length_50_soft_labels_NOPOOLING_v2/pseudobulk/fitted_deconvolvers_unifrorm_multinomial_all_top156_features/psls_deconvolver.joblib
+      calibrators_dir: /data/dmytro/Experiments/ExtendedProportions/rrbs/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_no_data_lea_postfiltered_min_length_50_soft_labels_NOPOOLING_v2/pseudobulk/fitted_deconvolvers_unifrorm_multinomial_all_top156_features/calibration/psls_calibrators_and_predictions
  
 
 # Output configuration
 output:
-  # output_dir: /data/dmytro/Experiments/ExtendedProportions/rrbs/Dismir_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels_pooled_jakkard_d041/pseudobulk/pseudobulk/fitted_deconvolvers_unifrorm_multinomial_all_top156_features/deconvolutions/GSM7427265_GTEX-14JG1-0826-SM-L36ZF
-  output_dir: GSM7427265_GTEX-14JG1-0826-SM-L36ZF
-  save_processed_reads: true   # Save processed reads as pickle
-  save_predictions: true       # Save MethylBERT predictions as pickle
+  # output_dir: /data/dmytro/Experiments/ExtendedProportions/rrbs/MethylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels_canonical/pseudobulk/fitted_deconvolvers_unifrorm_multinomial_all_top156_features//deconvolutions/GSM7427265_GTEX-14JG1-0826-SM-L36ZF
+  output_dir: /data/dmytro/Experiments/ExtendedProportions/rrbs/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_no_data_lea_postfiltered_min_length_50_soft_labels_NOPOOLING_v2/pseudobulk/fitted_deconvolvers_unifrorm_multinomial_all_top156_features/deconvolutions_prior_blending
+  save_processed_reads: false   # Save processed reads as pickle
+  save_predictions: true       # Save predictions as pickle
   save_deconvolution: true     # Save deconvolution proportions as CSV
