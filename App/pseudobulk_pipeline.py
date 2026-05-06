@@ -168,7 +168,7 @@ class PseudoBulkPipeline:
                 self.logger.info(f"  Saved predicted {name} to {intermediate_path}")
 
                 splits_data[name] = predicted
-                
+
             # Redundant save
             # with open(os.path.join(self.output_dir, "predicted_reads.pkl"), "wb") as f:
             #     pickle.dump(splits_data, f)

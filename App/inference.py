@@ -387,9 +387,7 @@ class InferencePipeline:
             classifier_head_implementation=classifier_cfg.get(
                 "classifier_head_implementation", "dmr_attention_based"
             ),
-            dmr_label_column=classifier_cfg.get(
-                "dmr_label_column", "dmr_ctype_label"
-            ),
+            dmr_label_column=classifier_cfg.get("dmr_label_column", "dmr_ctype_label"),
             dismir_flavor=classifier_cfg.get("dismir_flavor", "lstm"),
             cancer_detector_prior_type=classifier_cfg.get(
                 "cancer_detector_prior_type", "uniform"
@@ -455,16 +453,13 @@ class InferencePipeline:
 
         # Option 1: direct .npz
         if uniform_prior_path and os.path.exists(uniform_prior_path):
-            self.logger.info(
-                f"Loading uniform prior from {uniform_prior_path}"
-            )
+            self.logger.info(f"Loading uniform prior from {uniform_prior_path}")
             return load_uniform_prior(uniform_prior_path)
 
         # Option 2: compute from pure profiles pickle
         if pure_profiles_path and os.path.exists(pure_profiles_path):
             self.logger.info(
-                f"Computing uniform prior from pure profiles: "
-                f"{pure_profiles_path}"
+                f"Computing uniform prior from pure profiles: " f"{pure_profiles_path}"
             )
             with open(pure_profiles_path, "rb") as f:
                 pure_profiles = pickle.load(f)
@@ -477,9 +472,7 @@ class InferencePipeline:
             )
 
             # Cache for future runs
-            cache_path = str(
-                Path(pure_profiles_path).parent / "uniform_prior.npz"
-            )
+            cache_path = str(Path(pure_profiles_path).parent / "uniform_prior.npz")
             save_uniform_prior(prior, cache_path)
             self.logger.info(f"Cached uniform prior to {cache_path}")
             return prior
@@ -572,9 +565,7 @@ class InferencePipeline:
                 if calibrators_dir is None and method_cfg.get(
                     "use_callibration", False
                 ):
-                    calibrators_dir = str(
-                        Path(method_cfg["callibrator_path"]).parent
-                    )
+                    calibrators_dir = str(Path(method_cfg["callibrator_path"]).parent)
 
                 if calibrators_dir is not None:
                     calibrated = self._apply_all_calibrators(
@@ -631,9 +622,7 @@ class InferencePipeline:
         # ── Linear calibrator ──────────────────────────────────────
         linear_path = calibrators_dir / "linear_calibrator.npz"
         if linear_path.exists():
-            self.logger.info(
-                f"  Loading linear calibrator from {linear_path}"
-            )
+            self.logger.info(f"  Loading linear calibrator from {linear_path}")
             linear_cal = LinearCalibrator()
             linear_cal.load_calibration_parameters(str(linear_path))
 
@@ -641,9 +630,7 @@ class InferencePipeline:
                 short_name = norm_method.replace("-", "_")
                 calibrator_label = f"linear_{short_name}"
                 try:
-                    calib, _ = linear_cal.predict(
-                        props_2d, norm_method=norm_method
-                    )
+                    calib, _ = linear_cal.predict(props_2d, norm_method=norm_method)
                     results.append((base_name, calibrator_label, np.round(calib, 4)))
                     self.logger.info(f"    ✓ {base_name} + {calibrator_label}")
                 except Exception as e:
@@ -656,9 +643,7 @@ class InferencePipeline:
         vs_path = calibrators_dir / "vector_scaling_calibrator.npz"
         if vs_path.exists():
             calibrator_label = "vector_scaling"
-            self.logger.info(
-                f"  Loading vector-scaling calibrator from {vs_path}"
-            )
+            self.logger.info(f"  Loading vector-scaling calibrator from {vs_path}")
             try:
                 vs_cal = VectorScalingCalibratorCV()
                 vs_cal.load(str(vs_path))
@@ -672,9 +657,7 @@ class InferencePipeline:
                 )
 
         if not results:
-            self.logger.warning(
-                f"  No calibrator files found in {calibrators_dir}"
-            )
+            self.logger.warning(f"  No calibrator files found in {calibrators_dir}")
 
         return results
 
