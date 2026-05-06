@@ -54,7 +54,7 @@ def generate_valid_tokens(read_data, k=3):
 
 
 def prepare_methylbert_list_inference(
-    results_df, dmr_label_column, seq_length=150, stride=75, soft_labels=False
+    results_df, dmr_label_column, seq_length=150, stride=75, soft_labels=False, is_binary=False
 ):
     """
     Prepares inference data with sliding window chunking.
@@ -90,7 +90,11 @@ def prepare_methylbert_list_inference(
             dna = " ".join([x[0] for x in chunk])
             methyl = "".join([x[1] for x in chunk])
             ncpgs_marked = methyl.count("0") + methyl.count("1")
-            label = row["label"] if not soft_labels else row["soft_label"]
+            if is_binary:
+                label = int(row["dmr_ctype_label"] == row["label"])
+            else:
+                label = row["soft_label"] if soft_labels else row["label"]
+
             o_label = row["original_label"]
             dmr_label = row[dmr_label_column]
             dmr_ctype = row["dmr_ctype_label"]

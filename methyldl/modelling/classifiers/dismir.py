@@ -12,6 +12,8 @@ import time
 from methyldl.modelling.common import DMRAttentionClassifier
 from methyldl.modelling.loss import ConfidenceWeightedCrossEntropy
 from tqdm import tqdm
+from datetime import datetime
+
 
 
 class DISMIRConfig:
@@ -724,22 +726,22 @@ class Dismir:
                 return_dmr_labels=True,
                 soft_labels=self.soft_labels,
             )
-            print("... Train is ready")
+            print(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}... Train is ready")
             self.valid_x, self.valid_y, self.valid_dmr = self.load_and_transform_input(
                 self.valid_data_path,
                 return_dmr_labels=True,
                 soft_labels=self.soft_labels,
             )
-            print("... Valid is ready")
+            print(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}... Valid is ready")
         else:
             self.train_x, self.train_y = self.load_and_transform_input(
                 self.train_data_path, soft_labels=self.soft_labels
             )
-            print("... Train is ready")
+            print(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}... Train is ready")
             self.valid_x, self.valid_y = self.load_and_transform_input(
                 self.valid_data_path, soft_labels=self.soft_labels
             )
-            print("... Valid is ready")
+            print(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}... Valid is ready")
 
         # Convert features to torch.Tensor
         self.train_x = torch.tensor(self.train_x, dtype=torch.float32)
