@@ -689,7 +689,7 @@ class InferencePipeline:
             proportions = deconvolver.predict_single_sample(X)
         else:
             raise ValueError(
-                "LS fabily of deconvolvers supports only two flavors: nnls and psls"
+                "LS family of deconvolvers supports only two flavors: nnls and psls"
             )
 
         proportions = np.round(proportions, 4)
