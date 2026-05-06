@@ -15,6 +15,8 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
+from methyldl.modelling.prediction_aggregation import _fill_in_missing_labels
+
 from methyldl.data.pseudo_bulk_generation import (
     _build_target_columns,
     generate_pseudo_bulk_optimized,
@@ -28,6 +30,7 @@ def generate_pure_profiles(
     num_output_labels: int = 39,
     num_input_labels: int = 39,
     n_read_per_split: int = 475_000,
+    labels_dict: dict = None,
 ) -> List[Tuple[np.ndarray, Dict[str, pd.DataFrame], list]]:
     """Generate one purified profile per cell type.
 
@@ -96,6 +99,14 @@ def generate_pure_profiles(
                 num_labels=num_output_labels,
                 generate_uxm_inputs=False,
             )
+            if labels_dict is not None:
+                for key in subs.keys():
+                    subs[key] = _fill_in_missing_labels(
+                        subs[key],
+                        group_cols=["dmr_label", "file", "original_label"],
+                        labels_dict=labels_dict,
+                        substitution_strategy="uniform_number",
+                    )
             pure_profiles.append((proportions_full, subs, uxm_data))
         except Exception as e:
             logger.warning(f"Failed to generate pure profile for cell type {i}: {e}")

@@ -3,9 +3,13 @@ from typing import List, Optional
 import numpy as np
 import pandas as pd
 
-
 # Valid substitution strategies for missing DMR labels.
-VALID_SUBSTITUTION_STRATEGIES = ("zeroes", "prior_blending", "prior_imputation")
+VALID_SUBSTITUTION_STRATEGIES = (
+    "zeroes",
+    "prior_blending",
+    "prior_imputation",
+    "uniform_number",
+)
 
 
 def _fill_in_missing_labels(
@@ -30,6 +34,7 @@ def _fill_in_missing_labels(
       entirely to the prior.
     * ``"prior_imputation"`` – replace only rows with ``n_reads == 0``
       with the corresponding prior row; all other rows are untouched.
+    * ``"uniform_number"`` - assigns each cell a probability of 1/n_classes
 
     Parameters
     ----------
@@ -40,7 +45,7 @@ def _fill_in_missing_labels(
     labels_dict : dict
         ``{int: str}`` mapping from label id to cell-type name.
     substitution_strategy : str
-        One of ``"zeroes"``, ``"prior_blending"``, ``"prior_imputation"``.
+        One of ``"zeroes"``, ``"prior_blending"``, ``"prior_imputation"``, ``"uniform_number"``.
     uniform_prior : pd.DataFrame or None
         Pre-computed uniform prior matrix (required for ``prior_blending``
         and ``prior_imputation``).
@@ -52,7 +57,10 @@ def _fill_in_missing_labels(
             f"Unknown substitution_strategy '{substitution_strategy}'. "
             f"Must be one of {VALID_SUBSTITUTION_STRATEGIES}."
         )
-    if substitution_strategy != "zeroes" and uniform_prior is None:
+    if (
+        substitution_strategy not in ["zeroes", "uniform_number"]
+        and uniform_prior is None
+    ):
         raise ValueError(
             f"uniform_prior must be provided when substitution_strategy="
             f"'{substitution_strategy}'."
@@ -76,9 +84,16 @@ def _fill_in_missing_labels(
         ]
         if string_fill_columns:
             df = df.astype({col: object for col in string_fill_columns}, copy=False)
-        df.loc[:, fill_columns] = df.loc[:, fill_columns].fillna(0)
         df.loc[synthetic_rows, "label"] = -1
         df["total_weight"] = df["total_weight"].apply(lambda x: max(x, 1))
+        if substitution_strategy == "uniform_number":
+            prediction_columns = [x for x in fill_columns if "prediction" in x]
+            df.loc[:, prediction_columns] = df.loc[:, prediction_columns].fillna(
+                1 / len(labels_dict)
+            )  # In this case, each observation has a probability of 1/n_classes
+        df.loc[:, fill_columns] = df.loc[:, fill_columns].fillna(
+            0
+        )  # Filling with zero otherwise + filling n_reads with 0
 
     # ── Apply substitution strategy ─────────────────────────────────────
     if substitution_strategy in ("prior_blending", "prior_imputation"):
@@ -110,7 +125,8 @@ def _apply_prior_substitution(
     """
     # Identify prediction columns present in both df and prior
     pred_cols = [
-        c for c in df.columns
+        c
+        for c in df.columns
         if (c.startswith("prediction_") and (c.endswith("_wavg") or c.endswith("_avg")))
         or c == "methylation_level_wavg"
         or c == "methylation_level_avg"
@@ -132,10 +148,15 @@ def _apply_prior_substitution(
         alpha = n_reads / (n_reads + prior_weight)  # weight for observed
 
         for col in prior_cols:
-            prior_values = df["dmr_ctype_label"].map(
-                prior_indexed[col] if col in prior_indexed.columns
-                else pd.Series(dtype=float)
-            ).values.astype(float)
+            prior_values = (
+                df["dmr_ctype_label"]
+                .map(
+                    prior_indexed[col]
+                    if col in prior_indexed.columns
+                    else pd.Series(dtype=float)
+                )
+                .values.astype(float)
+            )
             observed = df[col].values.astype(float)
             df[col] = alpha * observed + (1.0 - alpha) * prior_values
 
@@ -145,7 +166,8 @@ def _apply_prior_substitution(
         if zero_mask.any():
             for col in prior_cols:
                 prior_values = df.loc[zero_mask, "dmr_ctype_label"].map(
-                    prior_indexed[col] if col in prior_indexed.columns
+                    prior_indexed[col]
+                    if col in prior_indexed.columns
                     else pd.Series(dtype=float)
                 )
                 df.loc[zero_mask, col] = prior_values.values

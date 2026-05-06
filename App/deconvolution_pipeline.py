@@ -130,6 +130,7 @@ class DeconvolutionFittingPipeline:
             num_output_labels=self.num_output_labels,
             num_input_labels=self.num_input_labels,
             n_read_per_split=n_read_per_split,
+            labels_dict=self.labels_dict,
         )
 
         # Save
