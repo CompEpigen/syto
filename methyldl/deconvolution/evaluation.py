@@ -53,7 +53,7 @@ def compute_deconvolution_metrics(
     n_resamples=10000,
     confidence_level=0.95,
     random_state=42,
-    compute_ci: bool=False,
+    compute_ci: bool = False,
     return_per_sample: bool = False,
 ) -> dict:
     """Compute all evaluation metrics.
@@ -77,7 +77,7 @@ def compute_deconvolution_metrics(
 
     with torch.inference_mode():
         diff = pred - target
-        
+
         if compute_ci:
             metrics = compute_metrics_with_bootstrap_bca_ci(
                 pred.numpy(force=True),
@@ -93,17 +93,26 @@ def compute_deconvolution_metrics(
             metrics["mae"] = diff.abs().mean().item()
             metrics["mse"] = (diff**2).mean().item()
             kl = (
-                target * (target.clamp(min=eps).log() - pred.clamp(min=eps).log())
-            ).sum(dim=-1).mean().item()
+                (target * (target.clamp(min=eps).log() - pred.clamp(min=eps).log()))
+                .sum(dim=-1)
+                .mean()
+                .item()
+            )
             metrics["kl"] = kl
-            metrics["r2"] = r2_score(target.numpy(force=True), pred.numpy(force=True), multioutput="variance_weighted")
+            metrics["r2"] = r2_score(
+                target.numpy(force=True),
+                pred.numpy(force=True),
+                multioutput="variance_weighted",
+            )
 
             if return_per_sample:
                 metrics["mse_per_sample"] = (diff**2).mean(dim=-1).numpy(force=True)
                 metrics["mae_per_sample"] = diff.abs().mean(dim=-1).numpy(force=True)
                 metrics["kl_per_sample"] = (
-                    target * (target.clamp(min=eps).log() - pred.clamp(min=eps).log())
-                ).sum(dim=-1).numpy(force=True)
+                    (target * (target.clamp(min=eps).log() - pred.clamp(min=eps).log()))
+                    .sum(dim=-1)
+                    .numpy(force=True)
+                )
 
         max_error = diff.abs().max().item()
         metrics["max_error"] = max_error

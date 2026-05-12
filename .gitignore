@@ -4,6 +4,7 @@ App/output/*
 output/*
 *.code-workspace
 poetry.toml
+tmp_*
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
