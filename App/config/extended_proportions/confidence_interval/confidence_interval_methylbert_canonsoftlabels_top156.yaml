@@ -1,0 +1,13 @@
+
+calibration_results_dir: /staging/leuven/stg_00118/methylDL/experiments/ExtendedProportions/pseudobulk/methylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_no_data_leak_d041_postfiltered_min_length_50_soft_labels_canonical/pseudobulk/fitted_deconvolvers_unifrorm_multinomial_all_top156_features/calibration
+
+# ── Labels ────────────────────────────────────────────────────────
+labels_dict_path: App/labels_dict.json
+
+# ── Deconvolvers to evaluate ──────────────────────────────────────
+deconvolvers:
+  - name: psls
+  - name: nnls
+  - name: xgb
+  - name: swn
+  - name: mlp

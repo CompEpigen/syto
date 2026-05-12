@@ -81,6 +81,10 @@ def validate_config(config: Dict[str, Any], task: str) -> None:
             "output_dir",
             "labels_dict_path",
         ],
+        "confidence_intervals": [
+            "calibration_results_dir",
+            "labels_dict_path",
+        ],
     }
 
     if task not in required_fields:
@@ -91,7 +95,7 @@ def validate_config(config: Dict[str, Any], task: str) -> None:
             raise ValueError(f"Missing required field '{field}' for task '{task}'")
 
     # Validate model-specific configuration (not needed for generate_pseudobulk or fit_deconvolution)
-    if task not in ("generate_pseudobulk", "fit_deconvolution", "fit_calibration"):
+    if task not in ("generate_pseudobulk", "fit_deconvolution", "fit_calibration", "confidence_intervals"):
         model = config["classifier"]["classifier_type"].lower()
         if model not in ["methylbert", "dismir", "cancer_detector", "lookup"]:
             raise ValueError(f"Unknown model architecture: {model}")
@@ -286,6 +290,15 @@ def run_calibration_fitting(config: Dict[str, Any], logger: logging.Logger) -> N
     pipeline.run()
 
 
+def run_confidence_intervals(config: Dict[str, Any], logger: logging.Logger) -> None:
+    """Recompute metrics with bootstrap confidence intervals."""
+    from conf_interval_pipeline import ConfidenceIntervalPipeline
+
+    logger.info("Starting confidence interval pipeline")
+    pipeline = ConfidenceIntervalPipeline(config=config, logger=logger)
+    pipeline.run()
+
+
 def main():
     """Main entry point for the application."""
     parser = argparse.ArgumentParser(
@@ -315,6 +328,7 @@ Examples:
             "generate_pseudobulk",
             "fit_deconvolution",
             "fit_calibration",
+            "confidence_intervals",
         ],
         required=True,
         help="Task to perform",
@@ -463,6 +477,8 @@ Examples:
             run_deconvolution_fitting(config, logger)
         elif args.task == "fit_calibration":
             run_calibration_fitting(config, logger)
+        elif args.task == "confidence_intervals":
+            run_confidence_intervals(config, logger)
 
         logger.info("Task completed successfully")
         return 0
