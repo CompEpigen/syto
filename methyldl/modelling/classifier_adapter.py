@@ -109,7 +109,7 @@ class ClassifierAdapter:
 
         if self.soft_labels:
             loss = "cwce"
-        elif self.num_labels==2:
+        elif self.num_labels == 2:
             loss = "bce"
         else:
             loss = "ce"
@@ -176,7 +176,7 @@ class ClassifierAdapter:
             seq_length=self.seq_length,
             stride=int(self.seq_length / 2),
             soft_labels=self.soft_labels,
-            is_binary = True if self.num_labels==2 else False
+            is_binary=True if self.num_labels == 2 else False,
         )
 
         dataset = MethylBertFinetuneDataset(

@@ -54,7 +54,12 @@ def generate_valid_tokens(read_data, k=3):
 
 
 def prepare_methylbert_list_inference(
-    results_df, dmr_label_column, seq_length=150, stride=75, soft_labels=False, is_binary=False
+    results_df,
+    dmr_label_column,
+    seq_length=150,
+    stride=75,
+    soft_labels=False,
+    is_binary=False,
 ):
     """
     Prepares inference data with sliding window chunking.

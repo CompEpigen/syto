@@ -15,7 +15,6 @@ from tqdm import tqdm
 from datetime import datetime
 
 
-
 class DISMIRConfig:
     """Simple config class for DMRAttentionClassifier compatibility."""
 
