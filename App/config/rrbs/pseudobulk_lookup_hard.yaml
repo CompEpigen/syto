@@ -14,7 +14,7 @@ classifier_type: lookup
 # "uxm_prepared"  — splits already prepared for uxm
 # "pre_predicted"  — pre-predicted splits (already enriched with predictions)
 # input_type: raw_splits
-input_type: uxm_prepared
+input_type: raw_splits
 
 pickle_paths:
   train: /staging/leuven/stg_00118/methylDL/experiments/ExtendedProportions/rrbs/Hg19_LookupClassifier_HardLabels/pseudobulk/train_predicted.pkl
@@ -41,7 +41,7 @@ classifier_config:
 
 # ── Labels & atlas ────────────────────────────────────────────────
 labels_dict_path: App/labels_dict.json
-atlas_path: /staging/leuven/stg_00118/methylDL/Atlas.U25.l4.hg38.full.tsv
+atlas_path: /staging/leuven/stg_00118/methylDL/Atlas.U25.l4.hg19.full.tsv
 num_labels: 39
 
 # ── Split rebalancing ─────────────────────────────────────────────
