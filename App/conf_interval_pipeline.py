@@ -148,9 +148,7 @@ class ConfidenceIntervalPipeline:
             Ground-truth proportions (loaded once from the first
             ``uncalibrated_predictions.npz``).
         """
-        self.logger.info(
-            f"Loading predictions from {self.calibration_results_dir}"
-        )
+        self.logger.info(f"Loading predictions from {self.calibration_results_dir}")
 
         predictions: Dict[str, Dict[str, np.ndarray]] = {}
         target_proportions: np.ndarray | None = None
@@ -168,18 +166,14 @@ class ConfidenceIntervalPipeline:
 
             for method in self.calibration_methods:
                 if method == "uncalibrated":
-                    pred_path = os.path.join(
-                        deconv_dir, "uncalibrated_predictions.npz"
-                    )
+                    pred_path = os.path.join(deconv_dir, "uncalibrated_predictions.npz")
                 elif method == "vector_scaling":
                     pred_path = os.path.join(
                         deconv_dir, "vector_scaling_predictions.npz"
                     )
                 else:
                     # e.g. "linear_clip0_normalize" -> "linear_clip0_normalize_predictions.npz"
-                    pred_path = os.path.join(
-                        deconv_dir, f"{method}_predictions.npz"
-                    )
+                    pred_path = os.path.join(deconv_dir, f"{method}_predictions.npz")
 
                 if not os.path.exists(pred_path):
                     self.logger.warning(

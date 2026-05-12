@@ -324,14 +324,16 @@ class ClassifierAdapter:
         from methyldl.modelling.classifiers.lookup import LookupClassifier
 
         self._model = LookupClassifier.load(self.checkpoint_path)
-        logger.info("LookupClassifier model loaded with checkpoint: %s", self.checkpoint_path)
+        logger.info(
+            "LookupClassifier model loaded with checkpoint: %s", self.checkpoint_path
+        )
 
     def _predict_lookup(self, split_df: pd.DataFrame) -> pd.DataFrame:
         """Run LookupClassifier prediction on a single split."""
         model = self._model
         if model is None:
             raise ValueError("LookupClassifier model is not loaded.")
-        
+
         return model.predict(split_df)
 
     # ─── Public API ─────────────────────────────────────────────────

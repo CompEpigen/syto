@@ -95,7 +95,12 @@ def validate_config(config: Dict[str, Any], task: str) -> None:
             raise ValueError(f"Missing required field '{field}' for task '{task}'")
 
     # Validate model-specific configuration (not needed for generate_pseudobulk or fit_deconvolution)
-    if task not in ("generate_pseudobulk", "fit_deconvolution", "fit_calibration", "confidence_intervals"):
+    if task not in (
+        "generate_pseudobulk",
+        "fit_deconvolution",
+        "fit_calibration",
+        "confidence_intervals",
+    ):
         model = config["model"]["architecture"].lower()
         if model not in ["dismir", "epigenbert2", "methylbert"]:
             raise ValueError(f"Unknown model architecture: {model}")

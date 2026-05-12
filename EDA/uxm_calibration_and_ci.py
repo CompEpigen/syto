@@ -88,16 +88,15 @@ def load_data():
     test_pred = np.load(
         os.path.join(DATA_DIR, "uxm_results_test_uniform_multinomial.npz")
     )["arr_0"]
-    y_valid = np.load(
-        os.path.join(DATA_DIR, "target_proportions_valid.npz")
-    )["arr_0"]
-    y_test = np.load(
-        os.path.join(DATA_DIR, "target_proportions_test.npz")
-    )["arr_0"]
+    y_valid = np.load(os.path.join(DATA_DIR, "target_proportions_valid.npz"))["arr_0"]
+    y_test = np.load(os.path.join(DATA_DIR, "target_proportions_test.npz"))["arr_0"]
 
     logger.info(
         "  val_pred=%s  test_pred=%s  y_valid=%s  y_test=%s",
-        val_pred.shape, test_pred.shape, y_valid.shape, y_test.shape,
+        val_pred.shape,
+        test_pred.shape,
+        y_valid.shape,
+        y_test.shape,
     )
     return val_pred, test_pred, y_valid, y_test
 
@@ -144,7 +143,8 @@ def run_calibration(val_pred, test_pred, y_valid, y_test, deconv_out):
     test_metrics = compute_deconvolution_metrics(test_pred_loaded, y_test)
     logger.info(
         "  Uncalibrated  val MSE=%.6f  test MSE=%.6f",
-        val_metrics["mse"], test_metrics["mse"],
+        val_metrics["mse"],
+        test_metrics["mse"],
     )
     results["uncalibrated"] = {
         "val_metrics": val_metrics,
@@ -170,7 +170,8 @@ def run_calibration(val_pred, test_pred, y_valid, y_test, deconv_out):
         if os.path.exists(pred_path):
             logger.info(
                 "  Found existing predictions for '%s', loading: %s",
-                norm_method, pred_path,
+                norm_method,
+                pred_path,
             )
             data = np.load(pred_path)
             val_calib = data["val_pred"]
@@ -188,7 +189,9 @@ def run_calibration(val_pred, test_pred, y_valid, y_test, deconv_out):
         test_m = compute_deconvolution_metrics(test_calib, y_test)
         logger.info(
             "  Linear (%s)  val MSE=%.6f  test MSE=%.6f",
-            norm_method, val_m["mse"], test_m["mse"],
+            norm_method,
+            val_m["mse"],
+            test_m["mse"],
         )
         results[f"linear_{short_name}"] = {
             "val_metrics": val_m,
@@ -222,7 +225,8 @@ def run_calibration(val_pred, test_pred, y_valid, y_test, deconv_out):
 
     logger.info(
         "  Best CV loss: %.6f, params: %s",
-        vs_calibrator.best_cv_val_loss_, vs_calibrator.best_params_,
+        vs_calibrator.best_cv_val_loss_,
+        vs_calibrator.best_params_,
     )
 
     vs_pred_path = os.path.join(deconv_out, "vector_scaling_predictions.npz")
@@ -240,7 +244,8 @@ def run_calibration(val_pred, test_pred, y_valid, y_test, deconv_out):
     test_vs_m = compute_deconvolution_metrics(test_vs, y_test)
     logger.info(
         "  VectorScaling  val MSE=%.6f  test MSE=%.6f",
-        val_vs_m["mse"], test_vs_m["mse"],
+        val_vs_m["mse"],
+        test_vs_m["mse"],
     )
     results["vector_scaling"] = {
         "val_metrics": val_vs_m,
@@ -318,7 +323,8 @@ def run_confidence_intervals(deconv_out, labels_dict, output_dir):
 
     logger.info(
         "Loaded predictions for %d methods, target shape: %s",
-        len(predictions), target_proportions.shape,
+        len(predictions),
+        target_proportions.shape,
     )
 
     # ── Compute metrics with CIs ──────────────────────────────────
@@ -435,9 +441,7 @@ def save_per_sample_csv(results, output_dir):
 def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-    deconv_out = os.path.join(
-        OUTPUT_DIR, f"{DECONV_NAME}_calibrators_and_predictions"
-    )
+    deconv_out = os.path.join(OUTPUT_DIR, f"{DECONV_NAME}_calibrators_and_predictions")
     os.makedirs(deconv_out, exist_ok=True)
 
     labels_dict = load_labels_dict()

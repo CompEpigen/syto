@@ -87,7 +87,12 @@ class PseudoBulkPipeline:
             # ── Stage 1b: Optional rebalancing ────────────────────────
             if self.config.get("rebalance_splits", False):
                 self.logger.info("Stage 1b: Rebalancing splits ...")
-                if "train" in splits_data and "valid" in splits_data and "test" in splits_data and len(splits_data) == 3:
+                if (
+                    "train" in splits_data
+                    and "valid" in splits_data
+                    and "test" in splits_data
+                    and len(splits_data) == 3
+                ):
                     manual_labels = self.config.get("manual_common_labels", [28, 35])
                     train, valid, test = rebalance_splits(
                         splits_data["train"],
@@ -98,10 +103,14 @@ class PseudoBulkPipeline:
                     splits_data["train"] = train
                     splits_data["valid"] = valid
                     splits_data["test"] = test
-                    sizes = ", ".join(f"{name}={len(df)}" for name, df in splits_data.items())
+                    sizes = ", ".join(
+                        f"{name}={len(df)}" for name, df in splits_data.items()
+                    )
                     self.logger.info(f"  After rebalance: {sizes}")
                 else:
-                    self.logger.warning("Rebalancing is only supported when exactly train, valid, and test splits are present. Skipping.")
+                    self.logger.warning(
+                        "Rebalancing is only supported when exactly train, valid, and test splits are present. Skipping."
+                    )
 
             # ── Stage 2: Prepare reads ────────────────────────────────
             self.logger.info("Stage 2: Preparing reads ...")
@@ -118,11 +127,15 @@ class PseudoBulkPipeline:
             )
             sizes = ", ".join(f"{name}={len(df)}" for name, df in splits_data.items())
             self.logger.info(f"  After preparation: {sizes}")
-            with open(os.path.join(self.output_dir, "uxm_prepared_reads.pkl"), "wb") as f:
+            with open(
+                os.path.join(self.output_dir, "uxm_prepared_reads.pkl"), "wb"
+            ) as f:
                 pickle.dump(splits_data, f)
         elif self.config["input_type"] == "uxm_prepared":
             self.logger.info("Skipping Stage 1 and 2: Loading uxm prepared reads ...")
-            with open(os.path.join(self.output_dir, "uxm_prepared_reads.pkl"), "rb") as f:
+            with open(
+                os.path.join(self.output_dir, "uxm_prepared_reads.pkl"), "rb"
+            ) as f:
                 splits_data = pickle.load(f)
             sizes = ", ".join(f"{name}={len(df)}" for name, df in splits_data.items())
             self.logger.info(f"  After loading: {sizes}")
@@ -174,9 +187,7 @@ class PseudoBulkPipeline:
             )
         else:
             # ── Legacy shared generation mode ─────────────────────
-            self._run_shared_generation(
-                splits_data, generate_uxm_in_ios
-            )
+            self._run_shared_generation(splits_data, generate_uxm_in_ios)
 
         # ── Stage 5: Consolidate ──────────────────────────────────
         self.logger.info("Stage 5: Consolidating partial pickles ...")
@@ -189,9 +200,7 @@ class PseudoBulkPipeline:
                 split_ios_dir = os.path.join(self.ios_dir, split_name)
                 if not os.path.isdir(split_ios_dir):
                     continue
-                pkl_files = [
-                    f for f in os.listdir(split_ios_dir) if f.endswith(".pkl")
-                ]
+                pkl_files = [f for f in os.listdir(split_ios_dir) if f.endswith(".pkl")]
                 if not pkl_files:
                     continue
 
@@ -202,7 +211,7 @@ class PseudoBulkPipeline:
                     ios_dir=split_ios_dir,
                     output_path=split_output,
                     num_labels=self.num_labels,
-                    labels_dict=self.labels_dict
+                    labels_dict=self.labels_dict,
                 )
                 merged_result.update(part)
 
@@ -214,7 +223,7 @@ class PseudoBulkPipeline:
                 ios_dir=self.ios_dir,
                 output_path=self.consolidated_path,
                 num_labels=self.num_labels,
-                labels_dict=self.labels_dict
+                labels_dict=self.labels_dict,
             )
 
         # Log summary — handle both legacy and variant-aware key schemes
@@ -228,8 +237,7 @@ class PseudoBulkPipeline:
             else:
                 n_examples = 0
         self.logger.info(
-            f"  Consolidated {n_examples} examples to "
-            f"{self.consolidated_path}"
+            f"  Consolidated {n_examples} examples to " f"{self.consolidated_path}"
         )
 
         return result
@@ -256,19 +264,20 @@ class PseudoBulkPipeline:
             "chromosome",
             "label",
         ]
-        
+
         if generate_uxm_in_ios:
             base_cols.extend(["name", "record_M", "record_U", "record_X"])
 
         for split_name, df in splits_data.items():
             pred_cols = [
-                c for c in df.columns 
+                c
+                for c in df.columns
                 if c.startswith("prediction_") and c[11:].isdigit()
             ]
             # Keep only columns that exist in the dataframe to avoid KeyErrors
             keep_cols = [c for c in base_cols + pred_cols if c in df.columns]
-            
-            # Select the columns in-place conceptually 
+
+            # Select the columns in-place conceptually
             # (assigning a sub-slice reference back to the dict)
             splits_data[split_name] = df[keep_cols]
 
@@ -389,9 +398,7 @@ class PseudoBulkPipeline:
             # Build per-split kwargs — pass only this split's data
             split_ios_dir = os.path.join(self.ios_dir, split_name)
             os.makedirs(split_ios_dir, exist_ok=True)
-            ios_base_path = os.path.join(
-                split_ios_dir, "ios_deconvolution_data.pkl"
-            )
+            ios_base_path = os.path.join(split_ios_dir, "ios_deconvolution_data.pkl")
 
             shared_kwargs = dict(
                 splits={split_name: splits_data[split_name]},
@@ -439,18 +446,14 @@ class PseudoBulkPipeline:
 
             self._log_generation_exceptions(exceptions)
 
-    def _log_generation_exceptions(
-        self, exceptions: List[Any]
-    ) -> None:
+    def _log_generation_exceptions(self, exceptions: List[Any]) -> None:
         """Log a summary of generation exceptions."""
         if exceptions:
             self.logger.warning(
                 f"  {len(exceptions)} example(s) failed during generation."
             )
             for lbl, prop, err in exceptions[:5]:
-                self.logger.warning(
-                    f"    labels={lbl}, proportions={prop}: {err}"
-                )
+                self.logger.warning(f"    labels={lbl}, proportions={prop}: {err}")
 
     # ═══════════════════════════════════════════════════════════════
     #  Internal helpers
@@ -467,7 +470,9 @@ class PseudoBulkPipeline:
         if input_type == "raw_splits":
             data_path = self.config["data_path"]
             for split_name in splits_cfg:
-                splits_data[split_name] = pd.read_parquet(os.path.join(data_path, f"{split_name}.parquet"))
+                splits_data[split_name] = pd.read_parquet(
+                    os.path.join(data_path, f"{split_name}.parquet")
+                )
         elif input_type == "pre_predicted":
             pickle_paths = self.config["pickle_paths"]
             first_pickle_file = pickle_paths[list(pickle_paths.keys())[0]]
@@ -476,11 +481,15 @@ class PseudoBulkPipeline:
                 for split_name in splits_cfg:
                     with open(pickle_paths[split_name], "rb") as f:
                         splits_data[split_name] = pickle.load(f)
-            else: 
-                predicted_dict_path = os.path.join("/".join(first_pickle_file.split("/")[:-1]), "predicted_reads.pkl")
+            else:
+                predicted_dict_path = os.path.join(
+                    "/".join(first_pickle_file.split("/")[:-1]), "predicted_reads.pkl"
+                )
                 with open(predicted_dict_path, "rb") as f:
                     splits_data = pickle.load(f)
-                if len(set(splits_data.keys()).intersection(splits_cfg))==len(splits_cfg):
+                if len(set(splits_data.keys()).intersection(splits_cfg)) == len(
+                    splits_cfg
+                ):
                     pass
                 else:
                     raise ValueError(
