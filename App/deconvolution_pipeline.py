@@ -34,7 +34,7 @@ from methyldl.deconvolution.least_squares_deconvolvers import (
     NNLSDeconvolver,
     PSLSDeconvolver,
 )
-from methyldl.deconvolution.linear_calibrator import LinearCalibrator
+from methyldl.calibration.linear_calibrator import LinearCalibrator
 from methyldl.deconvolution.xgbdeconvolver import (
     XGBoostDeconvolver,
     XGBDeconvolverConfig,

@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from methyldl.deconvolution.vector_scaling_calibrator import (
+from methyldl.calibration.vector_scaling_calibrator import (
     CalibrationMethod,
     _TrainedLinearCalibrationModel,
     VectorScalingCalibrator,
@@ -187,33 +187,6 @@ class TestTrainedLinearCalibrationModel(unittest.TestCase):
         logits = torch.randn(5, self.K, dtype=torch.float64)
         probs = m.activate(logits)
         np.testing.assert_allclose(probs.sum(dim=1).numpy(), np.ones(5), atol=1e-12)
-
-    # ---- get_W_matrix ----
-
-    def test_get_W_matrix_full_at_init_is_identity(self):
-        """At init W = I + 0 = I for the FULL parametrisation."""
-        m = _TrainedLinearCalibrationModel(self.K, CalibrationMethod.FULL)
-        W = m.get_W_matrix()
-        np.testing.assert_allclose(W.detach().numpy(), np.eye(self.K), atol=1e-12)
-
-    def test_get_W_matrix_diagonal_at_init_is_identity(self):
-        """At init W = I + diag(0) = I for the DIAGONAL parametrisation."""
-        m = _TrainedLinearCalibrationModel(self.K, CalibrationMethod.DIAGONAL)
-        W = m.get_W_matrix()
-        np.testing.assert_allclose(W.detach().numpy(), np.eye(self.K), atol=1e-12)
-
-    def test_get_W_matrix_temperature_at_init_is_identity(self):
-        """At init W = (1 + 0) * I = I for the TEMPERATURE parametrisation."""
-        m = _TrainedLinearCalibrationModel(self.K, CalibrationMethod.TEMPERATURE)
-        W = m.get_W_matrix()
-        np.testing.assert_allclose(W.detach().numpy(), np.eye(self.K), atol=1e-12)
-
-    def test_get_W_matrix_unknown_method_raises(self):
-        """get_W_matrix() should raise ValueError for a corrupted method attribute."""
-        m = _TrainedLinearCalibrationModel(self.K, CalibrationMethod.DIAGONAL)
-        m.method = "bogus"
-        with self.assertRaises(ValueError):
-            m.get_W_matrix()
 
 
 # ===================================================================

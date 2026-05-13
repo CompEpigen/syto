@@ -10,7 +10,7 @@ from sklearn.utils.validation import check_is_fitted
 
 def _project_onto_simplex(unnorm_pred: np.ndarray) -> np.ndarray:
     """Project each row of v onto the probability simplex (Duchi et al., 2008).
-    
+
     Args:
         unnorm_pred: A 2D array of shape (n_samples, n_classes) containing the unnormalized
         calibrated predictions.
@@ -24,6 +24,7 @@ def _project_onto_simplex(unnorm_pred: np.ndarray) -> np.ndarray:
     theta = (cssv[np.arange(n), rho] - 1) / (rho + 1.0)
     return np.maximum(unnorm_pred - theta[:, np.newaxis], 0)
 
+
 def _clip0_normalize(unnorm_pred: np.ndarray) -> np.ndarray:
     """Clip negative values to zero and normalize each row to sum to 1.
 
@@ -34,6 +35,7 @@ def _clip0_normalize(unnorm_pred: np.ndarray) -> np.ndarray:
     clipped = np.maximum(unnorm_pred, 0)
     row_sums = clipped.sum(axis=1, keepdims=True)
     return clipped / np.maximum(row_sums, 1e-12)
+
 
 class LinearCalibrator(BaseEstimator, RegressorMixin):
     """

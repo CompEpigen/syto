@@ -26,8 +26,8 @@ import pandas as pd
 
 # ── Project imports ───────────────────────────────────────────────
 from methyldl.deconvolution.evaluation import compute_deconvolution_metrics
-from methyldl.deconvolution.linear_calibrator import LinearCalibrator
-from methyldl.deconvolution.vector_scaling_calibrator import VectorScalingCalibratorCV
+from methyldl.calibration.linear_calibrator import LinearCalibrator
+from methyldl.calibration.vector_scaling_calibrator import VectorScalingCalibratorCV
 
 # ══════════════════════════════════════════════════════════════════
 #  Configuration
