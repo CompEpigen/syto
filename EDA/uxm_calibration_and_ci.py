@@ -156,8 +156,7 @@ def run_calibration(val_pred, test_pred, y_valid, y_test, deconv_out):
     linear_cal_path = os.path.join(deconv_out, "linear_calibrator.npz")
     if os.path.exists(linear_cal_path):
         logger.info("  Found existing calibrator, loading: %s", linear_cal_path)
-        linear_calibrator = LinearCalibrator()
-        linear_calibrator.load(linear_cal_path)
+        linear_calibrator = LinearCalibrator.load(linear_cal_path)
     else:
         linear_calibrator = LinearCalibrator()
         linear_calibrator.fit(val_pred_loaded, y_valid)

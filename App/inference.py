@@ -45,7 +45,6 @@ from methyldl.deconvolution.least_squares_deconvolvers import (
 
 from methyldl.deconvolution.xgbdeconvolver import (
     XGBoostDeconvolver,
-    XGBDeconvolverConfig,
 )
 
 from methyldl.calibration.linear_calibrator import LinearCalibrator
@@ -53,7 +52,7 @@ from methyldl.calibration.vector_scaling_calibrator import (
     VectorScalingCalibratorCV,
 )
 
-LINEAR_NORM_METHODS = ["clip01-normalize", "clip0-normalize", "simplex-projection"]
+LINEAR_NORM_METHODS = ["clip0-normalize", "simplex-projection"]
 
 
 class InferencePipeline:
@@ -82,7 +81,7 @@ class InferencePipeline:
 
         # ── Load labels dictionary ──────────────────────────────────────
         labels_dict_path = config["labels_dict_path"]
-        with open(labels_dict_path, "r") as f:
+        with open(labels_dict_path, "r", encoding="utf-8") as f:
             # JSON keys are strings; convert to {int: str}
             raw = json.load(f)
             self.labels_dict: Dict[int, str] = {int(k): v for k, v in raw.items()}
@@ -141,6 +140,7 @@ class InferencePipeline:
 
     def run(self) -> List[Tuple[str, str, np.ndarray]]:
         """Execute the full inference pipeline end-to-end."""
+        # pylint: disable=attribute-defined-outside-init
 
         self.skip_classification = False
         # ── Stage 1: obtain processed reads ─────────────────────────────
@@ -245,7 +245,8 @@ class InferencePipeline:
         )
         if not len(df):
             self.logger.warning(
-                "The dataset has 0 reads after applying all samtools filters. The attempt will be made to reparse .bam without applying flag filters"
+                "The dataset has 0 reads after applying all samtools filters. "
+                "The attempt will be made to reparse .bam without applying flag filters"
             )
             df = process_bam_with_chunking(
                 bam_path=bam_path,
@@ -262,7 +263,8 @@ class InferencePipeline:
             )
         if not len(df):
             self.logger.warning(
-                "Setting exclude_flags=None and require_flags=None didn't help. The processing of this file will be terminated."
+                "Setting exclude_flags=None and require_flags=None didn't help. "
+                "The processing of this file will be terminated."
             )
             return None
 
@@ -280,9 +282,9 @@ class InferencePipeline:
             df.rename(columns={"original_seq": "seq"}, inplace=True)
             df["read_end"] = df["read_start"] + df["seq"].apply(len)
             df["read_name"] = range(len(df))
-            df["label"] = (
-                0  # TODO: temporary set here to avoid eval loop crashing the predict. MUST FIX IN THE FUTURE IN THE EVAL LOOP!!!
-            )
+            # TODO: temporary set here to avoid eval loop crashing the predict.
+            # MUST FIX IN THE FUTURE IN THE EVAL LOOP!!!
+            df["label"] = 0
         else:
             with open(path, "rb") as f:
                 df = pickle.load(f)
@@ -573,7 +575,7 @@ class InferencePipeline:
                     )
                     results.extend(calibrated)
 
-            except Exception as e:
+            except Exception as e:  # pylint: disable=broad-exception-caught
                 self.logger.error(
                     f"Deconvolution method '{name}' failed: {e}", exc_info=True
                 )
@@ -623,8 +625,7 @@ class InferencePipeline:
         linear_path = calibrators_dir / "linear_calibrator.npz"
         if linear_path.exists():
             self.logger.info(f"  Loading linear calibrator from {linear_path}")
-            linear_cal = LinearCalibrator()
-            linear_cal.load(str(linear_path))
+            linear_cal = LinearCalibrator.load(linear_path)
 
             for norm_method in LINEAR_NORM_METHODS:
                 short_name = norm_method.replace("-", "_")
