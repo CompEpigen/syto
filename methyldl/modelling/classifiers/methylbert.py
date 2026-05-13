@@ -32,7 +32,9 @@ from copy import deepcopy
 import multiprocessing as mp
 from functools import partial
 import pickle
-from methyldl.modelling.common import DMRAttentionClassifier
+from methyldl.modelling.gr_group_attention_classification_head import (
+    GRGAttentionClassificationHead,
+)
 from methyldl.modelling.loss import ConfidenceWeightedCrossEntropy, OnTargetSoftLoss
 from torch.utils.data import DataLoader, Sampler
 
@@ -475,7 +477,7 @@ class MethylBertEmbeddedDMR(BertPreTrainedModel):
 
         elif classifier_implementation == "dmr_attention_based":
             print("Using attention-based classifier with DMR context")
-            self.classifier = DMRAttentionClassifier(config)
+            self.classifier = GRGAttentionClassificationHead(config)
             # These won't be used in attention mode but set to None for clarity
             self.read_classifier = None
             self.dmr_encoder = None

@@ -1,22 +1,26 @@
-import numpy as np
-import pandas as pd
 import os
 import os.path
+from datetime import datetime
+import time
+from collections import defaultdict
+
+import numpy as np
+import pandas as pd
+from tqdm import tqdm
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
-from methyldl.modelling.classifiers.minirnns.minRNNs import BiMinGRU
-from collections import defaultdict
-import time
-from methyldl.modelling.common import DMRAttentionClassifier
+
+from methyldl.modelling.gr_group_attention_classification_head import (
+    GRGAttentionClassificationHead,
+)
 from methyldl.modelling.loss import ConfidenceWeightedCrossEntropy
-from tqdm import tqdm
-from datetime import datetime
+from methyldl.modelling.classifiers.minirnns.minRNNs import BiMinGRU
 
 
 class DISMIRConfig:
-    """Simple config class for DMRAttentionClassifier compatibility."""
+    """Simple config class for GRGAttentionClassificationHead compatibility."""
 
     def __init__(
         self,
@@ -53,7 +57,7 @@ class DISMIRNet(nn.Module):
     9. Dense -> Sigmoid
 
     DMR_ATTENTION_BASED CLASSIFIER:
-    Uses DMRAttentionClassifier on the sequence output from encoder (before flatten).
+    Uses GRGAttentionClassificationHead on the sequence output from encoder (before flatten).
     """
 
     def __init__(
@@ -168,7 +172,7 @@ class DISMIRNet(nn.Module):
             hidden_dropout_prob=dropout_prob,
             layer_norm_eps=1e-12,
         )
-        self.dmr_classifier = DMRAttentionClassifier(config)
+        self.dmr_classifier = GRGAttentionClassificationHead(config)
 
     def _forward_encoder(self, x, parallel_scan=True):
         """
@@ -476,7 +480,7 @@ class Dismir:
                 )
 
         # Set up loss function
-        # Note: DMRAttentionClassifier returns raw logits (no sigmoid), so we need different loss
+        # Note: GRGAttentionClassificationHead returns raw logits (no sigmoid), so we need different loss
         if classifier_type == "vanilla":
             if num_labels == 1:
                 self.criterion = nn.BCELoss()
@@ -528,8 +532,7 @@ class Dismir:
 
         onehot = np.zeros((len(dna_seq), self.max_sequence_length, 5), dtype=np.int32)
 
-        for i in range(len(dna_seq)):
-            tmp_seq = dna_seq[i]
+        for i, tmp_seq in enumerate(dna_seq):
             tmp_methylation = c_methylation_seq[i]
             for j in range(min(len(tmp_seq), self.max_sequence_length)):
                 if tmp_methylation[j] == "1":

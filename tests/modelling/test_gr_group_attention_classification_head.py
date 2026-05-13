@@ -3,7 +3,9 @@ from types import SimpleNamespace
 
 import torch
 
-from methyldl.modelling.common import DMRAttentionClassifier
+from methyldl.modelling.gr_group_attention_classification_head import (
+    GRGAttentionClassificationHead,
+)
 
 
 def build_test_config(
@@ -14,7 +16,7 @@ def build_test_config(
     hidden_dropout_prob=0.0,
     layer_norm_eps=1e-12,
 ):
-    """Create a minimal configuration object for DMRAttentionClassifier tests."""
+    """Create a minimal configuration object for GRGAttentionClassificationHead tests."""
     return SimpleNamespace(
         hidden_size=hidden_size,
         num_labels=num_labels,
@@ -25,14 +27,14 @@ def build_test_config(
     )
 
 
-class TestDMRAttentionClassifier(unittest.TestCase):
+class TestGRGAttentionClassificationHead(unittest.TestCase):
     """Exercise the public behavior of the DMR attention classifier."""
 
     def setUp(self):
         """Create a deterministic classifier and reusable test inputs."""
         torch.manual_seed(7)
         self.config = build_test_config()
-        self.classifier = DMRAttentionClassifier(self.config)
+        self.classifier = GRGAttentionClassificationHead(self.config)
         self.classifier.eval()
 
     def test_initialization_builds_expected_layers(self):

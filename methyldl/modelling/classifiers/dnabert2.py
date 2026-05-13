@@ -27,7 +27,9 @@ from methyldl.modelling.utils import calculate_batch_size
 from methyldl.data.dataset import *
 from safetensors.torch import load_file
 from transformers.models.bert.configuration_bert import BertConfig
-from methyldl.modelling.common import DMRAttentionClassifier
+from methyldl.modelling.gr_group_attention_classification_head import (
+    GRGAttentionClassificationHead,
+)
 from methyldl.modelling.loss import ConfidenceWeightedCrossEntropy
 
 
@@ -278,7 +280,7 @@ class BertForSequenceClassification(BertPreTrainedModel):
         else:
             self.config.num_dmr_labels = num_dmr_labels
             self.config.num_labels = num_labels
-            self.classifier = DMRAttentionClassifier(self.config)
+            self.classifier = GRGAttentionClassificationHead(self.config)
         # Initialize weights and apply final processing
         self.post_init()
 

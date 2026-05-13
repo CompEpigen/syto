@@ -5,7 +5,7 @@ import torch.nn.functional as F
 import math
 
 
-class DMRAttentionClassifier(nn.Module):
+class GRGAttentionClassificationHead(nn.Module):
     """
     Attention-based classifier that uses DMR information as contextual labels
     for sequence-level classification.
