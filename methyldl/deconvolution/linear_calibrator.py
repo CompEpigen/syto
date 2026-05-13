@@ -8,6 +8,33 @@ from sklearn.base import BaseEstimator, RegressorMixin
 from sklearn.utils.validation import check_is_fitted
 
 
+def _project_onto_simplex(unnorm_pred: np.ndarray) -> np.ndarray:
+    """Project each row of v onto the probability simplex (Duchi et al., 2008).
+    
+    Args:
+        unnorm_pred: A 2D array of shape (n_samples, n_classes) containing the unnormalized
+        calibrated predictions.
+    """
+    n, d = unnorm_pred.shape
+    u = np.sort(unnorm_pred, axis=1)[:, ::-1]
+    cssv = np.cumsum(u, axis=1)
+    j = np.arange(1, d + 1)
+    cond = u * j > (cssv - 1)
+    rho = d - 1 - np.argmax(cond[:, ::-1], axis=1)
+    theta = (cssv[np.arange(n), rho] - 1) / (rho + 1.0)
+    return np.maximum(unnorm_pred - theta[:, np.newaxis], 0)
+
+def _clip0_normalize(unnorm_pred: np.ndarray) -> np.ndarray:
+    """Clip negative values to zero and normalize each row to sum to 1.
+
+    Args:
+        unnorm_pred: A 2D array of shape (n_samples, n_classes) containing the unnormalized
+        calibrated predictions.
+    """
+    clipped = np.maximum(unnorm_pred, 0)
+    row_sums = clipped.sum(axis=1, keepdims=True)
+    return clipped / np.maximum(row_sums, 1e-12)
+
 class LinearCalibrator(BaseEstimator, RegressorMixin):
     """
     For each cell type, we fit a linear regression between the predicted and true proportions
@@ -16,7 +43,6 @@ class LinearCalibrator(BaseEstimator, RegressorMixin):
     """
 
     _VALID_NORM_METHODS = (
-        "clip01-normalize",
         "clip0-normalize",
         "simplex-projection",
     )
@@ -64,28 +90,16 @@ class LinearCalibrator(BaseEstimator, RegressorMixin):
         """Report whether scikit-learn can treat this estimator as fitted."""
         return self.slopes is not None and self.intercepts is not None
 
-    @staticmethod
-    def _project_onto_simplex(v):
-        """Project each row of v onto the probability simplex (Duchi et al., 2008)."""
-        n, d = v.shape
-        u = np.sort(v, axis=1)[:, ::-1]
-        cssv = np.cumsum(u, axis=1)
-        j = np.arange(1, d + 1)
-        cond = u * j > (cssv - 1)
-        rho = d - 1 - np.argmax(cond[:, ::-1], axis=1)
-        theta = (cssv[np.arange(n), rho] - 1) / (rho + 1.0)
-        return np.maximum(v - theta[:, np.newaxis], 0)
-
     def predict(
         self,
         X: np.ndarray,
-        norm_method="clip01-normalize",
+        norm_method: str = "simplex-projection",
     ) -> Union[np.ndarray, tuple[np.ndarray, np.ndarray]]:
         """Apply the learned calibration and return corrected predictions.
 
         Args:
             X: Raw predicted proportions with shape ``(n_samples, n_cell_types)``.
-            norm_method: One of ``"clip01-normalize"``, ``"clip0-normalize"``, ``"simplex-projection"``.
+            norm_method: One of ``"clip0-normalize"``, ``"simplex-projection"``.
 
         Returns:
             A tuple containing the normalized predictions, followed by
@@ -109,18 +123,10 @@ class LinearCalibrator(BaseEstimator, RegressorMixin):
         # Linear correction can push some values slightly outside the simplex.
         # Project back onto the simplex using the chosen method.
         final_predictions = None
-        if norm_method == "clip01-normalize":
-            clipped = np.clip(adjusted_predictions, 0, 1)
-            final_predictions = clipped / np.clip(
-                clipped.sum(axis=1, keepdims=True), 1e-8, None
-            )
-        elif norm_method == "clip0-normalize":
-            clipped = np.clip(adjusted_predictions, 0, None)
-            final_predictions = clipped / np.clip(
-                clipped.sum(axis=1, keepdims=True), 1e-8, None
-            )
+        if norm_method == "clip0-normalize":
+            final_predictions = _clip0_normalize(adjusted_predictions)
         elif norm_method == "simplex-projection":
-            final_predictions = self._project_onto_simplex(adjusted_predictions)
+            final_predictions = _project_onto_simplex(adjusted_predictions)
 
         return final_predictions, adjusted_predictions
 

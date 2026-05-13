@@ -120,7 +120,7 @@ class TestLinearCalibrator(unittest.TestCase):
             calibrator.predict(np.array([[0.2, 0.3, 0.5]], dtype=float))
 
     def test_predict_applies_affine_adjustment_and_row_normalization(self):
-        """predict should return raw affine outputs plus clip01-normalized calibrated rows."""
+        """predict should return raw affine outputs plus clip0-normalized calibrated rows."""
         calibrator = self._make_fitted_calibrator(
             slopes=[2.0, 0.5],
             intercepts=[0.1, 0.2],
@@ -133,7 +133,7 @@ class TestLinearCalibrator(unittest.TestCase):
             dtype=float,
         )
 
-        normalized, adjusted = calibrator.predict(X, norm_method="clip01-normalize")
+        normalized, adjusted = calibrator.predict(X, norm_method="clip0-normalize")
 
         expected_adjusted = np.array(
             [
@@ -145,7 +145,7 @@ class TestLinearCalibrator(unittest.TestCase):
         expected_normalized = np.array(
             [
                 [5.0 / 9.0, 4.0 / 9.0],
-                [10.0 / 13.0, 3.0 / 13.0],
+                [11.0 / 14.0, 3.0 / 14.0],
             ],
             dtype=float,
         )
@@ -153,52 +153,6 @@ class TestLinearCalibrator(unittest.TestCase):
         np.testing.assert_allclose(adjusted, expected_adjusted, atol=1e-10)
         np.testing.assert_allclose(normalized, expected_normalized, atol=1e-10)
         np.testing.assert_allclose(normalized.sum(axis=1), np.ones(X.shape[0]))
-
-    def test_predict_clip01_clips_out_of_bounds_values_and_preserves_zero_rows(self):
-        """clip01-normalize should clip to [0, 1] and avoid dividing by zero on empty rows."""
-        calibrator = self._make_fitted_calibrator(
-            slopes=[2.0, -3.0],
-            intercepts=[0.8, -0.1],
-        )
-        X = np.array(
-            [
-                [0.30, 0.20],
-                [0.00, 1.00],
-            ],
-            dtype=float,
-        )
-
-        normalized, adjusted = calibrator.predict(X, norm_method="clip01-normalize")
-
-        expected_adjusted = np.array(
-            [
-                [1.40, -0.70],
-                [0.80, -3.10],
-            ],
-            dtype=float,
-        )
-        expected_normalized = np.array(
-            [
-                [1.0, 0.0],
-                [1.0, 0.0],
-            ],
-            dtype=float,
-        )
-
-        np.testing.assert_allclose(adjusted, expected_adjusted, atol=1e-10)
-        np.testing.assert_allclose(normalized, expected_normalized, atol=1e-10)
-
-        zero_row_calibrator = self._make_fitted_calibrator(
-            slopes=[1.0, 1.0],
-            intercepts=[-1.0, -1.0],
-        )
-
-        zero_row_normalized, zero_row_adjusted = zero_row_calibrator.predict(
-            np.array([[0.1, 0.2]], dtype=float), norm_method="clip01-normalize"
-        )
-
-        np.testing.assert_allclose(zero_row_adjusted, np.array([[-0.9, -0.8]]))
-        np.testing.assert_allclose(zero_row_normalized, np.zeros((1, 2)))
 
     def test_predict_rejects_invalid_norm_method(self):
         """predict should reject an unrecognised normalisation method."""
