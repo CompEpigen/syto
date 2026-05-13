@@ -1,8 +1,10 @@
 """Linear post-processing utilities for deconvolution predictions."""
 
+import warnings
 from typing import Union
 from pathlib import Path
 
+import joblib
 import numpy as np
 from scipy.stats import linregress
 from sklearn.utils.validation import check_is_fitted
@@ -136,21 +138,52 @@ class LinearCalibrator(CrossValidationCompatibleModel, BaseEstimator):
     def save(self, path: Union[str, Path], **kwargs):
         """Save the fitted calibration parameters to a file."""
         check_is_fitted(self)
-        np.savez(
-            path,
-            slopes=self.slopes,
-            intercepts=self.intercepts,
-            r_values=self.r_values,
-            p_values=self.p_values,
-            std_errs=self.std_errs,
-        )
+        path = Path(path)
+        file_extension = path.suffix
+        path.parent.mkdir(parents=True, exist_ok=True)
 
-    def load(self, path: Union[str, Path], **kwargs):
+        if file_extension == ".joblib":
+            joblib.dump(value=self, filename=path)
+        elif file_extension == ".npz":
+            warnings.warn(
+                "Saving as .npz is deprecated and is left only for backward compatibility."
+                "Please switch to .joblib.",
+                DeprecationWarning,
+            )
+            np.savez(
+                path,
+                slopes=self.slopes,
+                intercepts=self.intercepts,
+                r_values=self.r_values,
+                p_values=self.p_values,
+                std_errs=self.std_errs,
+            )
+        else:
+            raise ValueError(f"Unsupported file extension: {file_extension}")
+
+    @classmethod
+    def load(cls, path: Union[str, Path], **kwargs):
         """Load calibration parameters from a file and set the fitted attributes."""
-        loaded = np.load(path)
-        self.slopes = loaded["slopes"].tolist()
-        self.intercepts = loaded["intercepts"].tolist()
-        self.r_values = loaded["r_values"].tolist()
-        self.p_values = loaded["p_values"].tolist()
-        self.std_errs = loaded["std_errs"].tolist()
-        self.n_cell_types = len(self.slopes)
+        path = Path(path)
+        file_extension = path.suffix
+
+        if file_extension == ".joblib":
+            model = joblib.load(path)
+            if not isinstance(model, cls):
+                raise ValueError(f"Loaded object is not a {cls.__name__} instance")
+            return model
+        elif file_extension == ".npz":
+            warnings.warn(
+                "Loading from .npz is deprecated and is left only for backward compatibility."
+                "Please switch to .joblib.",
+                DeprecationWarning,
+            )
+            model_parameters = np.load(path)
+            model = cls()
+            model.slopes = model_parameters["slopes"].tolist()
+            model.intercepts = model_parameters["intercepts"].tolist()
+            model.r_values = model_parameters["r_values"].tolist()
+            model.p_values = model_parameters["p_values"].tolist()
+            model.std_errs = model_parameters["std_errs"].tolist()
+            model.n_cell_types = len(model.slopes)
+            return model

@@ -338,7 +338,7 @@ class TestLinearCalibrator(unittest.TestCase):
         np.testing.assert_allclose(normalized, np.array([[0.45, 0.55]]), atol=1e-10)
         np.testing.assert_allclose(normalized.sum(axis=1), np.ones(1))
 
-    def test_save_persists_all_fitted_statistics(self):
+    def test_save_with_npz_persists_all_fitted_statistics(self):
         """Saving should serialize every fitted calibration array to an NPZ file."""
         calibrator = self._make_fitted_calibrator(
             slopes=[0.5, 1.5],
@@ -360,6 +360,30 @@ class TestLinearCalibrator(unittest.TestCase):
             np.testing.assert_allclose(saved["p_values"], np.array([0.01, 0.99]))
             np.testing.assert_allclose(saved["std_errs"], np.array([0.05, 0.15]))
 
+    def test_save_with_joblib_persists_all_fitted_statistics(self):
+        """Saving should serialize every fitted calibration attribute to a JOBLIB file."""
+        calibrator = self._make_fitted_calibrator(
+            slopes=[0.5, 1.5],
+            intercepts=[0.1, -0.2],
+        )
+        calibrator.r_values = [0.25, -0.75]
+        calibrator.p_values = [0.01, 0.99]
+        calibrator.std_errs = [0.05, 0.15]
+
+        with TemporaryDirectory() as tmp_dir:
+            filepath = f"{tmp_dir}/calibration_params.joblib"
+
+            calibrator.save(filepath)
+
+            loaded = LinearCalibrator.load(filepath)
+            self.assertTrue(loaded.__sklearn_is_fitted__())
+            self.assertEqual(loaded.n_cell_types, 2)
+            self.assertEqual(loaded.slopes, [0.5, 1.5])
+            self.assertEqual(loaded.intercepts, [0.1, -0.2])
+            self.assertEqual(loaded.r_values, [0.25, -0.75])
+            self.assertEqual(loaded.p_values, [0.01, 0.99])
+            self.assertEqual(loaded.std_errs, [0.05, 0.15])
+
     def test_load_restores_fitted_state(self):
         """Loading should repopulate all fitted attributes from a saved NPZ file."""
         source = self._make_fitted_calibrator(
@@ -369,16 +393,14 @@ class TestLinearCalibrator(unittest.TestCase):
         source.r_values = [0.9, 0.1, -0.4]
         source.p_values = [0.001, 0.25, 0.8]
         source.std_errs = [0.02, 0.03, 0.07]
-        loaded = LinearCalibrator()
 
         with TemporaryDirectory() as tmp_dir:
             filepath = f"{tmp_dir}/calibration_params.npz"
             source.save(filepath)
 
             # pylint: disable-next=assignment-from-no-return
-            load_result = loaded.load(filepath)
+            loaded = LinearCalibrator.load(filepath)
 
-        self.assertIsNone(load_result)
         self.assertTrue(loaded.__sklearn_is_fitted__())
         self.assertEqual(loaded.n_cell_types, 3)
         self.assertEqual(loaded.slopes, [0.4, 1.2, -0.6])
