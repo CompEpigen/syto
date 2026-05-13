@@ -5,7 +5,7 @@ import numpy as np
 from scipy.stats import linregress
 from sklearn.exceptions import NotFittedError
 
-from methyldl.deconvolution.linear_calibrator import LinearCalibrator
+from methyldl.calibration.linear_calibrator import LinearCalibrator
 
 
 class TestLinearCalibrator(unittest.TestCase):

@@ -8,17 +8,17 @@ Kull et al. (NeurIPS 2019), with log-transformed inputs and softmax output.
 Uses PyTorch for optimization with mini-batch SGD/Adam and early stopping.
 """
 
-import json
 from enum import Enum
 from pathlib import Path
 from typing import Optional, Union
 
-from sklearn.model_selection import KFold, ParameterGrid
+import json
 from tqdm import tqdm
 import numpy as np
 import torch
 import torch.nn as nn
 from sklearn.base import BaseEstimator, RegressorMixin
+from sklearn.model_selection import KFold, ParameterGrid
 
 
 class CalibrationMethod(Enum):
@@ -49,9 +49,7 @@ class _TrainedLinearCalibrationModel(nn.Module):
     - Temperature: logits = (1 + t_delta) * x
 
     All delta parameters are initialised to zero, so the starting point
-    is the identity calibration map (no-op). This makes L2 regularisation
-    directly penalise deviation from identity, without needing the ODIR
-    workaround of excluding diagonal elements.
+    is the identity calibration map (no-op).
 
     Args:
         n_classes: Number of classes (k).
@@ -115,30 +113,6 @@ class _TrainedLinearCalibrationModel(nn.Module):
             (N, K) tensor of calibrated probabilities.
         """
         return torch.softmax(logits, dim=1)
-
-    def get_W_matrix(self) -> torch.Tensor:
-        """Return the full (k x k) effective weight matrix W = I + delta.
-
-        For diagonal and temperature methods, this reconstructs the
-        equivalent full matrix so that inspection code can treat all
-        methods uniformly.
-
-        Returns:
-            (k, k) tensor representing the calibration weight matrix.
-        """
-        I = torch.eye(
-            self.n_classes,
-            dtype=torch.float64,
-            device=next(self.parameters()).device,
-        )
-        if self.method == CalibrationMethod.FULL:
-            return I + self.W_delta
-        elif self.method == CalibrationMethod.DIAGONAL:
-            return I + torch.diag(self.diag_delta)
-        elif self.method == CalibrationMethod.TEMPERATURE:
-            return (1.0 + self.t_delta) * I
-        else:
-            raise ValueError(f"Unknown method: {self.method}")
 
 
 class VectorScalingCalibrator(BaseEstimator, RegressorMixin):
