@@ -20,7 +20,7 @@ class AbstractLSDeconvolver(BaseEstimator, RegressorMixin):
     Parent class of least-squares-based deconvolution methods.
     """
 
-    def fit(self, X: np.ndarray, y: np.ndarray):
+    def fit(self, X: np.ndarray, y: np.ndarray):  # pylint: disable=invalid-name
         """
         Store the reference prediction matrix built from pure reference predictions.
 
@@ -34,6 +34,7 @@ class AbstractLSDeconvolver(BaseEstimator, RegressorMixin):
         Returns:
             The fitted AbstractLSDeconvolver instance.
         """
+        # pylint: disable=attribute-defined-outside-init
         assert X.ndim == 2, "X must be a 2D matrix of shape (n_cell_types, n_features)"
         self.n_cell_types_ = len(y)
         self.n_features_ = X.shape[1]
@@ -84,9 +85,12 @@ class AbstractLSDeconvolver(BaseEstimator, RegressorMixin):
         return model
 
     def predict_single_sample(self, x: np.ndarray) -> np.ndarray:
+        """Predict mixture proportions for a single sample."""
         raise NotImplementedError("Subclasses must implement predict_single_sample")
 
-    def _predict_chunk_sequential(self, X_chunk: np.ndarray) -> np.ndarray:
+    def _predict_chunk_sequential(
+        self, X_chunk: np.ndarray  # pylint: disable=invalid-name
+    ) -> np.ndarray:
         """
         Predict NNLS outputs for a chunk of samples sequentially.
 
@@ -169,7 +173,10 @@ class NNLSDeconvolver(AbstractLSDeconvolver):
         return mixture_prop_pred, mixture_prop_unnorm_pred, residuals
 
     def _predict_parallel(
-        self, X: np.ndarray, n_workers: int = 1, chunk_size: int = 100
+        self,
+        X: np.ndarray,  # pylint: disable=invalid-name
+        n_workers: int = 1,
+        chunk_size: int = 100,
     ) -> np.ndarray:
         """
         Predict mixture proportions for a batch of samples in parallel.
@@ -212,7 +219,9 @@ class NNLSDeconvolver(AbstractLSDeconvolver):
         residuals = np.concatenate([res[2] for res in results])
         return mixture_prop_pred, mixture_prop_unnorm_pred, residuals
 
-    def _predict_sequential(self, X: np.ndarray) -> np.ndarray:
+    def _predict_sequential(
+        self, X: np.ndarray  # pylint: disable=invalid-name
+    ) -> np.ndarray:
         """
         Predict mixture proportions for a batch of samples sequentially.
 
@@ -242,7 +251,10 @@ class NNLSDeconvolver(AbstractLSDeconvolver):
         return mixture_prop_pred, mixture_prop_unnorm_pred, residuals
 
     def predict(
-        self, X: np.ndarray, n_workers: int = 1, chunk_size: int = 100
+        self,
+        X: np.ndarray,  # pylint: disable=invalid-name
+        n_workers: int = 1,
+        chunk_size: int = 100,
     ) -> np.ndarray:
         """
         Predict mixture proportions for a batch of samples.
@@ -300,6 +312,7 @@ class PSLSDeconvolver(AbstractLSDeconvolver):
         Returns:
             The fitted PSLSDeconvolver instance.
         """
+        # pylint: disable=attribute-defined-outside-init
         # call AbstractLSDeconvolver.fit to store the reference prediction matrix and related state
         super().fit(X, y)
 
@@ -330,6 +343,7 @@ class PSLSDeconvolver(AbstractLSDeconvolver):
         """Restore state and create a fresh thread-local CVXPY cache."""
         self.__dict__.update(state)
         if self.solver_type == "cvxpy":
+            # pylint: disable=attribute-defined-outside-init
             self._cvxpy_thread_cache_ = threading.local()
 
     def predict_single_sample_pgd(
@@ -376,7 +390,11 @@ class PSLSDeconvolver(AbstractLSDeconvolver):
         return w
 
     def predict_batch_pgd(
-        self, X: np.ndarray, max_iter=2000, tol=1e-5, verbose=False
+        self,
+        X: np.ndarray,  # pylint: disable=invalid-name
+        max_iter=2000,
+        tol=1e-5,
+        verbose=False,
     ) -> np.ndarray:
         """
         Predict mixture proportions for a batch of samples using projected gradient
@@ -502,7 +520,9 @@ class PSLSDeconvolver(AbstractLSDeconvolver):
         else:
             raise ValueError(f"Unsupported solver_type: {self.solver_type}")
 
-    def _predict_sequential(self, X: np.ndarray) -> np.ndarray:
+    def _predict_sequential(
+        self, X: np.ndarray  # pylint: disable=invalid-name
+    ) -> np.ndarray:
         """
         Predict mixture proportions for a batch of samples sequentially.
 
@@ -585,6 +605,7 @@ class PSLSDeconvolver(AbstractLSDeconvolver):
             results = list(
                 tqdm(
                     executor.map(
+                        # pylint: disable-next=unnecessary-lambda
                         lambda chunk: self._predict_chunk_sequential(chunk),
                         chunks,
                     ),
@@ -595,7 +616,12 @@ class PSLSDeconvolver(AbstractLSDeconvolver):
         mixture_prop_pred = np.vstack(results)
         return mixture_prop_pred
 
-    def predict(self, X: np.ndarray, n_workers: int = 1, chunk_size=100) -> np.ndarray:
+    def predict(
+        self,
+        X: np.ndarray,  # pylint: disable=invalid-name
+        n_workers: int = 1,
+        chunk_size=100,
+    ) -> np.ndarray:
         """
         Predict mixture proportions for a batch of samples.
 
