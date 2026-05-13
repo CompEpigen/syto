@@ -96,15 +96,13 @@ class TestLinearCalibrator(unittest.TestCase):
         with self.assertRaises(NotFittedError):
             calibrator.predict(np.array([[0.2, 0.8]], dtype=float))
 
-    def test_save_calibration_parameters_raises_when_not_fitted(self):
+    def test_save_raises_when_not_fitted(self):
         """Saving should reject calibrators that have not been fit yet."""
         calibrator = LinearCalibrator()
 
         with TemporaryDirectory() as tmp_dir:
             with self.assertRaises(NotFittedError):
-                calibrator.save_calibration_parameters(
-                    f"{tmp_dir}/unfitted_calibrator.npz"
-                )
+                calibrator.save(f"{tmp_dir}/unfitted_calibrator.npz")
 
     def test_predict_rejects_mismatched_number_of_cell_types(self):
         """predict should validate the feature dimension against fitted slopes."""
@@ -340,7 +338,7 @@ class TestLinearCalibrator(unittest.TestCase):
         np.testing.assert_allclose(normalized, np.array([[0.45, 0.55]]), atol=1e-10)
         np.testing.assert_allclose(normalized.sum(axis=1), np.ones(1))
 
-    def test_save_calibration_parameters_persists_all_fitted_statistics(self):
+    def test_save_persists_all_fitted_statistics(self):
         """Saving should serialize every fitted calibration array to an NPZ file."""
         calibrator = self._make_fitted_calibrator(
             slopes=[0.5, 1.5],
@@ -353,7 +351,7 @@ class TestLinearCalibrator(unittest.TestCase):
         with TemporaryDirectory() as tmp_dir:
             filepath = f"{tmp_dir}/calibration_params.npz"
 
-            calibrator.save_calibration_parameters(filepath)
+            calibrator.save(filepath)
 
             saved = np.load(filepath)
             np.testing.assert_allclose(saved["slopes"], np.array([0.5, 1.5]))
@@ -362,7 +360,7 @@ class TestLinearCalibrator(unittest.TestCase):
             np.testing.assert_allclose(saved["p_values"], np.array([0.01, 0.99]))
             np.testing.assert_allclose(saved["std_errs"], np.array([0.05, 0.15]))
 
-    def test_load_calibration_parameters_restores_fitted_state(self):
+    def test_load_restores_fitted_state(self):
         """Loading should repopulate all fitted attributes from a saved NPZ file."""
         source = self._make_fitted_calibrator(
             slopes=[0.4, 1.2, -0.6],
@@ -375,10 +373,10 @@ class TestLinearCalibrator(unittest.TestCase):
 
         with TemporaryDirectory() as tmp_dir:
             filepath = f"{tmp_dir}/calibration_params.npz"
-            source.save_calibration_parameters(filepath)
+            source.save(filepath)
 
             # pylint: disable-next=assignment-from-no-return
-            load_result = loaded.load_calibration_parameters(filepath)
+            load_result = loaded.load(filepath)
 
         self.assertIsNone(load_result)
         self.assertTrue(loaded.__sklearn_is_fitted__())

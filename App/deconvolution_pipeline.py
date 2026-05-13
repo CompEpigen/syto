@@ -686,7 +686,7 @@ class DeconvolutionFittingPipeline:
         calib_path = os.path.join(
             self.output_dir, f"{deconv_name}_linear_calibrator.npz"
         )
-        calibrator.save_calibration_parameters(calib_path)
+        calibrator.save(calib_path)
         self.logger.info(f"    Saved calibrator to {calib_path}")
 
         return metrics

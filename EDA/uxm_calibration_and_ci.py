@@ -157,11 +157,11 @@ def run_calibration(val_pred, test_pred, y_valid, y_test, deconv_out):
     if os.path.exists(linear_cal_path):
         logger.info("  Found existing calibrator, loading: %s", linear_cal_path)
         linear_calibrator = LinearCalibrator()
-        linear_calibrator.load_calibration_parameters(linear_cal_path)
+        linear_calibrator.load(linear_cal_path)
     else:
         linear_calibrator = LinearCalibrator()
         linear_calibrator.fit(val_pred_loaded, y_valid)
-        linear_calibrator.save_calibration_parameters(linear_cal_path)
+        linear_calibrator.save(linear_cal_path)
         logger.info("  Saved linear calibrator to %s", linear_cal_path)
 
     for norm_method in LINEAR_NORM_METHODS:
@@ -236,8 +236,8 @@ def run_calibration(val_pred, test_pred, y_valid, y_test, deconv_out):
         val_vs = data["val_pred"]
         test_vs = data["test_pred"]
     else:
-        val_vs = vs_calibrator.predict_proba(val_pred_loaded)
-        test_vs = vs_calibrator.predict_proba(test_pred_loaded)
+        val_vs = vs_calibrator.predict(val_pred_loaded)
+        test_vs = vs_calibrator.predict(test_pred_loaded)
         np.savez_compressed(vs_pred_path, val_pred=val_vs, test_pred=test_vs)
 
     val_vs_m = compute_deconvolution_metrics(val_vs, y_valid)

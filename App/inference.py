@@ -624,7 +624,7 @@ class InferencePipeline:
         if linear_path.exists():
             self.logger.info(f"  Loading linear calibrator from {linear_path}")
             linear_cal = LinearCalibrator()
-            linear_cal.load_calibration_parameters(str(linear_path))
+            linear_cal.load(str(linear_path))
 
             for norm_method in LINEAR_NORM_METHODS:
                 short_name = norm_method.replace("-", "_")
@@ -647,7 +647,7 @@ class InferencePipeline:
             try:
                 vs_cal = VectorScalingCalibratorCV()
                 vs_cal.load(str(vs_path))
-                calib = vs_cal.predict_proba(props_2d)
+                calib = vs_cal.predict(props_2d)
                 results.append((base_name, calibrator_label, np.round(calib, 4)))
                 self.logger.info(f"    ✓ {base_name} + {calibrator_label}")
             except Exception as e:

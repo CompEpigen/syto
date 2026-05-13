@@ -1,11 +1,14 @@
 """Linear post-processing utilities for deconvolution predictions."""
 
 from typing import Union
+from pathlib import Path
 
 import numpy as np
 from scipy.stats import linregress
-from sklearn.base import BaseEstimator, RegressorMixin
 from sklearn.utils.validation import check_is_fitted
+from sklearn.base import BaseEstimator
+
+from methyldl.cross_validation_engine import CrossValidationCompatibleModel
 
 
 def _project_onto_simplex(unnorm_pred: np.ndarray) -> np.ndarray:
@@ -37,7 +40,7 @@ def _clip0_normalize(unnorm_pred: np.ndarray) -> np.ndarray:
     return clipped / np.maximum(row_sums, 1e-12)
 
 
-class LinearCalibrator(BaseEstimator, RegressorMixin):
+class LinearCalibrator(CrossValidationCompatibleModel, BaseEstimator):
     """
     For each cell type, we fit a linear regression between the predicted and true proportions
     on the validation set, and then we use the fitted slopes and intercepts to adjust
@@ -58,7 +61,7 @@ class LinearCalibrator(BaseEstimator, RegressorMixin):
         self.std_errs = None
         self.n_cell_types = None
 
-    def fit(self, X: np.ndarray, y: np.ndarray):
+    def fit(self, X: np.ndarray, y: np.ndarray, **kwargs):
         """Fit one linear calibration model per cell type.
 
         Args:
@@ -93,9 +96,7 @@ class LinearCalibrator(BaseEstimator, RegressorMixin):
         return self.slopes is not None and self.intercepts is not None
 
     def predict(
-        self,
-        X: np.ndarray,
-        norm_method: str = "simplex-projection",
+        self, X: np.ndarray, norm_method: str = "simplex-projection", **kwargs
     ) -> Union[np.ndarray, tuple[np.ndarray, np.ndarray]]:
         """Apply the learned calibration and return corrected predictions.
 
@@ -132,11 +133,11 @@ class LinearCalibrator(BaseEstimator, RegressorMixin):
 
         return final_predictions, adjusted_predictions
 
-    def save_calibration_parameters(self, filepath: str):
+    def save(self, path: Union[str, Path], **kwargs):
         """Save the fitted calibration parameters to a file."""
         check_is_fitted(self)
         np.savez(
-            filepath,
+            path,
             slopes=self.slopes,
             intercepts=self.intercepts,
             r_values=self.r_values,
@@ -144,9 +145,9 @@ class LinearCalibrator(BaseEstimator, RegressorMixin):
             std_errs=self.std_errs,
         )
 
-    def load_calibration_parameters(self, filepath: str):
+    def load(self, path: Union[str, Path], **kwargs):
         """Load calibration parameters from a file and set the fitted attributes."""
-        loaded = np.load(filepath)
+        loaded = np.load(path)
         self.slopes = loaded["slopes"].tolist()
         self.intercepts = loaded["intercepts"].tolist()
         self.r_values = loaded["r_values"].tolist()
