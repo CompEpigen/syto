@@ -63,7 +63,7 @@ class LinearCalibrator(AbstractCalibrator):
         self.n_cell_types = None
         self.logger = logger if logger is not None else logging.getLogger(__name__)
 
-    def fit(self, X: np.ndarray, y: np.ndarray, **kwargs):
+    def fit(self, X: np.ndarray, y: np.ndarray, **kwargs) -> "LinearCalibrator":
         """Fit one linear calibration model per cell type.
 
         Args:
@@ -93,13 +93,15 @@ class LinearCalibrator(AbstractCalibrator):
             self.p_values.append(p_value)
             self.std_errs.append(std_err)
 
+        return self
+
     def __sklearn_is_fitted__(self):
         """Report whether scikit-learn can treat this estimator as fitted."""
         return self.slopes is not None and self.intercepts is not None
 
     def predict(
         self, X: np.ndarray, norm_method: str = "simplex-projection", **kwargs
-    ) -> Union[np.ndarray, tuple[np.ndarray, np.ndarray]]:
+    ) -> np.ndarray:
         """Apply the learned calibration and return corrected predictions.
 
         Args:
@@ -107,8 +109,7 @@ class LinearCalibrator(AbstractCalibrator):
             norm_method: One of ``"clip0-normalize"``, ``"simplex-projection"``.
 
         Returns:
-            A tuple containing the normalized predictions, followed by
-            the raw affine-adjusted predictions before normalization.
+            The normalized calibrated predictions.
         """
         check_is_fitted(self)
         assert X.shape[1] == len(
@@ -133,9 +134,9 @@ class LinearCalibrator(AbstractCalibrator):
         elif norm_method == "simplex-projection":
             final_predictions = _project_onto_simplex(adjusted_predictions)
 
-        return final_predictions, adjusted_predictions
+        return final_predictions
 
-    def save(self, path: Union[str, Path], **kwargs):
+    def save(self, path: Union[str, Path], **kwargs) -> None:
         """Save the fitted calibration parameters to a file."""
         check_is_fitted(self)
         path = Path(path)
@@ -161,7 +162,7 @@ class LinearCalibrator(AbstractCalibrator):
             raise ValueError(f"Unsupported file extension: {file_extension}")
 
     @classmethod
-    def load(cls, path: Union[str, Path], **kwargs):
+    def load(cls, path: Union[str, Path], **kwargs) -> "LinearCalibrator":
         """Load calibration parameters from a file and set the fitted attributes."""
         logger = kwargs.get("logger", logging.getLogger(__name__))
         path = Path(path)

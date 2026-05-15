@@ -185,7 +185,7 @@ class VectorScalingCalibrator(AbstractCalibrator):
         self.history_: dict[str, list] = {}
 
     @staticmethod
-    def _clip_and_log(X: np.ndarray) -> np.ndarray:
+    def _clip_and_log(X: np.ndarray) -> np.ndarray:  # pylint: disable=invalid-name
         """Clip probabilities away from 0/1 and take the natural log.
 
         Clipping to [eps, 1 - eps] prevents -inf/+inf values in the
@@ -200,7 +200,9 @@ class VectorScalingCalibrator(AbstractCalibrator):
         eps = np.finfo(X.dtype).tiny
         return np.log(np.clip(X, eps, 1.0 - eps))
 
-    def _prepare_input(self, X: np.ndarray) -> np.ndarray:
+    def _prepare_input(
+        self, X: np.ndarray # pylint: disable=invalid-name
+    ) -> np.ndarray:
         """Prepare input probabilities: for now just log-transform.
         In the future we could add other transformations or normalizations here.
 

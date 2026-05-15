@@ -15,20 +15,20 @@ class CrossValidationCompatibleModel(ABC):
     """Interface for models that can be used in the cross-validation engine."""
 
     @abstractmethod  # pylint: disable-next=invalid-name
-    def fit(self, X: np.ndarray, y: np.ndarray, **kwargs):
+    def fit(self, X: np.ndarray, y: np.ndarray, **kwargs) -> "CrossValidationCompatibleModel":
         """Fit the model to the training data."""
 
     @abstractmethod
-    def predict(self, X: np.ndarray, **kwargs):  # pylint: disable=invalid-name
+    def predict(self, X: np.ndarray, **kwargs) -> np.ndarray:  # pylint: disable=invalid-name
         """Predict on the test data."""
 
     @abstractmethod
-    def save(self, path: Union[str, Path], **kwargs):
+    def save(self, path: Union[str, Path], **kwargs) -> None:
         """Save the model to disk."""
 
     @classmethod
     @abstractmethod
-    def load(cls, path: Union[str, Path], **kwargs):
+    def load(cls, path: Union[str, Path], **kwargs) -> "CrossValidationCompatibleModel":
         """Load the model from disk and return an instance of the model."""
 
 

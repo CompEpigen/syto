@@ -23,7 +23,7 @@ class AbstractLSDeconvolver(AbstractDeconvolver):
 
     def fit(
         self, X: np.ndarray, y: np.ndarray, **kwargs  # pylint: disable=invalid-name
-    ):
+    ) -> "AbstractLSDeconvolver":
         """
         Store the reference prediction matrix built from pure reference predictions.
 
@@ -51,7 +51,7 @@ class AbstractLSDeconvolver(AbstractDeconvolver):
         )
         return self
 
-    def save(self, path: str, **kwargs):
+    def save(self, path: str, **kwargs) -> None:
         """Save the fitted model to disk using joblib.
 
         Args:
@@ -306,7 +306,7 @@ class PSLSDeconvolver(AbstractLSDeconvolver):
         self._cvxpy_fit_generation_ = -1
         self.solver_type = solver_type
 
-    def fit(self, X: np.ndarray, y: np.ndarray, **kwargs):
+    def fit(self, X: np.ndarray, y: np.ndarray, **kwargs) -> "PSLSDeconvolver":
         """
         Fit the deconvolver from pure reference predictions.
 
@@ -356,7 +356,7 @@ class PSLSDeconvolver(AbstractLSDeconvolver):
 
     def predict_single_sample_pgd(
         self, x: np.ndarray, max_iter=1000, tol=1e-5, verbose=False
-    ):
+    ) -> np.ndarray:
         """
         Predict mixture proportions for one sample using projected gradient descent.
 
@@ -450,7 +450,7 @@ class PSLSDeconvolver(AbstractLSDeconvolver):
         print(f"Warning: Reached max iterations {max_iter} without full convergence.")
         return w
 
-    def _build_cvxpy_problem(self):
+    def _build_cvxpy_problem(self) -> tuple[cp.Parameter, cp.Variable, cp.Problem]:
         """
         Build the reusable CVXPY problem for single-sample PSLS inference.
 
@@ -467,7 +467,7 @@ class PSLSDeconvolver(AbstractLSDeconvolver):
         problem = cp.Problem(objective, constraints)
         return x_param, w, problem
 
-    def _get_cvxpy_worker_problem(self):
+    def _get_cvxpy_worker_problem(self) -> tuple[cp.Parameter, cp.Variable, cp.Problem]:
         """
         Get the thread-local CVXPY problem associated with the current fit.
 
