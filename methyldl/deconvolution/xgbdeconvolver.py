@@ -281,6 +281,8 @@ class XGBoostDeconvolver(AbstractDeconvolver):
         train_metrics = compute_deconvolution_metrics(train_pred, y)
         train_loss = compute_combined_loss(train_pred, y, **loss_weights)
 
+        self.cv_metric = train_loss  # For cross-validation model selection
+
         self.history.train_loss.append(train_loss)
         self.history.train_mae.append(train_metrics["mae"])
         self.history.train_mse.append(train_metrics["mse"])
@@ -293,6 +295,7 @@ class XGBoostDeconvolver(AbstractDeconvolver):
             val_pred = self._transform_output(val_pred_raw)
             val_metrics = compute_deconvolution_metrics(val_pred, y_val)
             val_loss = compute_combined_loss(val_pred, y_val, **loss_weights)
+            self.cv_metric = val_loss  # For cross-validation model selection
 
             self.history.val_loss.append(val_loss)
             self.history.val_mae.append(val_metrics["mae"])
@@ -322,6 +325,13 @@ class XGBoostDeconvolver(AbstractDeconvolver):
                 self.logger.info("  Val Cosine Sim: %f", val_metrics["cosine_sim"])
 
         return self
+
+    def get_cv_metric(self, X, y, **kwargs):
+        return self.cv_metric
+
+    @property
+    def cv_metric_name(self) -> str:
+        return "Validation Loss" if self.history.val_loss else "Training Loss"
 
     def predict(self, X: np.ndarray, **kwargs) -> np.ndarray:
         """

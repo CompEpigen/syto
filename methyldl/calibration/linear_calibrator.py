@@ -99,9 +99,7 @@ class LinearCalibrator(AbstractCalibrator):
         """Report whether scikit-learn can treat this estimator as fitted."""
         return self.slopes is not None and self.intercepts is not None
 
-    def predict(
-        self, X: np.ndarray, norm_method: str = "simplex-projection", **kwargs
-    ) -> np.ndarray:
+    def predict(self, X: np.ndarray, **kwargs) -> np.ndarray:
         """Apply the learned calibration and return corrected predictions.
 
         Args:
@@ -111,6 +109,8 @@ class LinearCalibrator(AbstractCalibrator):
         Returns:
             The normalized calibrated predictions.
         """
+        norm_method = kwargs.get("norm_method", "clip0-normalize")
+
         check_is_fitted(self)
         assert X.shape[1] == len(
             self.slopes
@@ -160,6 +160,15 @@ class LinearCalibrator(AbstractCalibrator):
             )
         else:
             raise ValueError(f"Unsupported file extension: {file_extension}")
+
+    def get_cv_metric(self, X: np.ndarray, y: np.ndarray, **kwargs):
+        predictions = self.predict(X, **kwargs)
+        mse = np.mean((predictions - y) ** 2)
+        return mse
+
+    @property
+    def cv_metric_name(self) -> str:
+        return "MSE"
 
     @classmethod
     def load(cls, path: Union[str, Path], **kwargs) -> "LinearCalibrator":

@@ -48,9 +48,7 @@ from methyldl.deconvolution.xgbdeconvolver import (
 )
 
 from methyldl.calibration.linear_calibrator import LinearCalibrator
-from methyldl.calibration.vector_scaling_calibrator import (
-    VectorScalingCalibratorCV,
-)
+from methyldl.cross_validation_engine import CrossValidationEngine
 
 LINEAR_NORM_METHODS = ["clip0-normalize", "simplex-projection"]
 
@@ -641,13 +639,12 @@ class InferencePipeline:
                     )
 
         # ── Vector-scaling calibrator ──────────────────────────────
-        vs_path = calibrators_dir / "vector_scaling_calibrator.npz"
+        vs_path = calibrators_dir / "vector_scaling_calibrator.joblib"
         if vs_path.exists():
             calibrator_label = "vector_scaling"
             self.logger.info(f"  Loading vector-scaling calibrator from {vs_path}")
             try:
-                vs_cal = VectorScalingCalibratorCV()
-                vs_cal.load(str(vs_path))
+                vs_cal = CrossValidationEngine.load(vs_path)
                 calib = vs_cal.predict(props_2d)
                 results.append((base_name, calibrator_label, np.round(calib, 4)))
                 self.logger.info(f"    ✓ {base_name} + {calibrator_label}")

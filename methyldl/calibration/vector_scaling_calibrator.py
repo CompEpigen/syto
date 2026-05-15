@@ -183,6 +183,7 @@ class VectorScalingCalibrator(AbstractCalibrator):
         self.best_epoch_: int = -1
         self.best_metrics_: dict[str, float] = {}
         self.history_: dict[str, list] = {}
+        self.has_val_: bool = None
 
     @staticmethod
     def _clip_and_log(X: np.ndarray) -> np.ndarray:  # pylint: disable=invalid-name
@@ -269,9 +270,6 @@ class VectorScalingCalibrator(AbstractCalibrator):
         self,
         X: np.ndarray,
         y: np.ndarray,
-        X_val: Optional[np.ndarray] = None,
-        y_val: Optional[np.ndarray] = None,
-        report_every: int = 100,
         **kwargs,
     ) -> "VectorScalingCalibrator":
         """Fit the calibration map on a training set.
@@ -294,6 +292,10 @@ class VectorScalingCalibrator(AbstractCalibrator):
         Returns:
             self. The training history is stored in ``self.history_``.
         """
+        X_val = kwargs.get("X_val", None)  # pylint: disable=invalid-name
+        y_val = kwargs.get("y_val", None)
+        report_every = kwargs.get("report_every", 100)
+
         X = np.asarray(X, dtype=np.float64)
         n_samples, n_classes = X.shape
         self.n_classes_ = n_classes
@@ -307,8 +309,8 @@ class VectorScalingCalibrator(AbstractCalibrator):
         targets_all = torch.as_tensor(targets, dtype=torch.float64, device=dev)
 
         # Prepare validation tensors if provided
-        has_val = X_val is not None and y_val is not None
-        if has_val:
+        self.has_val_ = X_val is not None and y_val is not None
+        if self.has_val_:
             X_val = np.asarray(X_val, dtype=np.float64)
             n_val = X_val.shape[0]
             val_targets = self._prepare_targets(y_val, n_val, n_classes)
@@ -368,7 +370,7 @@ class VectorScalingCalibrator(AbstractCalibrator):
             "train_loss": [],
             "train_mse": [],
         }
-        if has_val:
+        if self.has_val_:
             history["val_loss"] = []
             history["val_mse"] = []
 
@@ -385,7 +387,7 @@ class VectorScalingCalibrator(AbstractCalibrator):
             history["train_loss"].append(init_train_loss)
             history["train_mse"].append(init_train_mse)
 
-            if has_val:
+            if self.has_val_:
                 val_logits = model(input_val)
                 val_calibrated = model.activate(val_logits)
                 init_val_loss = self._compute_loss(model, input_val, targets_val).item()
@@ -400,7 +402,7 @@ class VectorScalingCalibrator(AbstractCalibrator):
             best_state = {k: v.clone() for k, v in model.state_dict().items()}
             best_epoch_idx = 0  # index into history lists
         if self.verbose:
-            if has_val:
+            if self.has_val_:
                 print(
                     f"Epoch -1: train_loss = {init_train_loss:.7e}, "
                     f"val_loss = {init_val_loss:.7e}, "
@@ -443,7 +445,7 @@ class VectorScalingCalibrator(AbstractCalibrator):
                 train_calibrated = model.activate(train_logits)
                 train_mse = torch.mean((train_calibrated - targets_all) ** 2).item()
 
-                if has_val:
+                if self.has_val_:
                     # Validation loss without regularisation for clean selection
                     val_logits = model(input_val)
                     val_calibrated = model.activate(val_logits)
@@ -466,7 +468,7 @@ class VectorScalingCalibrator(AbstractCalibrator):
             history["lr"].append(current_lr)
             history["train_loss"].append(train_loss)
             history["train_mse"].append(train_mse)
-            if has_val:
+            if self.has_val_:
                 history["val_loss"].append(selection_loss)
                 history["val_mse"].append(val_mse)
 
@@ -487,7 +489,7 @@ class VectorScalingCalibrator(AbstractCalibrator):
                 break
 
             if self.verbose and epoch % report_every == 0:
-                if has_val:
+                if self.has_val_:
                     print(
                         f"Epoch {epoch}: train_loss = {train_loss:.7e}, "
                         f"val_loss = {selection_loss:.7e}, "
@@ -512,6 +514,18 @@ class VectorScalingCalibrator(AbstractCalibrator):
         }
 
         return self
+
+    def get_cv_metric(self, X, y, **kwargs):
+        return self.final_loss_
+
+    @property
+    def cv_metric_name(self) -> str:
+        if self.has_val_ is None:
+            return "Not fitted"
+        elif self.has_val_:
+            return "Validation Loss"
+        else:
+            return "Training Loss"
 
     def predict(self, X: np.ndarray, **kwargs) -> np.ndarray:
         """Apply the learned calibration map to new predictions.

@@ -7,10 +7,10 @@ This pipeline takes as input:
 the deconvolution pipeline)
 
 and outputs for each deconvolver:
-- the weights of the linear calibrators and the weights of the VectorScalingCalibratorCV
+- the weights of the linear calibrators and the weights of the VectorScalingCalibrator with CV
 - the predictions of the deconvolver (on test and val set) without calibration,
 with linear calibration (clip0 normalisation, simplex projection),
-and with VectorScalingCalibratorCV calibration
+and with VectorScalingCalibrator with CV calibration
 
 
 The pipeline proceeds in the following steps:
@@ -20,8 +20,8 @@ The pipeline proceeds in the following steps:
     b. fit a linear calibrator on the validation set
         i. save the predictions of the linear calibrator on the validation set and test set
         for both normalization methods (clip0-norm, simplex projection)
-    c. fit a VectorScalingCalibratorCV on the validation set
-        i. save the predictions of the VectorScalingCalibratorCV
+    c. fit a VectorScalingCalibrator with CV on the validation set
+        i. save the predictions of the VectorScalingCalibrator with CV
         on the validation set and test set
 
 """
@@ -38,9 +38,8 @@ import torch.nn as nn
 
 from methyldl.deconvolution.evaluation import compute_deconvolution_metrics
 from methyldl.calibration.linear_calibrator import LinearCalibrator
-from methyldl.calibration.vector_scaling_calibrator import (
-    VectorScalingCalibratorCV,
-)
+from methyldl.calibration.vector_scaling_calibrator import VectorScalingCalibrator
+from methyldl.cross_validation_engine import CrossValidationEngine
 from methyldl.deconvolution.xgbdeconvolver import XGBoostDeconvolver
 from methyldl.deconvolution.least_squares_deconvolvers import (
     NNLSDeconvolver,
@@ -401,7 +400,7 @@ class CalibratorFittingPipeline:
         Steps:
           a. Evaluate uncalibrated predictions on val and test
           b. Fit LinearCalibrator on val, evaluate with 2 normalisation methods
-          c. Fit VectorScalingCalibratorCV on val, evaluate on val and test
+          c. Fit VectorScalingCalibrator with CV on val, evaluate on val and test
         """
         deconv_out = os.path.join(
             self.output_dir, name + "_calibrators_and_predictions"
@@ -504,16 +503,15 @@ class CalibratorFittingPipeline:
             }
 
         # ── 2c: VectorScaling calibration ─────────────────────────
-        self.logger.info(f"  [{name}] Fitting VectorScalingCalibratorCV ...")
+        self.logger.info(f"  [{name}] Fitting VectorScalingCalibrator with CV ...")
 
-        vs_path = os.path.join(deconv_out, "vector_scaling_calibrator.npz")
+        vs_path = os.path.join(deconv_out, "vector_scaling_calibrator_with_cv.joblib")
         if os.path.exists(vs_path):
             self.logger.info(
-                f"    Found existing VectorScalingCalibratorCV at {vs_path},"
+                f"    Found existing VectorScalingCalibrator with CV at {vs_path},"
                 " loading instead of re-fitting"
             )
-            vs_calibrator = VectorScalingCalibratorCV()
-            vs_calibrator.load(vs_path)
+            vs_calibrator = CrossValidationEngine.load(vs_path)
         else:
             # get config for vector scaling calibrator,
             # log any missing parameters and their defaults
@@ -581,21 +579,26 @@ class CalibratorFittingPipeline:
                         " using default True"
                     )
 
-            vs_calibrator = VectorScalingCalibratorCV(
-                reg_lambda_list=vs_cfg.get("reg_lambda_list", [0.0, 1e-4, 1e-3]),
-                lr_list=vs_cfg.get("lr_list", [1e-3, 1e-2]),
-                max_iter_list=vs_cfg.get("max_iter_list", [1000]),
-                optimizer=vs_cfg.get("optimizer", "adam"),
-                scheduler=vs_cfg.get("scheduler", "plateau"),
-                patience=vs_cfg.get("patience", 50),
-                n_folds=vs_cfg.get("n_folds", 5),
-                batch_size=vs_cfg.get("batch_size", None),
-                verbose=vs_cfg.get("verbose", True),
-                plateau_factor=vs_cfg.get("plateau_factor", 0.5),
-                plateau_patience=vs_cfg.get("plateau_patience", 10),
+            vs_calibrator = CrossValidationEngine()
+            vs_calibrator.fit(
+                X=val_pred,
+                y=y_valid,
+                model_class=VectorScalingCalibrator,
+                n_folds=3,
+                model_param_grid={
+                    "reg_lambda": vs_cfg.get("reg_lambda_list", [0.0, 1e-4, 1e-3]),
+                    "lr": vs_cfg.get("lr_list", [1e-3, 1e-2]),
+                    "max_iter": vs_cfg.get("max_iter_list", [1000]),
+                    "optimizer": vs_cfg.get("optimizer", "adam"),
+                    "scheduler": vs_cfg.get("scheduler", "plateau"),
+                    "patience": vs_cfg.get("patience", 50),
+                    "batch_size": vs_cfg.get("batch_size", None),
+                    "plateau_factor": vs_cfg.get("plateau_factor", 0.5),
+                    "plateau_patience": vs_cfg.get("plateau_patience", 10),
+                },
+                random_state=42,
+                disable_pbar=False,
             )
-
-            vs_calibrator.fit(val_pred, y_valid)
             vs_calibrator.save(vs_path)
 
             self.logger.info(f"    Saved VectorScaling calibrator to {vs_path}")
@@ -608,7 +611,7 @@ class CalibratorFittingPipeline:
         vs_pred_path = os.path.join(deconv_out, "vector_scaling_predictions.npz")
         if os.path.exists(vs_pred_path):
             self.logger.info(
-                f"    Found existing VectorScalingCalibratorCV predictions at {vs_pred_path},"
+                f"    Found existing VectorScalingCalibrator CV predictions at {vs_pred_path},"
                 " loading instead of re-predicting"
             )
             data = np.load(vs_pred_path)

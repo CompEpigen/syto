@@ -118,6 +118,15 @@ class AbstractLSDeconvolver(AbstractDeconvolver):
         """Predict mixture proportions for a batch of samples."""
         raise NotImplementedError("Subclasses must implement predict")
 
+    def get_cv_metric(self, X, y, **kwargs):
+        predictions = self.predict(X, **kwargs)
+        mse = np.mean((predictions - y) ** 2)
+        return mse
+
+    @property
+    def cv_metric_name(self):
+        return "MSE"
+
 
 class NNLSDeconvolver(AbstractLSDeconvolver):
     """
