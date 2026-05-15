@@ -8,19 +8,22 @@ import threading
 
 import cvxpy as cp
 import joblib
-from sklearn.base import BaseEstimator, RegressorMixin
 from sklearn.utils.validation import check_is_fitted
 import numpy as np
 from tqdm import tqdm
 from scipy.optimize import nnls
 
+from .abstract_deconvolver import AbstractDeconvolver
 
-class AbstractLSDeconvolver(BaseEstimator, RegressorMixin):
+
+class AbstractLSDeconvolver(AbstractDeconvolver):
     """
     Parent class of least-squares-based deconvolution methods.
     """
 
-    def fit(self, X: np.ndarray, y: np.ndarray):  # pylint: disable=invalid-name
+    def fit(
+        self, X: np.ndarray, y: np.ndarray, **kwargs  # pylint: disable=invalid-name
+    ):
         """
         Store the reference prediction matrix built from pure reference predictions.
 
@@ -48,37 +51,37 @@ class AbstractLSDeconvolver(BaseEstimator, RegressorMixin):
         )
         return self
 
-    def save(self, filepath: str):
+    def save(self, path: str, **kwargs):
         """Save the fitted model to disk using joblib.
 
         Args:
-            filepath: Destination path (e.g. ``'model.joblib'``).
+            path: Destination path (e.g. ``'model.joblib'``).
 
         Raises:
             sklearn.exceptions.NotFittedError: If the model has not been fit.
         """
         check_is_fitted(self)
-        os.makedirs(os.path.dirname(os.path.abspath(filepath)), exist_ok=True)
-        joblib.dump(self, filepath)
+        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+        joblib.dump(self, path)
 
     @classmethod
-    def load(cls, filepath: str) -> "AbstractLSDeconvolver":
+    def load(cls, path: str, **kwargs) -> "AbstractLSDeconvolver":
         """Load a saved model from disk.
 
         Args:
-            filepath: Path to the saved model file.
+            path: Path to the saved model file.
 
         Returns:
             The loaded model instance.
 
         Raises:
-            FileNotFoundError: If *filepath* does not exist.
+            FileNotFoundError: If *path* does not exist.
             TypeError: If the loaded object is not an instance of this class.
             sklearn.exceptions.NotFittedError: If the loaded model was not fit.
         """
-        if not os.path.exists(filepath):
-            raise FileNotFoundError(f"Model file not found at {filepath}")
-        model = joblib.load(filepath)
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"Model file not found at {path}")
+        model = joblib.load(path)
         if not isinstance(model, cls):
             raise TypeError(f"Loaded object is not of type {cls.__name__}")
         check_is_fitted(model)
@@ -110,6 +113,10 @@ class AbstractLSDeconvolver(BaseEstimator, RegressorMixin):
             chunk_predictions[i] = self.predict_single_sample(sample)
 
         return chunk_predictions
+
+    def predict(self, X: np.ndarray, **kwargs) -> np.ndarray:
+        """Predict mixture proportions for a batch of samples."""
+        raise NotImplementedError("Subclasses must implement predict")
 
 
 class NNLSDeconvolver(AbstractLSDeconvolver):
@@ -253,8 +260,7 @@ class NNLSDeconvolver(AbstractLSDeconvolver):
     def predict(
         self,
         X: np.ndarray,  # pylint: disable=invalid-name
-        n_workers: int = 1,
-        chunk_size: int = 100,
+        **kwargs,
     ) -> np.ndarray:
         """
         Predict mixture proportions for a batch of samples.
@@ -273,6 +279,8 @@ class NNLSDeconvolver(AbstractLSDeconvolver):
             arrays have shape (n_samples, n_cell_types) and ``residuals`` has shape
             (n_samples,).
         """
+        n_workers = kwargs.get("n_workers", 1)
+        chunk_size = kwargs.get("chunk_size", 100)
         if n_workers > 1:
             return self._predict_parallel(X, n_workers, chunk_size=chunk_size)
         else:
@@ -298,7 +306,7 @@ class PSLSDeconvolver(AbstractLSDeconvolver):
         self._cvxpy_fit_generation_ = -1
         self.solver_type = solver_type
 
-    def fit(self, X: np.ndarray, y: np.ndarray):
+    def fit(self, X: np.ndarray, y: np.ndarray, **kwargs):
         """
         Fit the deconvolver from pure reference predictions.
 
@@ -314,7 +322,7 @@ class PSLSDeconvolver(AbstractLSDeconvolver):
         """
         # pylint: disable=attribute-defined-outside-init
         # call AbstractLSDeconvolver.fit to store the reference prediction matrix and related state
-        super().fit(X, y)
+        super().fit(X, y, **kwargs)
 
         if self.solver_type == "pgd":
             # precomputed matrices for the PGD algorithm
@@ -619,8 +627,7 @@ class PSLSDeconvolver(AbstractLSDeconvolver):
     def predict(
         self,
         X: np.ndarray,  # pylint: disable=invalid-name
-        n_workers: int = 1,
-        chunk_size=100,
+        **kwargs,
     ) -> np.ndarray:
         """
         Predict mixture proportions for a batch of samples.
@@ -639,6 +646,8 @@ class PSLSDeconvolver(AbstractLSDeconvolver):
             Array of shape (n_samples, n_cell_types) containing the estimated
             mixture proportions.
         """
+        n_workers = kwargs.get("n_workers", 1)
+        chunk_size = kwargs.get("chunk_size", 100)
         if n_workers > 1:
             return self._predict_parallel(X, n_workers=n_workers, chunk_size=chunk_size)
         else:

@@ -8,9 +8,8 @@ import joblib
 import numpy as np
 from scipy.stats import linregress
 from sklearn.utils.validation import check_is_fitted
-from sklearn.base import BaseEstimator
 
-from methyldl.cross_validation_engine import CrossValidationCompatibleModel
+from methyldl.calibration.abstract_calibrator import AbstractCalibrator
 
 
 def _project_onto_simplex(unnorm_pred: np.ndarray) -> np.ndarray:
@@ -42,7 +41,7 @@ def _clip0_normalize(unnorm_pred: np.ndarray) -> np.ndarray:
     return clipped / np.maximum(row_sums, 1e-12)
 
 
-class LinearCalibrator(CrossValidationCompatibleModel, BaseEstimator):
+class LinearCalibrator(AbstractCalibrator):
     """
     For each cell type, we fit a linear regression between the predicted and true proportions
     on the validation set, and then we use the fitted slopes and intercepts to adjust

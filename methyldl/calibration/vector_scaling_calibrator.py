@@ -18,9 +18,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 import joblib
-from sklearn.base import BaseEstimator
 
-from methyldl.cross_validation_engine import CrossValidationCompatibleModel
+from methyldl.calibration.abstract_calibrator import AbstractCalibrator
 
 _module_logger = logging.getLogger(__name__)
 
@@ -119,7 +118,7 @@ class _TrainedLinearCalibrationModel(nn.Module):
         return torch.softmax(logits, dim=1)
 
 
-class VectorScalingCalibrator(CrossValidationCompatibleModel, BaseEstimator):
+class VectorScalingCalibrator(AbstractCalibrator):
     """
 
     Args:
