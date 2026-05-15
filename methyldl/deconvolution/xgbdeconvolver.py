@@ -1,14 +1,20 @@
+import os
+from typing import Literal, Optional, Dict
+import logging
+
+import numpy as np
 import xgboost as xgb
 from sklearn.multioutput import MultiOutputRegressor
 import joblib
-import os
 from dataclasses import dataclass, field
-from typing import List, Literal, Optional, Callable, Union, Dict, Tuple
-import numpy as np
+
 from methyldl.deconvolution.evaluation import (
     compute_deconvolution_metrics,
     compute_combined_loss,
 )
+from methyldl.deconvolution.abstract_deconvolver import AbstractDeconvolver
+
+_module_logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -23,6 +29,7 @@ class XGBDeconvolverConfig:
     min_child_weight: int = 3
     reg_alpha: float = 0.1
     reg_lambda: float = 1.0
+    # useless but kept for backwards compatibility
     early_stopping_rounds: Optional[int] = 20
     random_state: int = 42
 
@@ -44,9 +51,11 @@ class XGBTrainingHistory:
     val_max_error: list = field(default_factory=list)
     val_cosine_sim: list = field(default_factory=list)
     best_iteration: int = 0
+    # useless but kept for backwards compatibility
     stopped_early: bool = False
 
     def to_dict(self) -> dict:
+        """Convert history to a dictionary for easier logging or analysis."""
         return {
             "train_loss": self.train_loss,
             "train_mae": self.train_mae,
@@ -65,7 +74,7 @@ class XGBTrainingHistory:
         }
 
 
-class XGBoostDeconvolver:
+class XGBoostDeconvolver(AbstractDeconvolver):
     """
     XGBoost-based deconvolver using diagonal and rejection features.
 
@@ -102,6 +111,7 @@ class XGBoostDeconvolver:
         output_transform: Literal[
             "none", "clip_normalize", "softmax"
         ] = "clip_normalize",
+        logger=None,
     ):
         self.n_dmr = n_dmr_groups
         self.n_pred_classes = n_pred_classes
@@ -114,6 +124,7 @@ class XGBoostDeconvolver:
             self.n_features = n_dmr_groups * 2  # diagonal + reject column
         else:
             self.n_features = n_dmr_groups
+        self.logger = logger if logger is not None else _module_logger
 
         self.model = None
         self.best_model = None
@@ -137,7 +148,9 @@ class XGBoostDeconvolver:
         )
         return MultiOutputRegressor(base_model)
 
-    def extract_features(self, X: np.ndarray) -> np.ndarray:
+    def extract_features(
+        self, X: np.ndarray  # pylint: disable=invalid-name
+    ) -> np.ndarray:
         """
         Extract diagonal and rejection column features.
 
@@ -199,27 +212,13 @@ class XGBoostDeconvolver:
         else:
             raise ValueError(f"Unknown output_transform: {self.output_transform}")
 
-    def _predict_raw(self, X_features: np.ndarray) -> np.ndarray:
+    def _predict_raw(
+        self, X_features: np.ndarray  # pylint: disable=invalid-name
+    ) -> np.ndarray:
         """Get raw model predictions without transformation."""
         return self.model.predict(X_features)
 
-    def fit(
-        self,
-        X_train: np.ndarray,
-        y_train: np.ndarray,
-        X_val: Optional[np.ndarray] = None,
-        y_val: Optional[np.ndarray] = None,
-        loss_weights: Optional[Dict[str, float]] = None,
-        early_stopping_metric: Literal[
-            "val_loss",
-            "val_mae",
-            "val_mse",
-            "val_kl",
-            "val_max_error",
-            "val_cosine_sim",
-        ] = "val_mae",
-        verbose: int = 1,
-    ) -> "XGBoostDeconvolver":
+    def fit(self, X: np.ndarray, y: np.ndarray, **kwargs) -> "XGBoostDeconvolver":
         """
         Fit the XGBoost deconvolver with metric tracking.
 
@@ -235,8 +234,6 @@ class XGBoostDeconvolver:
             Validation labels
         loss_weights : dict, optional
             Weights for combined loss: {'mse': float, 'kl': float}
-        early_stopping_metric : str
-            Metric to monitor for early stopping
         verbose : int
             Verbosity level (0=silent, 1=progress, 2=detailed)
 
@@ -244,32 +241,27 @@ class XGBoostDeconvolver:
         -------
         self : XGBoostDeconvolver
         """
-        if loss_weights is None:
-            loss_weights = {"mse_weight": 1.0, "kl_weight": 0.5}
-
-        # Determine if we should maximize or minimize
-        maximize_metrics = {"val_cosine_sim"}
-        minimize = early_stopping_metric not in maximize_metrics
+        # pylint: disable=invalid-name
+        loss_weights = kwargs.get("loss_weights", {"mse_weight": 1.0, "kl_weight": 0.5})
+        X_val = kwargs.get("X_val", None)
+        y_val = kwargs.get("y_val", None)
+        verbose = kwargs.get("verbose", 1)
 
         # Extract features
-        X_train_feat = self.extract_features(X_train)
+        X_train_feat = self.extract_features(X)
         X_val_feat = self.extract_features(X_val) if X_val is not None else None
 
         if verbose:
-            print(f"Training XGBoost Deconvolver")
-            print(f"  Input shape: {X_train.shape} → Features: {X_train_feat.shape}")
-            print(f"  Output shape: {y_train.shape}")
-            print(f"  Output transform: {self.output_transform}")
-            print(f"  Early stopping on: {early_stopping_metric}")
-            print("-" * 60)
+            self.logger.info("Training XGBoost Deconvolver")
+            self.logger.info(
+                "  Input shape: %s → Features: %s", X.shape, X_train_feat.shape
+            )
+            self.logger.info("  Output shape: %s", y.shape)
+            self.logger.info("  Output transform: %s", self.output_transform)
+            self.logger.info("-" * 60)
 
         # Initialize history
         self.history = XGBTrainingHistory()
-
-        # For proper early stopping, we'll train incrementally
-        best_score = float("inf") if minimize else float("-inf")
-        patience_counter = 0
-        best_iteration = 0
 
         # Build fresh model
         self.model = self._build_model(verbose=verbose)
@@ -281,13 +273,13 @@ class XGBoostDeconvolver:
         # For simplicity, we'll train the full model first, then evaluate
         # If you need true incremental training, use the Native version below
 
-        self.model.fit(X_train_feat, y_train)
+        self.model.fit(X_train_feat, y)
 
         # Compute final metrics
         train_pred_raw = self._predict_raw(X_train_feat)
         train_pred = self._transform_output(train_pred_raw)
-        train_metrics = compute_deconvolution_metrics(train_pred, y_train)
-        train_loss = compute_combined_loss(train_pred, y_train, **loss_weights)
+        train_metrics = compute_deconvolution_metrics(train_pred, y)
+        train_loss = compute_combined_loss(train_pred, y, **loss_weights)
 
         self.history.train_loss.append(train_loss)
         self.history.train_mae.append(train_metrics["mae"])
@@ -312,26 +304,26 @@ class XGBoostDeconvolver:
         self._is_fitted = True
 
         if verbose:
-            print(f"\nTraining Results:")
-            print(f"  Train Loss: {train_loss:.4f}")
-            print(f"  Train MAE:  {train_metrics['mae']:.4f}")
-            print(f"  Train MSE:  {train_metrics['mse']:.4f}")
-            print(f"  Train KL:   {train_metrics['kl']:.4f}")
-            print(f"  Train Max Error: {train_metrics['max_error']:.4f}")
-            print(f"  Train Cosine Sim: {train_metrics['cosine_sim']:.4f}")
+            self.logger.info("Training Results:")
+            self.logger.info("  Train Loss: %f", train_loss)
+            self.logger.info("  Train MAE:  %f", train_metrics["mae"])
+            self.logger.info("  Train MSE:  %f", train_metrics["mse"])
+            self.logger.info("  Train KL:   %f", train_metrics["kl"])
+            self.logger.info("  Train Max Error: %f", train_metrics["max_error"])
+            self.logger.info("  Train Cosine Sim: %f", train_metrics["cosine_sim"])
 
             if X_val is not None:
-                print(f"\nValidation Results:")
-                print(f"  Val Loss:   {val_loss:.4f}")
-                print(f"  Val MAE:    {val_metrics['mae']:.4f}")
-                print(f"  Val MSE:    {val_metrics['mse']:.4f}")
-                print(f"  Val KL:     {val_metrics['kl']:.4f}")
-                print(f"  Val Max Error: {val_metrics['max_error']:.4f}")
-                print(f"  Val Cosine Sim: {val_metrics['cosine_sim']:.4f}")
+                self.logger.info("Validation Results:")
+                self.logger.info("  Val Loss:   %f", val_loss)
+                self.logger.info("  Val MAE:    %f", val_metrics["mae"])
+                self.logger.info("  Val MSE:    %f", val_metrics["mse"])
+                self.logger.info("  Val KL:     %f", val_metrics["kl"])
+                self.logger.info("  Val Max Error: %f", val_metrics["max_error"])
+                self.logger.info("  Val Cosine Sim: %f", val_metrics["cosine_sim"])
 
         return self
 
-    def predict(self, X: np.ndarray) -> np.ndarray:
+    def predict(self, X: np.ndarray, **kwargs) -> np.ndarray:
         """
         Predict cell type proportions.
 
@@ -361,7 +353,7 @@ class XGBoostDeconvolver:
 
     def evaluate(
         self,
-        X: np.ndarray,
+        X: np.ndarray,  # pylint: disable=invalid-name
         y: np.ndarray,
         loss_weights: Optional[Dict[str, float]] = None,
     ) -> Dict[str, float]:
@@ -397,30 +389,30 @@ class XGBoostDeconvolver:
             "all": importances,
         }
 
-    def save(self, filepath: str):
+    def save(self, path: str, **kwargs) -> None:
         """
         Save the entire model object to disk using joblib.
 
         Parameters
         ----------
-        filepath : str
+        path : str
             Path to save the model (e.g., 'model.pkl' or 'model.joblib')
         """
         # Ensure directory exists
-        os.makedirs(os.path.dirname(os.path.abspath(filepath)), exist_ok=True)
+        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
 
         # We save 'self' which includes the config, the fitted model, and history
-        joblib.dump(self, filepath)
-        print(f"Model saved to {filepath}")
+        joblib.dump(self, path)
+        self.logger.info("Model saved to %s", path)
 
     @classmethod
-    def load(cls, filepath: str) -> "XGBoostDeconvolver":
+    def load(cls, path: str, **kwargs) -> "XGBoostDeconvolver":
         """
         Load a saved model from disk.
 
         Parameters
         ----------
-        filepath : str
+        path : str
             Path to the saved model file.
 
         Returns
@@ -428,22 +420,23 @@ class XGBoostDeconvolver:
         model : XGBoostDeconvolver
             The loaded model instance.
         """
-        if not os.path.exists(filepath):
-            raise FileNotFoundError(f"Model file not found at {filepath}")
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"Model file not found at {path}")
 
-        model = joblib.load(filepath)
+        model = joblib.load(path)
 
         # Basic validation to ensure it's the right class
         if not isinstance(model, cls):
             raise TypeError(f"Loaded object is not of type {cls.__name__}")
 
+        model.logger.info("Model loaded from %s", path)
         return model
 
 
 def train_xgb_deconvolver(
-    X_train: np.ndarray,
+    X_train: np.ndarray,  # pylint: disable=invalid-name
     y_train: np.ndarray,
-    X_val: np.ndarray,
+    X_val: np.ndarray,  # pylint: disable=invalid-name
     y_val: np.ndarray,
     config: Optional[XGBDeconvolverConfig] = None,
     n_dmr_groups=39,
@@ -453,8 +446,6 @@ def train_xgb_deconvolver(
     process_inputs=True,
     output_transform: Literal["none", "clip_normalize", "softmax"] = "clip_normalize",
     loss_weights: Optional[Dict[str, float]] = None,
-    early_stopping_metric: str = "val_mae",
-    early_stopping_patience: int = 15,
     verbose: int = 1,
 ) -> tuple:
     """
@@ -468,7 +459,7 @@ def train_xgb_deconvolver(
         Training history
     """
     if config is None:
-        config = XGBDeconvolverConfig(early_stopping_rounds=early_stopping_patience)
+        config = XGBDeconvolverConfig()
 
     model = XGBoostDeconvolver(
         config=config,
@@ -481,12 +472,11 @@ def train_xgb_deconvolver(
     )
 
     model.fit(
-        X_train,
-        y_train,
-        X_val,
-        y_val,
+        X=X_train,
+        y=y_train,
+        X_val=X_val,
+        y_val=y_val,
         loss_weights=loss_weights,
-        early_stopping_metric=early_stopping_metric,
         verbose=verbose,
     )
 

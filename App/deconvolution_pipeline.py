@@ -405,8 +405,6 @@ class DeconvolutionFittingPipeline:
         y_val = proportions["valid"]
         y_test = proportions.get("test")
 
-        n_features = X_train.shape[1]
-
         model = XGBoostDeconvolver(
             config=xgb_config,
             output_transform="clip_normalize",
@@ -418,10 +416,10 @@ class DeconvolutionFittingPipeline:
         )
 
         model.fit(
-            X_train,
-            y_train,
-            X_val,
-            y_val,
+            X=X_train,
+            y=y_train,
+            X_val=X_val,
+            y_val=y_val,
             verbose=1,
         )
 

@@ -15,11 +15,15 @@ class CrossValidationCompatibleModel(ABC):
     """Interface for models that can be used in the cross-validation engine."""
 
     @abstractmethod  # pylint: disable-next=invalid-name
-    def fit(self, X: np.ndarray, y: np.ndarray, **kwargs) -> "CrossValidationCompatibleModel":
+    def fit(
+        self, X: np.ndarray, y: np.ndarray, **kwargs
+    ) -> "CrossValidationCompatibleModel":
         """Fit the model to the training data."""
 
     @abstractmethod
-    def predict(self, X: np.ndarray, **kwargs) -> np.ndarray:  # pylint: disable=invalid-name
+    def predict(
+        self, X: np.ndarray, **kwargs
+    ) -> np.ndarray:  # pylint: disable=invalid-name
         """Predict on the test data."""
 
     @abstractmethod

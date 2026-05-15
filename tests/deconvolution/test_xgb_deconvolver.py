@@ -294,10 +294,10 @@ class TestXGBoostDeconvolverFitEvaluateAndIO(unittest.TestCase):
         dummy = DummyMultiOutputModel(output=[0.2, 0.3, 0.5])
         with patch.object(self.model, "_build_model", return_value=dummy):
             fitted = self.model.fit(
-                self.X_train,
-                self.y_train,
-                self.X_val,
-                self.y_val,
+                X=self.X_train,
+                y=self.y_train,
+                X_val=self.X_val,
+                y_val=self.y_val,
                 loss_weights={"mse_weight": 2.0, "kl_weight": 1.0},
                 verbose=0,
             )
@@ -327,7 +327,7 @@ class TestXGBoostDeconvolverFitEvaluateAndIO(unittest.TestCase):
 
         dummy = DummyMultiOutputModel(output=[0.2, 0.3, 0.5])
         with patch.object(self.model, "_build_model", return_value=dummy):
-            self.model.fit(self.X_train, self.y_train, verbose=1)
+            self.model.fit(X=self.X_train, y=self.y_train, verbose=1)
 
         self.assertEqual(self.model.history.train_loss, [0.5])
         self.assertEqual(self.model.history.val_loss, [])
@@ -425,13 +425,11 @@ class TestTrainXGBDeconvolverConvenience(unittest.TestCase):
             y_val,
             config=None,
             output_transform="softmax",
-            early_stopping_patience=7,
             verbose=0,
         )
 
         self.assertIsInstance(model, XGBoostDeconvolver)
         self.assertIsInstance(history, XGBTrainingHistory)
-        self.assertEqual(model.config.early_stopping_rounds, 7)
         self.assertEqual(history.train_loss, [0.2])
 
     @patch(

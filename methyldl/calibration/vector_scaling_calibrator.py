@@ -201,7 +201,7 @@ class VectorScalingCalibrator(AbstractCalibrator):
         return np.log(np.clip(X, eps, 1.0 - eps))
 
     def _prepare_input(
-        self, X: np.ndarray # pylint: disable=invalid-name
+        self, X: np.ndarray  # pylint: disable=invalid-name
     ) -> np.ndarray:
         """Prepare input probabilities: for now just log-transform.
         In the future we could add other transformations or normalizations here.
