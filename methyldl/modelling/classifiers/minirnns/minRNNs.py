@@ -2,11 +2,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
+
 from methyldl.modelling.classifiers.minirnns.associative_scan import (
     associative_scan_log,
 )
 from methyldl.modelling.classifiers.minirnns.helpers import g, log_g
-from methyldl.modelling.utils import exists
 
 
 class MinGRUCell(nn.Module):
@@ -52,7 +52,7 @@ class MinGRUCell(nn.Module):
         if not self.batch_first:
             x = x.transpose(0, 1)  # (seq_len, batch, dim) -> (batch, seq_len, dim)
 
-        batch, seq_len, dim = x.shape
+        batch, seq_len, dim = x.shape  # pylint: disable=unused-variable
         hidden, gate = self.to_hidden_and_gate(x).chunk(2, dim=-1)
 
         # --------- If seq_len == 1, do a trivial step-by-step update --------- #
@@ -60,10 +60,10 @@ class MinGRUCell(nn.Module):
             tilde_h = g(hidden)  # shape = (batch, 1, dim_inner)
             gate_sig = gate.sigmoid()  # shape = (batch, 1, dim_inner)
 
-            if exists(prev_state):
+            if prev_state is not None:
                 prev_hidden, _ = prev_state  # each shape = (batch, 1, dim_inner)
                 out = (1 - gate_sig) * prev_hidden + gate_sig * tilde_h
-            elif exists(self.init_hidden_state):
+            elif self.init_hidden_state is not None:
                 init_h = g(self.init_hidden_state).unsqueeze(0)  # (1, dim_inner)
                 init_h = init_h.expand(batch, -1)  # (batch, dim_inner)
                 init_h = init_h.unsqueeze(1)  # (batch, 1, dim_inner)
@@ -77,14 +77,16 @@ class MinGRUCell(nn.Module):
         # ------------- If seq_len > 1, do log-scan approach ------------- #
         else:
             # log-space "coeffs" and "values"
+            # pylint: disable-next=not-callable
             log_coeffs = -F.softplus(gate)  # log(1 - sigmoid(gate)) in effect
+            # pylint: disable-next=not-callable
             log_z = -F.softplus(-gate)  # log(sigmoid(gate))
             log_tilde_h = log_g(hidden)  # log of non-linear transform
             log_values = log_z + log_tilde_h  # sum in log-space
 
             # If we have a previous hidden state or a learnable init, prepend it
-            if exists(prev_state) or exists(self.init_hidden_state):
-                if exists(prev_state):
+            if prev_state is not None or self.init_hidden_state is not None:
+                if prev_state is not None:
                     _, prev_log_hidden = prev_state
                 else:
                     # Expand init hidden to entire batch
@@ -166,6 +168,7 @@ class MinGRU(nn.Module):
 
         output = x
         next_states = []
+        # pylint: disable-next=unused-variable
         for layer_idx, (layer, prev_state) in enumerate(zip(self.layers, prev_states)):
             output, next_state = layer.forward(output, prev_state, parallel_scan)
             next_states.append(next_state)
