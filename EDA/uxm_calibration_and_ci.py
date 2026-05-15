@@ -5,7 +5,7 @@ UXM Calibration & Confidence Interval Script
 This script:
 1. Loads the UXM pseudobulk "multinomial" predictions and target proportions
    from the ExtendedProportions experiment directory.
-2. Fits calibrators (LinearCalibrator, VectorScalingCalibratorCV) on the
+2. Fits calibrators (LinearCalibrator, VectorScalingCalibrator) on the
    validation set predictions — saving calibrator weights and calibrated
    predictions in the same fashion as App/calibration_pipeline.py.
 3. Computes confidence intervals on the test set predictions (uncalibrated
@@ -27,7 +27,8 @@ import pandas as pd
 # ── Project imports ───────────────────────────────────────────────
 from methyldl.deconvolution.evaluation import compute_deconvolution_metrics
 from methyldl.calibration.linear_calibrator import LinearCalibrator
-from methyldl.calibration.vector_scaling_calibrator import VectorScalingCalibratorCV
+from methyldl.calibration.vector_scaling_calibrator import VectorScalingCalibrator
+from methyldl.cross_validation_engine import CrossValidationEngine
 
 # ══════════════════════════════════════════════════════════════════
 #  Configuration
@@ -156,12 +157,11 @@ def run_calibration(val_pred, test_pred, y_valid, y_test, deconv_out):
     linear_cal_path = os.path.join(deconv_out, "linear_calibrator.npz")
     if os.path.exists(linear_cal_path):
         logger.info("  Found existing calibrator, loading: %s", linear_cal_path)
-        linear_calibrator = LinearCalibrator()
-        linear_calibrator.load_calibration_parameters(linear_cal_path)
+        linear_calibrator = LinearCalibrator.load(linear_cal_path)
     else:
         linear_calibrator = LinearCalibrator()
         linear_calibrator.fit(val_pred_loaded, y_valid)
-        linear_calibrator.save_calibration_parameters(linear_cal_path)
+        linear_calibrator.save(linear_cal_path)
         logger.info("  Saved linear calibrator to %s", linear_cal_path)
 
     for norm_method in LINEAR_NORM_METHODS:
@@ -199,29 +199,35 @@ def run_calibration(val_pred, test_pred, y_valid, y_test, deconv_out):
         }
 
     # ── 1c: VectorScaling calibration ─────────────────────────────
-    logger.info("[%s] Fitting VectorScalingCalibratorCV ...", DECONV_NAME)
-    vs_path = os.path.join(deconv_out, "vector_scaling_calibrator.npz")
+    logger.info("[%s] Fitting VectorScalingCalibrator ...", DECONV_NAME)
+    vs_path = os.path.join(deconv_out, "vector_scaling_calibrator_cv.joblib")
     if os.path.exists(vs_path):
         logger.info("  Found existing calibrator, loading: %s", vs_path)
-        vs_calibrator = VectorScalingCalibratorCV()
-        vs_calibrator.load(vs_path)
+        vs_calibrator = CrossValidationEngine.load(vs_path)
     else:
-        vs_calibrator = VectorScalingCalibratorCV(
-            reg_lambda_list=[0.0, 1e-4, 1e-3],
-            lr_list=[1e-3, 1e-2],
-            max_iter_list=[1000],
-            optimizer="adam",
-            scheduler="plateau",
-            patience=50,
+        vs_calibrator = CrossValidationEngine()
+        vs_calibrator.fit(
+            X=val_pred_loaded,
+            y=y_valid,
+            model_class=VectorScalingCalibrator,
+            model_param_grid={
+                "reg_lambda": [0.0, 1e-4, 1e-3],
+                "lr": [1e-3, 1e-2],
+                "max_iter": [1000],
+                "optimizer": ["adam"],
+                "scheduler": ["plateau"],
+                "patience": [50],
+                "batch_size": [None],
+                "verbose": [True],
+                "plateau_factor": [0.5],
+                "plateau_patience": [10],
+            },
             n_folds=5,
-            batch_size=None,
-            verbose=True,
-            plateau_factor=0.5,
-            plateau_patience=10,
+            random_state=42,
+            disable_pbar=False,
         )
-        vs_calibrator.fit(val_pred_loaded, y_valid)
         vs_calibrator.save(vs_path)
-        logger.info("  Saved VectorScaling calibrator to %s", vs_path)
+        logger.info("  Saved VectorScaling calibrator with CV to %s", vs_path)
 
     logger.info(
         "  Best CV loss: %.6f, params: %s",
@@ -236,8 +242,8 @@ def run_calibration(val_pred, test_pred, y_valid, y_test, deconv_out):
         val_vs = data["val_pred"]
         test_vs = data["test_pred"]
     else:
-        val_vs = vs_calibrator.predict_proba(val_pred_loaded)
-        test_vs = vs_calibrator.predict_proba(test_pred_loaded)
+        val_vs = vs_calibrator.predict(val_pred_loaded)
+        test_vs = vs_calibrator.predict(test_pred_loaded)
         np.savez_compressed(vs_pred_path, val_pred=val_vs, test_pred=test_vs)
 
     val_vs_m = compute_deconvolution_metrics(val_vs, y_valid)

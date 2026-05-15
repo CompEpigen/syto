@@ -5,33 +5,30 @@ Some of the methods are directly copied while other are specific to this repo.
 """
 
 import sys
+import os.path as op
+import logging
+
 import pandas as pd
 import numpy as np
-import os
 from scipy import optimize
-import sys
-import os.path as op
 
 ### Selected original deconvolution code from https://github.com/nloyfer/UXM_deconv ###
 
-
-def eprint(*args, **kargs):
-    """Print to stderr instead of stdout"""
-    print(*args, file=sys.stderr, **kargs)
+_module_logger = logging.getLogger(__name__)
 
 
 def validate_ref_tissues(df, tissue_list):
     """Validate that the provided tissue list is present in the atlas DataFrame columns"""
     for col in tissue_list:
         if col not in df.columns:
-            eprint("Invalid cell type (not in atlas):", col)
+            _module_logger.error("Invalid cell type (not in atlas): %s", col)
             sys.exit(1)
 
 
 def validate_file(fpath):
     """Validate that the provided file path exists and is a file"""
     if not op.isfile(fpath):
-        eprint("Invalid file", fpath)
+        _module_logger.error("Invalid file: %s", fpath)
         sys.exit(1)
     return fpath
 
@@ -39,17 +36,19 @@ def validate_file(fpath):
 def load_atlas(atlas_path, ignore=None, include=None):
     """Load the reference atlas and optionally filter tissues"""
     if not op.isfile(atlas_path):
-        eprint("Invalid reference atlas (--atlas flag)")
+        _module_logger.error("Invalid reference atlas (--atlas flag): %s", atlas_path)
     validate_file(atlas_path)
 
     # take a peek:
     df = pd.read_csv(atlas_path, sep="\t", nrows=2)
     if df.shape[1] < 8:
-        eprint(f"Invalid atlas: {atlas_path}")
+        _module_logger.error("Invalid atlas: %s", atlas_path)
         sys.exit(1)
     df = pd.read_csv(atlas_path, sep="\t")
     if not all(df["name"].str.startswith("chr")):
-        eprint(f'Invalid atlas: {atlas_path}. "name" column must all start with "chr"')
+        _module_logger.error(
+            'Invalid atlas: %s. "name" column must all start with "chr"', atlas_path
+        )
         sys.exit(1)
 
     if ignore is not None:
@@ -93,14 +92,14 @@ def decon_single_samp(samp, atlas, counts, verbose, debug=False):
     )
 
     if data.empty:
-        eprint(f"Warning: skipping an empty sample {name}")
+        _module_logger.warning("Skipping an empty sample: %s", name)
         return np.nan, np.nan
 
     if data.shape[0] > atlas.shape[0]:
-        eprint("ERROR: merge went wrong. Validate your atlas")
+        _module_logger.error("Merge went wrong. Validate your atlas")
         return None, None
     if verbose:
-        eprint(f"{name}: {data.shape[0]} \\ {atlas.shape[0]} markers")
+        _module_logger.info("%s: %d \\ %d markers", name, data.shape[0], atlas.shape[0])
     del data["name"], data["direction"]
 
     samp = data.iloc[:, 0]
@@ -192,10 +191,13 @@ def prepare_reads_for_uxm(
     for i_atlas, (_, row) in enumerate(atlas.iterrows()):
         if i_atlas % 100 == 0 or i_atlas == n_atlas - 1:
             current_chrom_ptr = chrom_base_pointer.get(row["chr"], 0)
-            print(
-                f"\r{progress_prefix}Processed {i_atlas}/{n_atlas} atlas regions (reads scanned: {current_chrom_ptr}/{n_records})",
-                end="",
-                flush=True,
+            _module_logger.info(
+                "\r%sProcessed %d/%d atlas regions (reads scanned: %d/%d)",
+                progress_prefix,
+                i_atlas,
+                n_atlas,
+                current_chrom_ptr,
+                n_records,
             )
 
         name = row["name"]
@@ -292,7 +294,7 @@ def prepare_reads_for_uxm(
 
             scan_ptr += 1
 
-    print()  # Add a newline after the progress bar finishes
+    _module_logger.info("")  # Add a newline after the progress bar finishes
 
     # Update column names to reflect actual content
     if debug:

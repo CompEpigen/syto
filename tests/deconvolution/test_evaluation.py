@@ -34,7 +34,7 @@ def _manual_numpy_metrics(pred: np.ndarray, target: np.ndarray, eps: float = 1e-
         "kl": float(kl),
         "max_error": float(max_error),
         "cosine_sim": float(cosine_sim),
-        "overall_r2": float(overall_r2),
+        "r2": float(overall_r2),
     }
 
 
@@ -69,7 +69,7 @@ class TestComputeDeconvolutionMetricsNp(unittest.TestCase):
             "kl",
             "max_error",
             "cosine_sim",
-            "overall_r2",
+            "r2",
             "loa_lower",
             "loa_upper",
             "loa_width",

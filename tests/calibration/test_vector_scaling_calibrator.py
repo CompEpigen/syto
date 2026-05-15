@@ -1,7 +1,8 @@
-import unittest
-from tempfile import TemporaryDirectory
 from pathlib import Path
 
+import unittest
+from tempfile import TemporaryDirectory
+from parameterized import parameterized
 import numpy as np
 import torch
 
@@ -9,7 +10,6 @@ from methyldl.calibration.vector_scaling_calibrator import (
     CalibrationMethod,
     _TrainedLinearCalibrationModel,
     VectorScalingCalibrator,
-    VectorScalingCalibratorCV,
 )
 
 # ---------------------------------------------------------------------------
@@ -485,84 +485,99 @@ class TestVectorScalingCalibratorFit(unittest.TestCase):
 
 
 class TestVectorScalingCalibratorPredict(unittest.TestCase):
-    """Tests for predict / predict_proba methods."""
+    """Tests for predict method."""
 
     def setUp(self):
         """Create a fitted calibrator shared by all predict tests."""
         self.cal = _fit_quick_calibrator()
 
-    def test_predict_proba_shape(self):
+    def test_predict_shape(self):
         """Output shape should match (n_samples, n_classes)."""
         X = _make_dummy_probs(10, 4, seed=99)
-        out = self.cal.predict_proba(X)
+        out = self.cal.predict(X)
         self.assertEqual(out.shape, (10, 4))
 
-    def test_predict_proba_sums_to_one(self):
+    def test_predict_sums_to_one(self):
         """Calibrated probabilities must sum to 1 per sample (softmax output)."""
         X = _make_dummy_probs(10, 4, seed=99)
-        out = self.cal.predict_proba(X)
+        out = self.cal.predict(X)
         np.testing.assert_allclose(out.sum(axis=1), np.ones(10), atol=1e-6)
 
-    def test_predict_proba_nonnegative(self):
+    def test_predict_nonnegative(self):
         """Calibrated probabilities must be non-negative (softmax output)."""
         X = _make_dummy_probs(10, 4, seed=99)
-        out = self.cal.predict_proba(X)
+        out = self.cal.predict(X)
         self.assertTrue(np.all(out >= 0))
-
-    def test_predict_is_alias_for_predict_proba(self):
-        """predict() and predict_proba() should return identical results."""
-        X = _make_dummy_probs(10, 4, seed=99)
-        np.testing.assert_array_equal(self.cal.predict(X), self.cal.predict_proba(X))
 
 
 class TestVectorScalingCalibratorSaveLoad(unittest.TestCase):
     """Tests for save / load round-trip."""
 
-    def test_save_unfitted_raises(self):
+    @parameterized.expand(
+        [
+            [".npz"],
+            [".joblib"],
+        ]
+    )
+    def test_save_unfitted_raises(self, file_extension):
         """Saving before fit() should raise RuntimeError."""
         cal = VectorScalingCalibrator(device="cpu")
         with TemporaryDirectory() as td:
             with self.assertRaises(RuntimeError):
-                cal.save(Path(td) / "model.npz")
+                cal.save(Path(td) / f"model{file_extension}")
 
-    def test_save_load_round_trip(self):
+    @parameterized.expand(
+        [
+            [".npz"],
+            [".joblib"],
+        ]
+    )
+    def test_save_load_npz_round_trip(self, file_extension):
         """Save then load should produce identical predictions and metadata."""
         cal = _fit_quick_calibrator()
         X_test = _make_dummy_probs(10, 4, seed=99)
-        original_preds = cal.predict_proba(X_test)
+        original_preds = cal.predict(X_test)
 
         with TemporaryDirectory() as td:
-            path = Path(td) / "model.npz"
+            path = Path(td) / f"model{file_extension}"
             cal.save(path)
 
-            loaded = VectorScalingCalibrator(device="cpu")
-            loaded.load(path)
+            loaded = VectorScalingCalibrator.load(path)
 
-        np.testing.assert_allclose(
-            loaded.predict_proba(X_test), original_preds, atol=1e-12
-        )
+        np.testing.assert_allclose(loaded.predict(X_test), original_preds, atol=1e-12)
         self.assertEqual(loaded.n_classes_, cal.n_classes_)
         self.assertAlmostEqual(loaded.final_loss_, cal.final_loss_)
         self.assertEqual(loaded.best_epoch_, cal.best_epoch_)
 
-    def test_load_restores_constructor_params(self):
+    @parameterized.expand(
+        [
+            [".npz"],
+            [".joblib"],
+        ]
+    )
+    def test_load_restores_constructor_params(self, file_extension):
         """load() should restore constructor hyper-parameters from the saved file."""
         cal = _fit_quick_calibrator(reg_lambda=0.05, lr=0.005, max_iter=5)
         with TemporaryDirectory() as td:
-            path = Path(td) / "model.npz"
+            path = Path(td) / f"model{file_extension}"
             cal.save(path)
-            loaded = VectorScalingCalibrator(device="cpu")
-            loaded.load(path)
+            loaded = VectorScalingCalibrator.load(path)
 
         self.assertAlmostEqual(loaded.reg_lambda, 0.05)
         self.assertAlmostEqual(loaded.lr, 0.005)
         self.assertEqual(loaded.max_iter, 5)
 
-    def test_save_creates_npz_file(self):
-        """save() should create a .npz file on disk."""
+    @parameterized.expand(
+        [
+            [".npz"],
+            [".joblib"],
+        ]
+    )
+    def test_save_creates_file(self, file_extension):
+        """save() should create a file on disk."""
         cal = _fit_quick_calibrator()
         with TemporaryDirectory() as td:
-            path = Path(td) / "model.npz"
+            path = Path(td) / f"model{file_extension}"
             cal.save(path)
             self.assertTrue(path.exists())
 
@@ -599,264 +614,3 @@ class TestVectorScalingCalibratorComputeLoss(unittest.TestCase):
         loss_reg = cal_reg._compute_loss(model, inputs, targets).item()
         # The regularised loss = NLL + lambda * ||params||^2, so must be larger.
         self.assertGreater(loss_reg, loss_noreg)
-
-
-# ===================================================================
-# VectorScalingCalibratorCV tests
-# ===================================================================
-
-
-class TestVectorScalingCalibratorCVInit(unittest.TestCase):
-    """Tests for VectorScalingCalibratorCV construction."""
-
-    def test_default_unfitted_attributes(self):
-        """Before fit(), all CV result attributes should be None."""
-        cv = VectorScalingCalibratorCV(
-            reg_lambda_list=[0.0], lr_list=[0.01], max_iter_list=[10]
-        )
-        self.assertIsNone(cv.best_calibrator_)
-        self.assertIsNone(cv.best_params_)
-        self.assertIsNone(cv.best_cv_val_loss_)
-        self.assertIsNone(cv.best_metrics_per_param_)
-
-    def test_constructor_stores_all_params(self):
-        """All constructor arguments should be stored as instance attributes."""
-        cv = VectorScalingCalibratorCV(
-            reg_lambda_list=[0.0, 0.1],
-            lr_list=[0.01],
-            max_iter_list=[10, 20],
-            optimizer="sgd",
-            scheduler="cosine",
-            patience=5,
-            tol=1e-6,
-            n_folds=3,
-            batch_size=32,
-            verbose=True,
-            plateau_factor=0.3,
-            plateau_patience=5,
-        )
-        self.assertEqual(cv.reg_lambda_list, [0.0, 0.1])
-        self.assertEqual(cv.optimizer, "sgd")
-        self.assertEqual(cv.scheduler, "cosine")
-        self.assertEqual(cv.n_folds, 3)
-        self.assertEqual(cv.plateau_factor, 0.3)
-        self.assertEqual(cv.plateau_patience, 5)
-
-
-class TestVectorScalingCalibratorCVFit(unittest.TestCase):
-    """Tests for VectorScalingCalibratorCV.fit()."""
-
-    @classmethod
-    def setUpClass(cls):
-        """Fit a CV calibrator once for reuse across tests (CPU, fast).
-
-        Uses 2 folds and 2 reg_lambda values (4 inner fits total) to keep
-        the test suite fast while still exercising the grid-search logic.
-        """
-        cls.n_classes = 3
-        cls.X = _make_dummy_probs(60, cls.n_classes, seed=0)
-        cls.y = _make_hard_labels(60, cls.n_classes, seed=0)
-
-        cls.cv = VectorScalingCalibratorCV(
-            reg_lambda_list=[0.0, 0.01],
-            lr_list=[0.01],
-            max_iter_list=[5],
-            scheduler="cosine",
-            patience=3,
-            n_folds=2,
-            batch_size=0,
-            verbose=False,
-        )
-        cls.cv.fit(cls.X, cls.y)
-
-    def test_fit_returns_self(self):
-        """fit() should return the CV instance for method chaining."""
-        cv = VectorScalingCalibratorCV(
-            reg_lambda_list=[0.0],
-            lr_list=[0.01],
-            max_iter_list=[3],
-            scheduler="cosine",
-            patience=2,
-            n_folds=2,
-            verbose=False,
-        )
-        X = _make_dummy_probs(30, 3)
-        y = _make_hard_labels(30, 3)
-        result = cv.fit(X, y)
-        self.assertIs(result, cv)
-
-    def test_fit_populates_best_calibrator(self):
-        """After fitting, best_calibrator_ should be a VectorScalingCalibrator."""
-        self.assertIsNotNone(self.cv.best_calibrator_)
-        self.assertIsInstance(self.cv.best_calibrator_, VectorScalingCalibrator)
-
-    def test_fit_populates_best_params(self):
-        """After fitting, best_params_ should contain the grid-search keys."""
-        self.assertIsNotNone(self.cv.best_params_)
-        self.assertIn("reg_lambda", self.cv.best_params_)
-        self.assertIn("lr", self.cv.best_params_)
-        self.assertIn("max_iter", self.cv.best_params_)
-
-    def test_fit_populates_cv_val_loss(self):
-        """After fitting, best_cv_val_loss_ should be a finite float."""
-        self.assertIsNotNone(self.cv.best_cv_val_loss_)
-        self.assertIsInstance(self.cv.best_cv_val_loss_, float)
-
-    def test_fit_populates_metrics_per_param(self):
-        """After fitting, best_metrics_per_param_ should have at least one entry."""
-        self.assertIsNotNone(self.cv.best_metrics_per_param_)
-        self.assertGreater(len(self.cv.best_metrics_per_param_), 0)
-
-
-class TestVectorScalingCalibratorCVPredict(unittest.TestCase):
-    """Tests for CV predict / predict_proba methods.
-
-    These delegate to the inner best_calibrator_, so the tests check
-    both the delegation and the unfitted guard.
-    """
-
-    @classmethod
-    def setUpClass(cls):
-        """Fit a minimal CV calibrator once for prediction tests."""
-        cls.n_classes = 3
-        X = _make_dummy_probs(60, cls.n_classes, seed=0)
-        y = _make_hard_labels(60, cls.n_classes, seed=0)
-        cls.cv = VectorScalingCalibratorCV(
-            reg_lambda_list=[0.0],
-            lr_list=[0.01],
-            max_iter_list=[5],
-            scheduler="cosine",
-            patience=3,
-            n_folds=2,
-            verbose=False,
-        )
-        cls.cv.fit(X, y)
-
-    def test_predict_proba_shape(self):
-        """Output shape should match (n_samples, n_classes)."""
-        X = _make_dummy_probs(10, self.n_classes, seed=99)
-        out = self.cv.predict_proba(X)
-        self.assertEqual(out.shape, (10, self.n_classes))
-
-    def test_predict_proba_sums_to_one(self):
-        """Calibrated probabilities must sum to 1 per sample."""
-        X = _make_dummy_probs(10, self.n_classes, seed=99)
-        out = self.cv.predict_proba(X)
-        np.testing.assert_allclose(out.sum(axis=1), np.ones(10), atol=1e-6)
-
-    def test_predict_is_alias(self):
-        """predict() and predict_proba() should return identical results."""
-        X = _make_dummy_probs(10, self.n_classes, seed=99)
-        np.testing.assert_array_equal(self.cv.predict(X), self.cv.predict_proba(X))
-
-    def test_predict_proba_unfitted_raises(self):
-        """predict_proba() before fit() should raise RuntimeError."""
-        cv = VectorScalingCalibratorCV(
-            reg_lambda_list=[0.0], lr_list=[0.01], max_iter_list=[5]
-        )
-        with self.assertRaises(RuntimeError):
-            cv.predict_proba(_make_dummy_probs(5, 3))
-
-    def test_predict_unfitted_raises(self):
-        """predict() before fit() should raise RuntimeError."""
-        cv = VectorScalingCalibratorCV(
-            reg_lambda_list=[0.0], lr_list=[0.01], max_iter_list=[5]
-        )
-        with self.assertRaises(RuntimeError):
-            cv.predict(_make_dummy_probs(5, 3))
-
-
-class TestVectorScalingCalibratorCVSaveLoad(unittest.TestCase):
-    """Tests for CV save / load round-trip.
-
-    The CV calibrator serialises both the grid-search metadata and the
-    inner best calibrator (including model weights) into a single .npz.
-    """
-
-    @classmethod
-    def setUpClass(cls):
-        """Fit a minimal CV calibrator once for serialisation tests."""
-        cls.n_classes = 3
-        X = _make_dummy_probs(60, cls.n_classes, seed=0)
-        y = _make_hard_labels(60, cls.n_classes, seed=0)
-        cls.cv = VectorScalingCalibratorCV(
-            reg_lambda_list=[0.0],
-            lr_list=[0.01],
-            max_iter_list=[5],
-            scheduler="cosine",
-            patience=3,
-            n_folds=2,
-            verbose=False,
-        )
-        cls.cv.fit(X, y)
-
-    def test_save_unfitted_raises(self):
-        """Saving before fit() should raise RuntimeError."""
-        cv = VectorScalingCalibratorCV(
-            reg_lambda_list=[0.0], lr_list=[0.01], max_iter_list=[5]
-        )
-        with TemporaryDirectory() as td:
-            with self.assertRaises(RuntimeError):
-                cv.save(Path(td) / "model.npz")
-
-    def test_save_load_round_trip_predictions(self):
-        """Predictions from a loaded CV calibrator should match the original."""
-        X_test = _make_dummy_probs(10, self.n_classes, seed=99)
-        original_preds = self.cv.predict_proba(X_test)
-
-        with TemporaryDirectory() as td:
-            path = Path(td) / "cv_model.npz"
-            self.cv.save(path)
-
-            loaded = VectorScalingCalibratorCV(
-                reg_lambda_list=[0.0], lr_list=[0.01], max_iter_list=[5]
-            )
-            loaded.load(path)
-
-        np.testing.assert_allclose(
-            loaded.predict_proba(X_test), original_preds, atol=1e-12
-        )
-
-    def test_save_load_restores_cv_metadata(self):
-        """load() should restore best_params_, best_cv_val_loss_, and inner calibrator."""
-        with TemporaryDirectory() as td:
-            path = Path(td) / "cv_model.npz"
-            self.cv.save(path)
-
-            loaded = VectorScalingCalibratorCV(
-                reg_lambda_list=[0.0], lr_list=[0.01], max_iter_list=[5]
-            )
-            loaded.load(path)
-
-        self.assertEqual(loaded.best_params_, self.cv.best_params_)
-        self.assertAlmostEqual(loaded.best_cv_val_loss_, self.cv.best_cv_val_loss_)
-        self.assertIsNotNone(loaded.best_calibrator_)
-        self.assertEqual(loaded.best_calibrator_.n_classes_, self.n_classes)
-
-    def test_save_load_restores_metrics_per_param(self):
-        """load() should restore the per-hyperparameter metrics dictionary."""
-        with TemporaryDirectory() as td:
-            path = Path(td) / "cv_model.npz"
-            self.cv.save(path)
-
-            loaded = VectorScalingCalibratorCV(
-                reg_lambda_list=[0.0], lr_list=[0.01], max_iter_list=[5]
-            )
-            loaded.load(path)
-
-        self.assertIsNotNone(loaded.best_metrics_per_param_)
-        self.assertEqual(
-            len(loaded.best_metrics_per_param_),
-            len(self.cv.best_metrics_per_param_),
-        )
-
-    def test_save_creates_file(self):
-        """save() should create a .npz file on disk."""
-        with TemporaryDirectory() as td:
-            path = Path(td) / "cv_model.npz"
-            self.cv.save(path)
-            self.assertTrue(path.exists())
-
-
-if __name__ == "__main__":
-    unittest.main()

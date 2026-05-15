@@ -7,10 +7,10 @@ This pipeline takes as input:
 the deconvolution pipeline)
 
 and outputs for each deconvolver:
-- the weights of the linear calibrators and the weights of the VectorScalingCalibratorCV
+- the weights of the linear calibrators and the weights of the VectorScalingCalibrator with CV
 - the predictions of the deconvolver (on test and val set) without calibration,
-with linear calibration (clip01 normalisation, clip0 normalisation, simplex projection),
-and with VectorScalingCalibratorCV calibration
+with linear calibration (clip0 normalisation, simplex projection),
+and with VectorScalingCalibrator with CV calibration
 
 
 The pipeline proceeds in the following steps:
@@ -19,9 +19,9 @@ The pipeline proceeds in the following steps:
     a. evaluate the deconvolver on the validation set and test set, saving the predictions
     b. fit a linear calibrator on the validation set
         i. save the predictions of the linear calibrator on the validation set and test set
-        for all 3 normalization methods (clip01-norm, clip0-norm, simplex projection)
-    c. fit a VectorScalingCalibratorCV on the validation set
-        i. save the predictions of the VectorScalingCalibratorCV
+        for both normalization methods (clip0-norm, simplex projection)
+    c. fit a VectorScalingCalibrator with CV on the validation set
+        i. save the predictions of the VectorScalingCalibrator with CV
         on the validation set and test set
 
 """
@@ -38,16 +38,15 @@ import torch.nn as nn
 
 from methyldl.deconvolution.evaluation import compute_deconvolution_metrics
 from methyldl.calibration.linear_calibrator import LinearCalibrator
-from methyldl.calibration.vector_scaling_calibrator import (
-    VectorScalingCalibratorCV,
-)
+from methyldl.calibration.vector_scaling_calibrator import VectorScalingCalibrator
+from methyldl.cross_validation_engine import CrossValidationEngine
 from methyldl.deconvolution.xgbdeconvolver import XGBoostDeconvolver
 from methyldl.deconvolution.least_squares_deconvolvers import (
     NNLSDeconvolver,
     PSLSDeconvolver,
 )
 
-LINEAR_NORM_METHODS = ["clip01-normalize", "clip0-normalize", "simplex-projection"]
+LINEAR_NORM_METHODS = ["clip0-normalize", "simplex-projection"]
 
 
 class CalibratorFittingPipeline:
@@ -229,8 +228,8 @@ class CalibratorFittingPipeline:
             value = np.array([y[: self.num_output_labels] for y in value])
             proportions_dict[key] = value
 
-        for split_name in features_dict:
-            f_shape = features_dict[split_name].shape
+        for split_name, split_features in features_dict.items():
+            f_shape = split_features.shape
             if split_name in proportions_dict:
                 p_shape = proportions_dict[split_name].shape
                 self.logger.info(
@@ -304,7 +303,8 @@ class CalibratorFittingPipeline:
             )
         elif not "device" in cfg["params"]:
             self.logger.warning(
-                f"Deconvolver config for '{name}' missing 'device' param, using cuda if available else cpu"
+                f"Deconvolver config for '{name}' missing 'device' param,"
+                " using cuda if available else cpu"
             )
         device = cfg.get("params", {}).get(
             "device", "cuda" if torch.cuda.is_available() else "cpu"
@@ -399,8 +399,8 @@ class CalibratorFittingPipeline:
 
         Steps:
           a. Evaluate uncalibrated predictions on val and test
-          b. Fit LinearCalibrator on val, evaluate with 3 normalisation methods
-          c. Fit VectorScalingCalibratorCV on val, evaluate on val and test
+          b. Fit LinearCalibrator on val, evaluate with 2 normalisation methods
+          c. Fit VectorScalingCalibrator with CV on val, evaluate on val and test
         """
         deconv_out = os.path.join(
             self.output_dir, name + "_calibrators_and_predictions"
@@ -414,7 +414,8 @@ class CalibratorFittingPipeline:
         )
         if os.path.exists(uncalibrated_predictions_path):
             self.logger.info(
-                f"    Found existing uncalibrated predictions at {uncalibrated_predictions_path}, loading instead of re-evaluating"
+                f"    Found existing uncalibrated predictions at {uncalibrated_predictions_path},"
+                " loading instead of re-evaluating"
             )
             data = np.load(uncalibrated_predictions_path)
             val_pred = data["val_pred"]
@@ -451,14 +452,14 @@ class CalibratorFittingPipeline:
         linear_calibrator_path = os.path.join(deconv_out, "linear_calibrator.npz")
         if os.path.exists(linear_calibrator_path):
             self.logger.info(
-                f"    Found existing linear calibrator at {linear_calibrator_path}, loading instead of re-fitting"
+                f"    Found existing linear calibrator at {linear_calibrator_path},"
+                " loading instead of re-fitting"
             )
-            linear_calibrator = LinearCalibrator()
-            linear_calibrator.load_calibration_parameters(linear_calibrator_path)
+            linear_calibrator = LinearCalibrator.load(linear_calibrator_path)
         else:
             linear_calibrator = LinearCalibrator()
             linear_calibrator.fit(val_pred, y_valid)
-            linear_calibrator.save_calibration_parameters(linear_calibrator_path)
+            linear_calibrator.save(linear_calibrator_path)
             self.logger.info(f"    Saved linear calibrator to {linear_calibrator_path}")
 
         for norm_method in LINEAR_NORM_METHODS:
@@ -468,7 +469,9 @@ class CalibratorFittingPipeline:
             )
             if os.path.exists(predictions_path):
                 self.logger.info(
-                    f"    Found existing linear calibrated predictions for norm method '{norm_method}' at {predictions_path}, loading instead of re-predicting"
+                    "    Found existing linear calibrated predictions for norm method "
+                    f"'{norm_method}' at {predictions_path},"
+                    " loading instead of re-predicting"
                 )
                 data = np.load(predictions_path)
                 val_calib = data["val_pred"]
@@ -500,21 +503,23 @@ class CalibratorFittingPipeline:
             }
 
         # ── 2c: VectorScaling calibration ─────────────────────────
-        self.logger.info(f"  [{name}] Fitting VectorScalingCalibratorCV ...")
+        self.logger.info(f"  [{name}] Fitting VectorScalingCalibrator with CV ...")
 
-        vs_path = os.path.join(deconv_out, "vector_scaling_calibrator.npz")
+        vs_path = os.path.join(deconv_out, "vector_scaling_calibrator_with_cv.joblib")
         if os.path.exists(vs_path):
             self.logger.info(
-                f"    Found existing VectorScalingCalibratorCV at {vs_path}, loading instead of re-fitting"
+                f"    Found existing VectorScalingCalibrator with CV at {vs_path},"
+                " loading instead of re-fitting"
             )
-            vs_calibrator = VectorScalingCalibratorCV()
-            vs_calibrator.load(vs_path)
+            vs_calibrator = CrossValidationEngine.load(vs_path)
         else:
-            # get config for vector scaling calibrator, log any missing parameters and their defaults
+            # get config for vector scaling calibrator,
+            # log any missing parameters and their defaults
             vs_cfg = cfg.get("vector_scaling", {})
             if not vs_cfg:
                 self.logger.info(
-                    f"    Deconvolver config for '{name}' missing 'vector_scaling' section, using defaults for all parameters:  "
+                    f"    Deconvolver config for '{name}' missing"
+                    " 'vector_scaling' section, using defaults for all parameters:  "
                     "reg_lambda_list=[0.0, 1e-4, 1e-3], "
                     "lr_list=[1e-3, 1e-2], "
                     "max_iter_list=[1000], "
@@ -530,56 +535,70 @@ class CalibratorFittingPipeline:
             else:
                 if "reg_lambda_list" not in vs_cfg:
                     self.logger.info(
-                        f"    Deconvolver config for '{name}' missing 'reg_lambda_list', using default [0.0, 1e-4, 1e-3]"
+                        f"    Deconvolver config for '{name}' missing 'reg_lambda_list',"
+                        " using default [0.0, 1e-4, 1e-3]"
                     )
                 if "lr_list" not in vs_cfg:
                     self.logger.info(
-                        f"    Deconvolver config for '{name}' missing 'lr_list', using default [1e-3, 1e-2]"
+                        f"    Deconvolver config for '{name}' missing 'lr_list',"
+                        " using default [1e-3, 1e-2]"
                     )
                 if "max_iter_list" not in vs_cfg:
                     self.logger.info(
-                        f"    Deconvolver config for '{name}' missing 'max_iter_list', using default [1000]"
+                        f"    Deconvolver config for '{name}' missing 'max_iter_list',"
+                        " using default [1000]"
                     )
                 if "optimizer" not in vs_cfg:
                     self.logger.info(
-                        f"    Deconvolver config for '{name}' missing 'optimizer', using default 'adam'"
+                        f"    Deconvolver config for '{name}' missing 'optimizer',"
+                        " using default 'adam'"
                     )
                 if "scheduler" not in vs_cfg:
                     self.logger.info(
-                        f"    Deconvolver config for '{name}' missing 'scheduler', using default 'plateau'"
+                        f"    Deconvolver config for '{name}' missing 'scheduler',"
+                        " using default 'plateau'"
                     )
                 if "patience" not in vs_cfg:
                     self.logger.info(
-                        f"    Deconvolver config for '{name}' missing 'patience', using default 50"
+                        f"    Deconvolver config for '{name}' missing 'patience',"
+                        " using default 50"
                     )
                 if "n_folds" not in vs_cfg:
                     self.logger.info(
-                        f"    Deconvolver config for '{name}' missing 'n_folds', using default 5"
+                        f"    Deconvolver config for '{name}' missing 'n_folds',"
+                        " using default 5"
                     )
                 if "batch_size" not in vs_cfg:
                     self.logger.info(
-                        f"    Deconvolver config for '{name}' missing 'batch_size', using default None (full batch)"
+                        f"    Deconvolver config for '{name}' missing 'batch_size',"
+                        " using default None (full batch)"
                     )
                 if "verbose" not in vs_cfg:
                     self.logger.info(
-                        f"    Deconvolver config for '{name}' missing 'verbose', using default True"
+                        f"    Deconvolver config for '{name}' missing 'verbose',"
+                        " using default True"
                     )
 
-            vs_calibrator = VectorScalingCalibratorCV(
-                reg_lambda_list=vs_cfg.get("reg_lambda_list", [0.0, 1e-4, 1e-3]),
-                lr_list=vs_cfg.get("lr_list", [1e-3, 1e-2]),
-                max_iter_list=vs_cfg.get("max_iter_list", [1000]),
-                optimizer=vs_cfg.get("optimizer", "adam"),
-                scheduler=vs_cfg.get("scheduler", "plateau"),
-                patience=vs_cfg.get("patience", 50),
-                n_folds=vs_cfg.get("n_folds", 5),
-                batch_size=vs_cfg.get("batch_size", None),
-                verbose=vs_cfg.get("verbose", True),
-                plateau_factor=vs_cfg.get("plateau_factor", 0.5),
-                plateau_patience=vs_cfg.get("plateau_patience", 10),
+            vs_calibrator = CrossValidationEngine()
+            vs_calibrator.fit(
+                X=val_pred,
+                y=y_valid,
+                model_class=VectorScalingCalibrator,
+                n_folds=3,
+                model_param_grid={
+                    "reg_lambda": vs_cfg.get("reg_lambda_list", [0.0, 1e-4, 1e-3]),
+                    "lr": vs_cfg.get("lr_list", [1e-3, 1e-2]),
+                    "max_iter": vs_cfg.get("max_iter_list", [1000]),
+                    "optimizer": vs_cfg.get("optimizer", "adam"),
+                    "scheduler": vs_cfg.get("scheduler", "plateau"),
+                    "patience": vs_cfg.get("patience", 50),
+                    "batch_size": vs_cfg.get("batch_size", None),
+                    "plateau_factor": vs_cfg.get("plateau_factor", 0.5),
+                    "plateau_patience": vs_cfg.get("plateau_patience", 10),
+                },
+                random_state=42,
+                disable_pbar=False,
             )
-
-            vs_calibrator.fit(val_pred, y_valid)
             vs_calibrator.save(vs_path)
 
             self.logger.info(f"    Saved VectorScaling calibrator to {vs_path}")
@@ -592,14 +611,15 @@ class CalibratorFittingPipeline:
         vs_pred_path = os.path.join(deconv_out, "vector_scaling_predictions.npz")
         if os.path.exists(vs_pred_path):
             self.logger.info(
-                f"    Found existing VectorScalingCalibratorCV predictions at {vs_pred_path}, loading instead of re-predicting"
+                f"    Found existing VectorScalingCalibrator CV predictions at {vs_pred_path},"
+                " loading instead of re-predicting"
             )
             data = np.load(vs_pred_path)
             val_vs = data["val_pred"]
             test_vs = data["test_pred"]
         else:
-            val_vs = vs_calibrator.predict_proba(val_pred)
-            test_vs = vs_calibrator.predict_proba(test_pred)
+            val_vs = vs_calibrator.predict(val_pred)
+            test_vs = vs_calibrator.predict(test_pred)
             np.savez_compressed(
                 vs_pred_path,
                 val_pred=val_vs,
@@ -631,7 +651,7 @@ class CalibratorFittingPipeline:
         self,
         name: str,
         model: Any,
-        X: np.ndarray,
+        X: np.ndarray,  # pylint: disable=invalid-name
         cfg: dict,
     ) -> np.ndarray:
         """Run inference with a fitted deconvolver."""
@@ -648,7 +668,7 @@ class CalibratorFittingPipeline:
             )
             model.eval()
             with torch.inference_mode():
-                X_t = torch.FloatTensor(X).to(device)
+                X_t = torch.FloatTensor(X).to(device)  # pylint: disable=invalid-name
                 pred = model(X_t).cpu().numpy()
             return pred
 
@@ -659,7 +679,8 @@ class CalibratorFittingPipeline:
         elif name == "psls":
             if not "n_workers" in params:
                 self.logger.warning(
-                    f"Deconvolver config for '{name}' missing 'n_workers' param, using default 2"
+                    f"Deconvolver config for '{name}' missing 'n_workers' param,"
+                    " using default 2"
                 )
             n_workers = params.get("n_workers", 2)
             return model.predict(X, n_workers=n_workers)
@@ -686,7 +707,8 @@ class CalibratorFittingPipeline:
                         f"    {calib_name:30s}  "
                         f"R2={m['overall_r2']:.6f}  "
                         f"LoA=[{m['loa_lower']:.6f}, {m['loa_upper']:.6f}]  "
-                        f"LoA(worst)=[{m['worst_class_loa_lower']:.6f}, {m['worst_class_loa_upper']:.6f}]  "
+                        f"LoA(worst)=[{m['worst_class_loa_lower']:.6f},"
+                        f" {m['worst_class_loa_upper']:.6f}]  "
                         f"MAE={m['mae']:.6f}  "
                         f"MSE={m['mse']:.6f}  "
                         f"KLDiv={m['kl']:.6f}"

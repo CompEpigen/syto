@@ -8,19 +8,22 @@ import threading
 
 import cvxpy as cp
 import joblib
-from sklearn.base import BaseEstimator, RegressorMixin
 from sklearn.utils.validation import check_is_fitted
 import numpy as np
 from tqdm import tqdm
 from scipy.optimize import nnls
 
+from .abstract_deconvolver import AbstractDeconvolver
 
-class AbstractLSDeconvolver(BaseEstimator, RegressorMixin):
+
+class AbstractLSDeconvolver(AbstractDeconvolver):
     """
     Parent class of least-squares-based deconvolution methods.
     """
 
-    def fit(self, X: np.ndarray, y: np.ndarray):
+    def fit(
+        self, X: np.ndarray, y: np.ndarray, **kwargs  # pylint: disable=invalid-name
+    ) -> "AbstractLSDeconvolver":
         """
         Store the reference prediction matrix built from pure reference predictions.
 
@@ -34,6 +37,7 @@ class AbstractLSDeconvolver(BaseEstimator, RegressorMixin):
         Returns:
             The fitted AbstractLSDeconvolver instance.
         """
+        # pylint: disable=attribute-defined-outside-init
         assert X.ndim == 2, "X must be a 2D matrix of shape (n_cell_types, n_features)"
         self.n_cell_types_ = len(y)
         self.n_features_ = X.shape[1]
@@ -47,46 +51,49 @@ class AbstractLSDeconvolver(BaseEstimator, RegressorMixin):
         )
         return self
 
-    def save(self, filepath: str):
+    def save(self, path: str, **kwargs) -> None:
         """Save the fitted model to disk using joblib.
 
         Args:
-            filepath: Destination path (e.g. ``'model.joblib'``).
+            path: Destination path (e.g. ``'model.joblib'``).
 
         Raises:
             sklearn.exceptions.NotFittedError: If the model has not been fit.
         """
         check_is_fitted(self)
-        os.makedirs(os.path.dirname(os.path.abspath(filepath)), exist_ok=True)
-        joblib.dump(self, filepath)
+        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+        joblib.dump(self, path)
 
     @classmethod
-    def load(cls, filepath: str) -> "AbstractLSDeconvolver":
+    def load(cls, path: str, **kwargs) -> "AbstractLSDeconvolver":
         """Load a saved model from disk.
 
         Args:
-            filepath: Path to the saved model file.
+            path: Path to the saved model file.
 
         Returns:
             The loaded model instance.
 
         Raises:
-            FileNotFoundError: If *filepath* does not exist.
+            FileNotFoundError: If *path* does not exist.
             TypeError: If the loaded object is not an instance of this class.
             sklearn.exceptions.NotFittedError: If the loaded model was not fit.
         """
-        if not os.path.exists(filepath):
-            raise FileNotFoundError(f"Model file not found at {filepath}")
-        model = joblib.load(filepath)
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"Model file not found at {path}")
+        model = joblib.load(path)
         if not isinstance(model, cls):
             raise TypeError(f"Loaded object is not of type {cls.__name__}")
         check_is_fitted(model)
         return model
 
     def predict_single_sample(self, x: np.ndarray) -> np.ndarray:
+        """Predict mixture proportions for a single sample."""
         raise NotImplementedError("Subclasses must implement predict_single_sample")
 
-    def _predict_chunk_sequential(self, X_chunk: np.ndarray) -> np.ndarray:
+    def _predict_chunk_sequential(
+        self, X_chunk: np.ndarray  # pylint: disable=invalid-name
+    ) -> np.ndarray:
         """
         Predict NNLS outputs for a chunk of samples sequentially.
 
@@ -106,6 +113,19 @@ class AbstractLSDeconvolver(BaseEstimator, RegressorMixin):
             chunk_predictions[i] = self.predict_single_sample(sample)
 
         return chunk_predictions
+
+    def predict(self, X: np.ndarray, **kwargs) -> np.ndarray:
+        """Predict mixture proportions for a batch of samples."""
+        raise NotImplementedError("Subclasses must implement predict")
+
+    def get_cv_metric(self, X, y, **kwargs):
+        predictions = self.predict(X, **kwargs)
+        mse = np.mean((predictions - y) ** 2)
+        return mse
+
+    @property
+    def cv_metric_name(self):
+        return "MSE"
 
 
 class NNLSDeconvolver(AbstractLSDeconvolver):
@@ -169,7 +189,10 @@ class NNLSDeconvolver(AbstractLSDeconvolver):
         return mixture_prop_pred, mixture_prop_unnorm_pred, residuals
 
     def _predict_parallel(
-        self, X: np.ndarray, n_workers: int = 1, chunk_size: int = 100
+        self,
+        X: np.ndarray,  # pylint: disable=invalid-name
+        n_workers: int = 1,
+        chunk_size: int = 100,
     ) -> np.ndarray:
         """
         Predict mixture proportions for a batch of samples in parallel.
@@ -212,7 +235,9 @@ class NNLSDeconvolver(AbstractLSDeconvolver):
         residuals = np.concatenate([res[2] for res in results])
         return mixture_prop_pred, mixture_prop_unnorm_pred, residuals
 
-    def _predict_sequential(self, X: np.ndarray) -> np.ndarray:
+    def _predict_sequential(
+        self, X: np.ndarray  # pylint: disable=invalid-name
+    ) -> np.ndarray:
         """
         Predict mixture proportions for a batch of samples sequentially.
 
@@ -242,7 +267,9 @@ class NNLSDeconvolver(AbstractLSDeconvolver):
         return mixture_prop_pred, mixture_prop_unnorm_pred, residuals
 
     def predict(
-        self, X: np.ndarray, n_workers: int = 1, chunk_size: int = 100
+        self,
+        X: np.ndarray,  # pylint: disable=invalid-name
+        **kwargs,
     ) -> np.ndarray:
         """
         Predict mixture proportions for a batch of samples.
@@ -261,6 +288,8 @@ class NNLSDeconvolver(AbstractLSDeconvolver):
             arrays have shape (n_samples, n_cell_types) and ``residuals`` has shape
             (n_samples,).
         """
+        n_workers = kwargs.get("n_workers", 1)
+        chunk_size = kwargs.get("chunk_size", 100)
         if n_workers > 1:
             return self._predict_parallel(X, n_workers, chunk_size=chunk_size)
         else:
@@ -286,7 +315,7 @@ class PSLSDeconvolver(AbstractLSDeconvolver):
         self._cvxpy_fit_generation_ = -1
         self.solver_type = solver_type
 
-    def fit(self, X: np.ndarray, y: np.ndarray):
+    def fit(self, X: np.ndarray, y: np.ndarray, **kwargs) -> "PSLSDeconvolver":
         """
         Fit the deconvolver from pure reference predictions.
 
@@ -300,8 +329,9 @@ class PSLSDeconvolver(AbstractLSDeconvolver):
         Returns:
             The fitted PSLSDeconvolver instance.
         """
+        # pylint: disable=attribute-defined-outside-init
         # call AbstractLSDeconvolver.fit to store the reference prediction matrix and related state
-        super().fit(X, y)
+        super().fit(X, y, **kwargs)
 
         if self.solver_type == "pgd":
             # precomputed matrices for the PGD algorithm
@@ -330,11 +360,12 @@ class PSLSDeconvolver(AbstractLSDeconvolver):
         """Restore state and create a fresh thread-local CVXPY cache."""
         self.__dict__.update(state)
         if self.solver_type == "cvxpy":
+            # pylint: disable=attribute-defined-outside-init
             self._cvxpy_thread_cache_ = threading.local()
 
     def predict_single_sample_pgd(
         self, x: np.ndarray, max_iter=1000, tol=1e-5, verbose=False
-    ):
+    ) -> np.ndarray:
         """
         Predict mixture proportions for one sample using projected gradient descent.
 
@@ -376,7 +407,11 @@ class PSLSDeconvolver(AbstractLSDeconvolver):
         return w
 
     def predict_batch_pgd(
-        self, X: np.ndarray, max_iter=2000, tol=1e-5, verbose=False
+        self,
+        X: np.ndarray,  # pylint: disable=invalid-name
+        max_iter=2000,
+        tol=1e-5,
+        verbose=False,
     ) -> np.ndarray:
         """
         Predict mixture proportions for a batch of samples using projected gradient
@@ -424,7 +459,7 @@ class PSLSDeconvolver(AbstractLSDeconvolver):
         print(f"Warning: Reached max iterations {max_iter} without full convergence.")
         return w
 
-    def _build_cvxpy_problem(self):
+    def _build_cvxpy_problem(self) -> tuple[cp.Parameter, cp.Variable, cp.Problem]:
         """
         Build the reusable CVXPY problem for single-sample PSLS inference.
 
@@ -441,7 +476,7 @@ class PSLSDeconvolver(AbstractLSDeconvolver):
         problem = cp.Problem(objective, constraints)
         return x_param, w, problem
 
-    def _get_cvxpy_worker_problem(self):
+    def _get_cvxpy_worker_problem(self) -> tuple[cp.Parameter, cp.Variable, cp.Problem]:
         """
         Get the thread-local CVXPY problem associated with the current fit.
 
@@ -502,7 +537,9 @@ class PSLSDeconvolver(AbstractLSDeconvolver):
         else:
             raise ValueError(f"Unsupported solver_type: {self.solver_type}")
 
-    def _predict_sequential(self, X: np.ndarray) -> np.ndarray:
+    def _predict_sequential(
+        self, X: np.ndarray  # pylint: disable=invalid-name
+    ) -> np.ndarray:
         """
         Predict mixture proportions for a batch of samples sequentially.
 
@@ -585,6 +622,7 @@ class PSLSDeconvolver(AbstractLSDeconvolver):
             results = list(
                 tqdm(
                     executor.map(
+                        # pylint: disable-next=unnecessary-lambda
                         lambda chunk: self._predict_chunk_sequential(chunk),
                         chunks,
                     ),
@@ -595,7 +633,11 @@ class PSLSDeconvolver(AbstractLSDeconvolver):
         mixture_prop_pred = np.vstack(results)
         return mixture_prop_pred
 
-    def predict(self, X: np.ndarray, n_workers: int = 1, chunk_size=100) -> np.ndarray:
+    def predict(
+        self,
+        X: np.ndarray,  # pylint: disable=invalid-name
+        **kwargs,
+    ) -> np.ndarray:
         """
         Predict mixture proportions for a batch of samples.
 
@@ -613,6 +655,8 @@ class PSLSDeconvolver(AbstractLSDeconvolver):
             Array of shape (n_samples, n_cell_types) containing the estimated
             mixture proportions.
         """
+        n_workers = kwargs.get("n_workers", 1)
+        chunk_size = kwargs.get("chunk_size", 100)
         if n_workers > 1:
             return self._predict_parallel(X, n_workers=n_workers, chunk_size=chunk_size)
         else:

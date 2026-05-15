@@ -405,8 +405,6 @@ class DeconvolutionFittingPipeline:
         y_val = proportions["valid"]
         y_test = proportions.get("test")
 
-        n_features = X_train.shape[1]
-
         model = XGBoostDeconvolver(
             config=xgb_config,
             output_transform="clip_normalize",
@@ -418,10 +416,10 @@ class DeconvolutionFittingPipeline:
         )
 
         model.fit(
-            X_train,
-            y_train,
-            X_val,
-            y_val,
+            X=X_train,
+            y=y_train,
+            X_val=X_val,
+            y_val=y_val,
             verbose=1,
         )
 
@@ -686,7 +684,7 @@ class DeconvolutionFittingPipeline:
         calib_path = os.path.join(
             self.output_dir, f"{deconv_name}_linear_calibrator.npz"
         )
-        calibrator.save_calibration_parameters(calib_path)
+        calibrator.save(calib_path)
         self.logger.info(f"    Saved calibrator to {calib_path}")
 
         return metrics

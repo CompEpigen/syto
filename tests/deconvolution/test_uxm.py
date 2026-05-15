@@ -70,20 +70,6 @@ def _prepare_reads_df():
     )
 
 
-class TestEprint(unittest.TestCase):
-    """Tests for uxm.eprint."""
-
-    def test_eprint_writes_to_stderr(self):
-        """Ensure eprint forwards arguments to print and targets stderr."""
-        with mock.patch("builtins.print") as mocked_print:
-            uxm.eprint("hello", "world")
-
-        mocked_print.assert_called_once()
-        args, kwargs = mocked_print.call_args
-        self.assertEqual(args, ("hello", "world"))
-        self.assertIs(kwargs["file"], uxm.sys.stderr)
-
-
 class TestValidateRefTissues(unittest.TestCase):
     """Tests for uxm.validate_ref_tissues."""
 
