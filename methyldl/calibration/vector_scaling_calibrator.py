@@ -11,14 +11,18 @@ Uses PyTorch for optimization with mini-batch SGD/Adam and early stopping.
 from enum import Enum
 from pathlib import Path
 from typing import Optional, Union
+import logging
 
 import json
 import numpy as np
 import torch
 import torch.nn as nn
+import joblib
 from sklearn.base import BaseEstimator
 
 from methyldl.cross_validation_engine import CrossValidationCompatibleModel
+
+_module_logger = logging.getLogger(__name__)
 
 
 class CalibrationMethod(Enum):
@@ -150,6 +154,7 @@ class VectorScalingCalibrator(CrossValidationCompatibleModel, BaseEstimator):
         verbose: bool = True,
         plateau_factor: float = 0.5,
         plateau_patience: int = 10,
+        logger: Optional[logging.Logger] = None,
     ):
         assert optimizer in {"adam", "sgd"}, "Unsupported optimizer"
         assert scheduler in {
@@ -170,6 +175,7 @@ class VectorScalingCalibrator(CrossValidationCompatibleModel, BaseEstimator):
         self.verbose = verbose
         self.plateau_factor = plateau_factor
         self.plateau_patience = plateau_patience
+        self.logger = logger if logger is not None else _module_logger
 
         # Fitted attributes (set by fit())
         self.model_: Optional[_TrainedLinearCalibrationModel] = None
@@ -538,50 +544,84 @@ class VectorScalingCalibrator(CrossValidationCompatibleModel, BaseEstimator):
         """
         if self.model_ is None:
             raise RuntimeError("Cannot save an unfitted calibrator. Call fit() first.")
+        path = Path(path)
+        file_extension = path.suffix
+        path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Separate JSON-serialisable metadata from numpy arrays
-        metadata = {
-            "params": self.get_params(),
-            "n_classes_": self.n_classes_,
-            "final_loss_": self.final_loss_,
-            "best_epoch_": self.best_epoch_,
-            "best_metrics_": self.best_metrics_,
-            "history_": self.history_,
-            "model_method": self.model_.method.value,
-        }
-        arrays = {
-            name: param.detach().cpu().numpy()
-            for name, param in self.model_.state_dict().items()
-        }
-        arrays["_metadata_json"] = np.array(json.dumps(metadata))
-        np.savez(path, **arrays)
+        if file_extension == ".joblib":
+            joblib.dump(value=self, filename=path)
+        elif file_extension == ".npz":
+            self.logger.warning(
+                "Saving as .npz is deprecated and is left only for backward compatibility. "
+                "Please switch to .joblib."
+            )
+            # Separate JSON-serialisable metadata from numpy arrays
+            metadata = {
+                "params": self.get_params(),
+                "n_classes_": self.n_classes_,
+                "final_loss_": self.final_loss_,
+                "best_epoch_": self.best_epoch_,
+                "best_metrics_": self.best_metrics_,
+                "history_": self.history_,
+                "model_method": self.model_.method.value,
+            }
+            del metadata["params"][
+                "logger"
+            ]  # Remove non-serialisable logger from metadata
+            arrays = {
+                name: param.detach().cpu().numpy()
+                for name, param in self.model_.state_dict().items()
+            }
+            arrays["_metadata_json"] = np.array(json.dumps(metadata))
+            np.savez(path, **arrays)
+        else:
+            self.logger.error("Unsupported file extension: %s", file_extension)
+            raise ValueError(f"Unsupported file extension: {file_extension}")
 
-    def load(self, path: Union[str, Path], **kwargs) -> "VectorScalingCalibrator":
+    @classmethod
+    def load(cls, path: Union[str, Path], **kwargs) -> "VectorScalingCalibrator":
         """Load a fitted calibrator from a .npz file into this instance.
 
         Args:
             path: File path to load from.
 
         Returns:
-            self, with all fitted attributes restored.
+            An instance of VectorScalingCalibrator with all fitted attributes restored.
         """
-        data = np.load(path, allow_pickle=False)
-        metadata = json.loads(str(data["_metadata_json"]))
+        logger = kwargs.get("logger", logging.getLogger(__name__))
+        path = Path(path)
+        file_extension = path.suffix
 
-        # Restore constructor params
-        for key, value in metadata["params"].items():
-            setattr(self, key, value)
+        if file_extension == ".joblib":
+            model = joblib.load(path)
+            if not isinstance(model, cls):
+                raise ValueError(f"Loaded object is not a {cls.__name__} instance")
+            return model
+        elif file_extension == ".npz":
+            logger.warning(
+                "Loading from .npz is deprecated and is left only for backward compatibility. "
+                "Please switch to .joblib."
+            )
+            data = np.load(path, allow_pickle=False)
+            metadata = json.loads(str(data["_metadata_json"]))
 
-        self.n_classes_ = metadata["n_classes_"]
-        self.final_loss_ = metadata["final_loss_"]
-        self.best_epoch_ = metadata["best_epoch_"]
-        self.best_metrics_ = metadata["best_metrics_"]
-        self.history_ = metadata["history_"]
+            instance = cls()
+            # Restore constructor params
+            for key, value in metadata["params"].items():
+                setattr(instance, key, value)
 
-        method_enum = CalibrationMethod(metadata["model_method"])
-        model = _TrainedLinearCalibrationModel(self.n_classes_, method_enum)
-        state_dict = {name: torch.as_tensor(data[name]) for name in model.state_dict()}
-        model.load_state_dict(state_dict)
-        model.to(torch.device(self.device))
-        self.model_ = model
-        return self
+            instance.n_classes_ = metadata["n_classes_"]
+            instance.final_loss_ = metadata["final_loss_"]
+            instance.best_epoch_ = metadata["best_epoch_"]
+            instance.best_metrics_ = metadata["best_metrics_"]
+            instance.history_ = metadata["history_"]
+
+            method_enum = CalibrationMethod(metadata["model_method"])
+            model = _TrainedLinearCalibrationModel(instance.n_classes_, method_enum)
+            state_dict = {
+                name: torch.as_tensor(data[name]) for name in model.state_dict()
+            }
+            model.load_state_dict(state_dict)
+            model.to(torch.device(instance.device))
+            instance.model_ = model
+            return instance

@@ -1,7 +1,8 @@
-import unittest
-from tempfile import TemporaryDirectory
 from pathlib import Path
 
+import unittest
+from tempfile import TemporaryDirectory
+from parameterized import parameterized
 import numpy as np
 import torch
 
@@ -513,49 +514,71 @@ class TestVectorScalingCalibratorPredict(unittest.TestCase):
 class TestVectorScalingCalibratorSaveLoad(unittest.TestCase):
     """Tests for save / load round-trip."""
 
-    def test_save_unfitted_raises(self):
+    @parameterized.expand(
+        [
+            [".npz"],
+            [".joblib"],
+        ]
+    )
+    def test_save_unfitted_raises(self, file_extension):
         """Saving before fit() should raise RuntimeError."""
         cal = VectorScalingCalibrator(device="cpu")
         with TemporaryDirectory() as td:
             with self.assertRaises(RuntimeError):
-                cal.save(Path(td) / "model.npz")
+                cal.save(Path(td) / f"model{file_extension}")
 
-    def test_save_load_round_trip(self):
+    @parameterized.expand(
+        [
+            [".npz"],
+            [".joblib"],
+        ]
+    )
+    def test_save_load_npz_round_trip(self, file_extension):
         """Save then load should produce identical predictions and metadata."""
         cal = _fit_quick_calibrator()
         X_test = _make_dummy_probs(10, 4, seed=99)
         original_preds = cal.predict(X_test)
 
         with TemporaryDirectory() as td:
-            path = Path(td) / "model.npz"
+            path = Path(td) / f"model{file_extension}"
             cal.save(path)
 
-            loaded = VectorScalingCalibrator(device="cpu")
-            loaded.load(path)
+            loaded = VectorScalingCalibrator.load(path)
 
         np.testing.assert_allclose(loaded.predict(X_test), original_preds, atol=1e-12)
         self.assertEqual(loaded.n_classes_, cal.n_classes_)
         self.assertAlmostEqual(loaded.final_loss_, cal.final_loss_)
         self.assertEqual(loaded.best_epoch_, cal.best_epoch_)
 
-    def test_load_restores_constructor_params(self):
+    @parameterized.expand(
+        [
+            [".npz"],
+            [".joblib"],
+        ]
+    )
+    def test_load_restores_constructor_params(self, file_extension):
         """load() should restore constructor hyper-parameters from the saved file."""
         cal = _fit_quick_calibrator(reg_lambda=0.05, lr=0.005, max_iter=5)
         with TemporaryDirectory() as td:
-            path = Path(td) / "model.npz"
+            path = Path(td) / f"model{file_extension}"
             cal.save(path)
-            loaded = VectorScalingCalibrator(device="cpu")
-            loaded.load(path)
+            loaded = VectorScalingCalibrator.load(path)
 
         self.assertAlmostEqual(loaded.reg_lambda, 0.05)
         self.assertAlmostEqual(loaded.lr, 0.005)
         self.assertEqual(loaded.max_iter, 5)
 
-    def test_save_creates_npz_file(self):
-        """save() should create a .npz file on disk."""
+    @parameterized.expand(
+        [
+            [".npz"],
+            [".joblib"],
+        ]
+    )
+    def test_save_creates_file(self, file_extension):
+        """save() should create a file on disk."""
         cal = _fit_quick_calibrator()
         with TemporaryDirectory() as td:
-            path = Path(td) / "model.npz"
+            path = Path(td) / f"model{file_extension}"
             cal.save(path)
             self.assertTrue(path.exists())
 

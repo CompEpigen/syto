@@ -1,8 +1,8 @@
 """Linear post-processing utilities for deconvolution predictions."""
 
-import warnings
 from typing import Union
 from pathlib import Path
+import logging
 
 import joblib
 import numpy as np
@@ -54,7 +54,7 @@ class LinearCalibrator(CrossValidationCompatibleModel, BaseEstimator):
         "simplex-projection",
     )
 
-    def __init__(self):
+    def __init__(self, logger: Union[logging.Logger, None] = None):
         """Initialize calibration statistics for each cell type."""
         self.slopes = None
         self.intercepts = None
@@ -62,6 +62,7 @@ class LinearCalibrator(CrossValidationCompatibleModel, BaseEstimator):
         self.p_values = None
         self.std_errs = None
         self.n_cell_types = None
+        self.logger = logger if logger is not None else logging.getLogger(__name__)
 
     def fit(self, X: np.ndarray, y: np.ndarray, **kwargs):
         """Fit one linear calibration model per cell type.
@@ -145,10 +146,9 @@ class LinearCalibrator(CrossValidationCompatibleModel, BaseEstimator):
         if file_extension == ".joblib":
             joblib.dump(value=self, filename=path)
         elif file_extension == ".npz":
-            warnings.warn(
-                "Saving as .npz is deprecated and is left only for backward compatibility."
-                "Please switch to .joblib.",
-                DeprecationWarning,
+            self.logger.warning(
+                "Saving as .npz is deprecated and is left only for backward compatibility. "
+                "Please switch to .joblib."
             )
             np.savez(
                 path,
@@ -164,6 +164,7 @@ class LinearCalibrator(CrossValidationCompatibleModel, BaseEstimator):
     @classmethod
     def load(cls, path: Union[str, Path], **kwargs):
         """Load calibration parameters from a file and set the fitted attributes."""
+        logger = kwargs.get("logger", logging.getLogger(__name__))
         path = Path(path)
         file_extension = path.suffix
 
@@ -173,10 +174,9 @@ class LinearCalibrator(CrossValidationCompatibleModel, BaseEstimator):
                 raise ValueError(f"Loaded object is not a {cls.__name__} instance")
             return model
         elif file_extension == ".npz":
-            warnings.warn(
-                "Loading from .npz is deprecated and is left only for backward compatibility."
-                "Please switch to .joblib.",
-                DeprecationWarning,
+            logger.warning(
+                "Loading from .npz is deprecated and is left only for backward compatibility. "
+                "Please switch to .joblib."
             )
             model_parameters = np.load(path)
             model = cls()
@@ -186,4 +186,5 @@ class LinearCalibrator(CrossValidationCompatibleModel, BaseEstimator):
             model.p_values = model_parameters["p_values"].tolist()
             model.std_errs = model_parameters["std_errs"].tolist()
             model.n_cell_types = len(model.slopes)
+            model.logger = logger
             return model

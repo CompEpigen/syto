@@ -1,4 +1,5 @@
 import unittest
+from parameterized import parameterized
 from tempfile import TemporaryDirectory
 
 import numpy as np
@@ -360,7 +361,13 @@ class TestLinearCalibrator(unittest.TestCase):
             np.testing.assert_allclose(saved["p_values"], np.array([0.01, 0.99]))
             np.testing.assert_allclose(saved["std_errs"], np.array([0.05, 0.15]))
 
-    def test_save_with_joblib_persists_all_fitted_statistics(self):
+    @parameterized.expand(
+        [
+            [".npz"],
+            [".joblib"],
+        ]
+    )
+    def test_save_persists_all_fitted_statistics(self, file_extension):
         """Saving should serialize every fitted calibration attribute to a JOBLIB file."""
         calibrator = self._make_fitted_calibrator(
             slopes=[0.5, 1.5],
@@ -371,7 +378,7 @@ class TestLinearCalibrator(unittest.TestCase):
         calibrator.std_errs = [0.05, 0.15]
 
         with TemporaryDirectory() as tmp_dir:
-            filepath = f"{tmp_dir}/calibration_params.joblib"
+            filepath = f"{tmp_dir}/calibration_params{file_extension}"
 
             calibrator.save(filepath)
 
