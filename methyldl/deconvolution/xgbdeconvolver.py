@@ -395,6 +395,8 @@ class XGBoostDeconvolver(AbstractDeconvolver):
         # Basic validation to ensure it's the right class
         if not isinstance(model, cls):
             raise TypeError(f"Loaded object is not of type {cls.__name__}")
+        if not hasattr(model, 'logger'):
+            model.logger = _module_logger
 
         model.logger.info("Model loaded from %s", path)
         return model
