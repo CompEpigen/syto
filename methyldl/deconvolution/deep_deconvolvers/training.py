@@ -10,19 +10,6 @@ from torch.utils.data import DataLoader, TensorDataset
 from methyldl.deconvolution.evaluation import compute_deconvolution_metrics
 from methyldl.deconvolution.loss import build_loss_from_config
 
-@dataclass
-class DeconvolverOutput:
-    """Structured output from the deconvolver containing predictions and intermediate features."""
-
-    proportions: torch.Tensor  # (batch, n_cell_types) - final predicted proportions
-    diag_features: torch.Tensor  # (batch, hidden_dim) - diagonal pathway features
-    confusion_features: torch.Tensor  # (batch, hidden_dim) - confusion pathway features
-    reject_features: torch.Tensor  # (batch, hidden_dim//2) - rejection pathway features
-    combined_features: (
-        torch.Tensor
-    )  # (batch, combined_dim) - pre-head combined features
-    logits: torch.Tensor  # (batch, n_cell_types) - pre-softmax logits
-
 
 @dataclass
 class TrainingHistory:
@@ -180,10 +167,7 @@ def train_matrix_deconvolver(
     # Default loss weights
     if loss_weights is None:
         loss_weights = {"mse_weight": 1.0, "kl_weight": 0.5}
-    loss_config = {
-        "loss": loss,
-        "loss_weights": loss_weights
-    }
+    loss_config = {"loss": loss, "loss_weights": loss_weights}
 
     # Determine early stopping mode
     maximize_metrics = {"val_cosine_sim"}

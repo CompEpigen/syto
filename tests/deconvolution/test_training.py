@@ -6,7 +6,6 @@ import torch
 import torch.nn as nn
 
 from methyldl.deconvolution.deep_deconvolvers.training import (
-    DeconvolverOutput,
     EarlyStopping,
     TrainingHistory,
     train_matrix_deconvolver,
@@ -53,24 +52,6 @@ class RecordingCosineScheduler:
 
 class TestTrainingDataclasses(unittest.TestCase):
     """Tests for helper dataclasses defined in the training module."""
-
-    def test_deconvolver_output_stores_all_feature_tensors(self):
-        """The structured output dataclass should preserve all constructor values verbatim."""
-        output = DeconvolverOutput(
-            proportions=torch.ones(1, 2),
-            diag_features=torch.ones(1, 3),
-            confusion_features=torch.ones(1, 3) * 2,
-            reject_features=torch.ones(1, 1) * 3,
-            combined_features=torch.ones(1, 7) * 4,
-            logits=torch.ones(1, 2) * 5,
-        )
-
-        self.assertEqual(tuple(output.proportions.shape), (1, 2))
-        self.assertEqual(tuple(output.diag_features.shape), (1, 3))
-        self.assertEqual(tuple(output.confusion_features.shape), (1, 3))
-        self.assertEqual(tuple(output.reject_features.shape), (1, 1))
-        self.assertEqual(tuple(output.combined_features.shape), (1, 7))
-        self.assertEqual(tuple(output.logits.shape), (1, 2))
 
     def test_training_history_to_dict_returns_all_fields(self):
         """The history helper should expose metric series and scalar metadata in dictionary form."""
