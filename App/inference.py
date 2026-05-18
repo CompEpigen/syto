@@ -717,9 +717,7 @@ class InferencePipeline:
             ),
             self.features_mask,
         )
-        deconv_preds = deconvolver._predict_raw(X)
-        deconv_preds = deconvolver._transform_output(deconv_preds)[0]
-        # proportions = np.round(deconvolver.predict(prediction_matrix),4)
+        deconv_preds = deconvolver.predict(X)
         proportions = np.round(deconv_preds, 4)
         self.logger.debug(f"XGBoost proportions: {proportions}")
 
