@@ -13,7 +13,7 @@ import json
 import logging
 import os
 import pickle
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 import numpy as np
 import pandas as pd
@@ -39,9 +39,8 @@ from methyldl.deconvolution.xgbdeconvolver import (
     XGBoostDeconvolver,
     XGBDeconvolverConfig,
 )
-from methyldl.deconvolution.deep_deconvolvers.training import (
-    train_matrix_deconvolver,
-)
+from methyldl.deconvolution.deep_deconvolvers.mlp import MLPDeconvolver
+from methyldl.deconvolution.deep_deconvolvers.swn import SWNDeconvolver
 
 
 class DeconvolutionFittingPipeline:
@@ -61,7 +60,7 @@ class DeconvolutionFittingPipeline:
 
         # Labels
         labels_dict_path = config["labels_dict_path"]
-        with open(labels_dict_path, "r") as f:
+        with open(labels_dict_path, "r", encoding="utf-8") as f:
             raw = json.load(f)
             self.labels_dict: Dict[int, str] = {int(k): v for k, v in raw.items()}
         self.num_output_labels = config.get("num_output_labels", len(self.labels_dict))
@@ -308,8 +307,8 @@ class DeconvolutionFittingPipeline:
                 # Legacy key: features_{split}
                 features_dict[remainder] = val
         print(features_dict.keys())
-        if not np.any(["train" in x for x in features_dict.keys()]) or not np.any(
-            ["valid" in x for x in features_dict.keys()]
+        if not np.any(["train" in x for x in features_dict]) or not np.any(
+            ["valid" in x for x in features_dict]
         ):
             raise ValueError(
                 "Both 'train' and 'valid' splits are required for fitting deconvolvers."
@@ -328,7 +327,8 @@ class DeconvolutionFittingPipeline:
                 "Proportions for both 'train' and 'valid' splits are required."
             )
 
-        # HOT FIX of the incorrect length of proportion vector for Hard Labels TODO: Fix at source where data is generated.
+        # HOT FIX of the incorrect length of proportion vector for Hard Labels
+        # TODO: Fix at source where data is generated.
         for key, value in proportions_dict.items():
             value = np.array([y[: self.num_output_labels] for y in value])
             proportions_dict[key] = value
@@ -374,7 +374,7 @@ class DeconvolutionFittingPipeline:
                     )
                     results[f"{name}_calibrated"] = {"metrics": calib_metrics}
 
-            except Exception as e:
+            except Exception as e:  # pylint: disable=broad-exception-caught
                 self.logger.error(f"  Failed to fit '{name}': {e}", exc_info=True)
 
         # Log summary
@@ -394,6 +394,7 @@ class DeconvolutionFittingPipeline:
         proportions: Dict[str, np.ndarray],
     ) -> Tuple[XGBoostDeconvolver, dict]:
         """Fit XGBoost deconvolver."""
+        # pylint: disable=invalid-name
         params = cfg.get("params", {})
         xgb_config = XGBDeconvolverConfig(**params)
 
@@ -428,8 +429,7 @@ class DeconvolutionFittingPipeline:
         eval_y = y_test if y_test is not None else y_val
         eval_name = "test" if X_test is not None else "valid"
 
-        test_pred_raw = model._predict_raw(eval_X)
-        test_pred = model._transform_output(test_pred_raw)
+        test_pred = model.predict(eval_X)
         metrics = compute_deconvolution_metrics(test_pred, eval_y)
         self.logger.info(f"    XGB {eval_name} MAE: {metrics['mae']:.6f}")
 
@@ -444,53 +444,6 @@ class DeconvolutionFittingPipeline:
     #  Neural Network (SWN / MLP)
     # ───────────────────────────────────────────────────────────────
 
-    def _build_nn_model(
-        self,
-        name: str,
-        n_input_features: int,
-        params: dict,
-    ) -> nn.Module:
-        """Build a neural network deconvolver from config."""
-        n_cell_types = self.num_output_labels
-
-        if name == "swn":
-            hidden_dim = params.get("hidden_dim", 1024)
-            model = nn.Sequential(
-                nn.Linear(n_input_features, hidden_dim),
-                nn.GELU(),
-                nn.Dropout(params.get("dropout", 0.2)),
-                nn.Linear(hidden_dim, n_cell_types),
-                nn.Softmax(dim=-1),
-            )
-        elif name == "mlp":
-            hidden_dims = params.get("hidden_dims", [512, 256])
-            layers = []
-            in_dim = n_input_features
-            for h_dim in hidden_dims:
-                layers.extend(
-                    [
-                        nn.Linear(in_dim, h_dim),
-                        nn.GELU(),
-                        nn.Dropout(params.get("dropout", 0.2)),
-                    ]
-                )
-                in_dim = h_dim
-            # Final extra hidden layer matching the input
-            layers.extend(
-                [
-                    nn.Linear(in_dim, n_input_features),
-                    nn.GELU(),
-                    nn.Dropout(params.get("final_dropout", 0.1)),
-                ]
-            )
-            layers.append(nn.Linear(n_input_features, n_cell_types))
-            layers.append(nn.Softmax(dim=-1))
-            model = nn.Sequential(*layers)
-        else:
-            raise ValueError(f"Unknown NN architecture: {name}")
-
-        return model
-
     def _fit_nn(
         self,
         name: str,
@@ -499,6 +452,7 @@ class DeconvolutionFittingPipeline:
         proportions: Dict[str, np.ndarray],
     ) -> Tuple[nn.Module, dict]:
         """Fit a neural network deconvolver (SWN or MLP)."""
+        # pylint: disable=invalid-name
         params = cfg.get("params", {})
         X_train = features["train"]
         X_val = features["valid"]
@@ -510,25 +464,33 @@ class DeconvolutionFittingPipeline:
 
         n_input_features = X_train.shape[1]
 
-        model = self._build_nn_model(name, n_input_features, params)
+        if name == "swn":
+            model = SWNDeconvolver(
+                n_input_features, self.num_output_labels, logger=self.logger
+            )
+        elif name == "mlp":
+            model = MLPDeconvolver(
+                n_input_features, self.num_output_labels, logger=self.logger
+            )
+        else:
+            raise ValueError(f"Unknown NN architecture: {name}")
 
         device = params.get("device", "cuda" if torch.cuda.is_available() else "cpu")
 
-        trained_model, history = train_matrix_deconvolver(
-            model=model,
-            X_train=X_train,
-            y_train=y_train,
+        model.fit(
+            X=X_train,
+            y=y_train,
             X_val=X_val,
             y_val=y_val,
             n_epochs=params.get("n_epochs", 100),
             batch_size=params.get("batch_size", 64),
             lr=params.get("lr", 1e-3),
             weight_decay=params.get("weight_decay", 1e-4),
-            device=device,
             early_stopping_metric=params.get("early_stopping_metric", "val_mae"),
             early_stopping_patience=params.get("early_stopping_patience", 15),
             scheduler_type=params.get("scheduler_type", "plateau"),
             verbose=params.get("verbose", 1),
+            device=device,
         )
 
         # Evaluate on test or fallback to valid
@@ -536,30 +498,19 @@ class DeconvolutionFittingPipeline:
         eval_y = y_test if y_test is not None else y_val
         eval_name = "test" if X_test is not None else "valid"
 
-        trained_model.eval()
-        with torch.no_grad():
-            X_test_t = torch.FloatTensor(eval_X).to(device)
-            test_pred = trained_model(X_test_t).cpu().numpy()
+        test_pred = model.predict(eval_X, device=device)
         metrics = compute_deconvolution_metrics(test_pred, eval_y)
         self.logger.info(f"    {name.upper()} {eval_name} MAE: {metrics['mae']:.6f}")
 
         # Save
         save_path = os.path.join(self.output_dir, f"{name}_best_deconvolver.pt")
-        torch.save(trained_model.state_dict(), save_path)
-        self.logger.info(f"    Saved {name.upper()} model to {save_path}")
-
-        # Also save architecture metadata for later loading
         meta_path = os.path.join(self.output_dir, f"{name}_architecture_meta.json")
-        meta = {
-            "name": name,
-            "n_input_features": n_input_features,
-            "n_cell_types": self.num_output_labels,
-            "params": params,
-        }
-        with open(meta_path, "w") as f:
-            json.dump(meta, f, indent=2)
+        model.save(save_path, metadata_path=meta_path)
+        self.logger.info(
+            f"    Saved {name.upper()} model to {save_path} and metadata to {meta_path}"
+        )
 
-        return trained_model, metrics
+        return model, metrics
 
     # ───────────────────────────────────────────────────────────────
     #  Least Squares (NNLS / PSLS)
@@ -581,6 +532,7 @@ class DeconvolutionFittingPipeline:
         split of the purified profiles (after applying the feature mask
         derived from validation data).
         """
+        # pylint: disable=invalid-name
         params = cfg.get("params", {})
 
         # Build reference matrix from train-split pure profiles
@@ -654,6 +606,7 @@ class DeconvolutionFittingPipeline:
         3. Apply calibration to the test predictions.
         4. Evaluate and save.
         """
+        # pylint: disable=invalid-name
         X_val = features["valid"]
         y_val = proportions["valid"]
 
@@ -665,14 +618,14 @@ class DeconvolutionFittingPipeline:
         eval_name = "test" if X_test is not None else "valid"
 
         # Get validation predictions
-        val_pred = self._predict_with_model(deconv_name, model, X_val, cfg)
+        val_pred = model.predict(X_val, **cfg.get("params", {}))
 
         # Fit calibrator
         calibrator = LinearCalibrator()
         calibrator.fit(val_pred, y_val)
 
         # Get test predictions and calibrate
-        test_pred = self._predict_with_model(deconv_name, model, eval_X, cfg)
+        test_pred = model.predict(eval_X, **cfg.get("params", {}))
         calibrated_pred, _ = calibrator.predict(test_pred)
 
         metrics = compute_deconvolution_metrics(calibrated_pred, eval_y)
@@ -688,46 +641,6 @@ class DeconvolutionFittingPipeline:
         self.logger.info(f"    Saved calibrator to {calib_path}")
 
         return metrics
-
-    def _predict_with_model(
-        self,
-        name: str,
-        model: Any,
-        X: np.ndarray,
-        cfg: dict,
-    ) -> np.ndarray:
-        """Run inference with a fitted deconvolver.
-
-        Handles the different prediction interfaces of XGB, NN, and LS
-        models uniformly.
-        """
-        params = cfg.get("params", {})
-
-        if name == "xgb":
-            raw = model._predict_raw(X)
-            return model._transform_output(raw)
-
-        elif name in ("swn", "mlp"):
-            device = params.get(
-                "device",
-                "cuda" if torch.cuda.is_available() else "cpu",
-            )
-            model.eval()
-            with torch.no_grad():
-                X_t = torch.FloatTensor(X).to(device)
-                pred = model(X_t).cpu().numpy()
-            return pred
-
-        elif name == "nnls":
-            pred, _, _ = model.predict(X, n_workers=1)
-            return pred
-
-        elif name == "psls":
-            n_workers = params.get("n_workers", 2)
-            return model.predict(X, n_workers=n_workers)
-
-        else:
-            raise ValueError(f"Cannot predict with model type '{name}'")
 
     # ═══════════════════════════════════════════════════════════════
     #  Helpers
@@ -763,7 +676,8 @@ class DeconvolutionFittingPipeline:
                     f"  {model_name:30s}  "
                     f"R2={m.get('overall_r2', 0.0):.6f}  "
                     f"LoA=[{m.get('loa_lower', 0.0):.6f}, {m.get('loa_upper', 0.0):.6f}]  "
-                    f"LoA(worst)=[{m.get('worst_class_loa_lower', 0.0):.6f}, {m.get('worst_class_loa_upper', 0.0):.6f}]  "
+                    f"LoA(worst)=[{m.get('worst_class_loa_lower', 0.0):.6f}, "
+                    f"{m.get('worst_class_loa_upper', 0.0):.6f}]  "
                     f"MAE={m['mae']:.6f}  "
                     f"MSE={m['mse']:.6f}  "
                     f"KLDiv={m.get('kl', 0.0):.6f}"
@@ -775,7 +689,6 @@ class DeconvolutionFittingPipeline:
 
     def _save_summary_csv(self, results: Dict[str, Any]) -> None:
         """Save a CSV with one row per model."""
-        import pandas as pd
 
         rows: list = []
         for model_name, data in results.items():

@@ -104,12 +104,19 @@ class LinearCalibrator(AbstractCalibrator):
 
         Args:
             X: Raw predicted proportions with shape ``(n_samples, n_cell_types)``.
-            norm_method: One of ``"clip0-normalize"``, ``"simplex-projection"``.
-
+            **kwargs: Additional keyword arguments, including:
+                norm_method: One of ``"clip0-normalize"``, ``"simplex-projection"``
+                    (default: ``"clip0-normalize"``), specifying how to project the
+                    linearly adjusted predictions back onto the probability simplex
+                    if they fall outside due to the linear correction.
+                return_adjusted: If True, also return the linearly adjusted predictions
+                    before normalization. Default is False.
         Returns:
-            The normalized calibrated predictions.
+            The normalized calibrated predictions, or a tuple of (normalized, adjusted)
+            if ``return_adjusted`` is True.
         """
         norm_method = kwargs.get("norm_method", "clip0-normalize")
+        return_adjusted = kwargs.get("return_adjusted", False)
 
         check_is_fitted(self)
         assert X.shape[1] == len(
@@ -134,6 +141,8 @@ class LinearCalibrator(AbstractCalibrator):
         elif norm_method == "simplex-projection":
             final_predictions = _project_onto_simplex(adjusted_predictions)
 
+        if return_adjusted:
+            return final_predictions, adjusted_predictions
         return final_predictions
 
     def save(self, path: Union[str, Path], **kwargs) -> None:

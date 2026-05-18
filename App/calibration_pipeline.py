@@ -29,12 +29,11 @@ The pipeline proceeds in the following steps:
 import json
 import logging
 import os
+from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 import numpy as np
 import pandas as pd
-import torch
-import torch.nn as nn
 
 from methyldl.deconvolution.evaluation import compute_deconvolution_metrics
 from methyldl.calibration.linear_calibrator import LinearCalibrator
@@ -45,6 +44,8 @@ from methyldl.deconvolution.least_squares_deconvolvers import (
     NNLSDeconvolver,
     PSLSDeconvolver,
 )
+from methyldl.deconvolution.deep_deconvolvers.swn import SWNDeconvolver
+from methyldl.deconvolution.deep_deconvolvers.mlp import MLPDeconvolver
 
 LINEAR_NORM_METHODS = ["clip0-normalize", "simplex-projection"]
 
@@ -258,8 +259,24 @@ class CalibratorFittingPipeline:
                 model = XGBoostDeconvolver.load(
                     os.path.join(self.deconvolvers_dir, "xgb_deconvolver.joblib")
                 )
-            elif name in ("swn", "mlp"):
-                model = self._load_nn_model(name, cfg)
+            if name == "swn":
+                weights_path = Path(self.deconvolvers_dir) / "swn_best_deconvolver.pt"
+                metadata_path = (
+                    Path(self.deconvolvers_dir) / "swn_architecture_meta.json"
+                )
+                model = SWNDeconvolver.load(
+                    path=weights_path,
+                    metadata_path=metadata_path,
+                )
+            elif name == "mlp":
+                weights_path = Path(self.deconvolvers_dir) / "mlp_best_deconvolver.pt"
+                metadata_path = (
+                    Path(self.deconvolvers_dir) / "mlp_architecture_meta.json"
+                )
+                model = MLPDeconvolver.load(
+                    path=weights_path,
+                    metadata_path=metadata_path,
+                )
             elif name == "nnls":
                 model = NNLSDeconvolver.load(
                     os.path.join(self.deconvolvers_dir, "nnls_deconvolver.joblib")
@@ -276,110 +293,6 @@ class CalibratorFittingPipeline:
 
         self.logger.info(f"  Loaded {len(loaded)} deconvolvers")
         return loaded
-
-    def _load_nn_model(self, name: str, cfg: dict) -> nn.Module:
-        """Load a PyTorch neural network deconvolver from saved state dict + metadata."""
-        meta_path = os.path.join(
-            self.deconvolvers_dir, f"{name}_architecture_meta.json"
-        )
-        weights_path = os.path.join(
-            self.deconvolvers_dir, f"{name}_best_deconvolver.pt"
-        )
-
-        with open(meta_path, "r", encoding="utf-8") as f:
-            meta = json.load(f)
-
-        n_input_features = meta["n_input_features"]
-        n_cell_types = meta["n_cell_types"]
-        params = meta.get("params", {})
-
-        model = self._build_nn_model(
-            name, n_input_features, n_cell_types, params, self.logger
-        )
-
-        if not "params" in cfg:
-            self.logger.warning(
-                f"Deconvolver config for '{name}' missing 'params' section, using empty dict"
-            )
-        elif not "device" in cfg["params"]:
-            self.logger.warning(
-                f"Deconvolver config for '{name}' missing 'device' param,"
-                " using cuda if available else cpu"
-            )
-        device = cfg.get("params", {}).get(
-            "device", "cuda" if torch.cuda.is_available() else "cpu"
-        )
-        model = model.to(device)
-        model.load_state_dict(
-            torch.load(weights_path, map_location=device, weights_only=True)
-        )
-        model.eval()
-        return model
-
-    @staticmethod
-    def _build_nn_model(
-        name: str,
-        n_input_features: int,
-        n_cell_types: int,
-        params: dict,
-        logger: logging.Logger,
-    ) -> nn.Module:
-        """Reconstruct a neural network architecture from metadata."""
-        if name == "swn":
-            if not "hidden_dim" in params:
-                logger.warning(
-                    "SWN architecture metadata missing 'hidden_dim', using default 1024"
-                )
-            if not "dropout" in params:
-                logger.warning(
-                    "SWN architecture metadata missing 'dropout', using default 0.2"
-                )
-            hidden_dim = params.get("hidden_dim", 1024)
-            model = nn.Sequential(
-                nn.Linear(n_input_features, hidden_dim),
-                nn.GELU(),
-                nn.Dropout(params.get("dropout", 0.2)),
-                nn.Linear(hidden_dim, n_cell_types),
-                nn.Softmax(dim=-1),
-            )
-        elif name == "mlp":
-            if not "hidden_dims" in params:
-                logger.warning(
-                    "MLP architecture metadata missing 'hidden_dims', using default [512, 256]"
-                )
-            if not "dropout" in params:
-                logger.warning(
-                    "MLP architecture metadata missing 'dropout', using default 0.2"
-                )
-            if not "final_dropout" in params:
-                logger.warning(
-                    "MLP architecture metadata missing 'final_dropout', using default 0.1"
-                )
-            hidden_dims = params.get("hidden_dims", [512, 256])
-            layers: list = []
-            in_dim = n_input_features
-            for h_dim in hidden_dims:
-                layers.extend(
-                    [
-                        nn.Linear(in_dim, h_dim),
-                        nn.GELU(),
-                        nn.Dropout(params.get("dropout", 0.2)),
-                    ]
-                )
-                in_dim = h_dim
-            layers.extend(
-                [
-                    nn.Linear(in_dim, n_input_features),
-                    nn.GELU(),
-                    nn.Dropout(params.get("final_dropout", 0.1)),
-                ]
-            )
-            layers.append(nn.Linear(n_input_features, n_cell_types))
-            layers.append(nn.Softmax(dim=-1))
-            model = nn.Sequential(*layers)
-        else:
-            raise ValueError(f"Unknown NN architecture: {name}")
-        return model
 
     # ═══════════════════════════════════════════════════════════════
     #  Stage 2: Per-deconvolver calibration
@@ -421,8 +334,8 @@ class CalibratorFittingPipeline:
             val_pred = data["val_pred"]
             test_pred = data["test_pred"]
         else:
-            val_pred = self._predict_with_model(name, model, features_valid, cfg)
-            test_pred = self._predict_with_model(name, model, features_test, cfg)
+            val_pred = model.predict(features_valid, **cfg.get("params", {}))
+            test_pred = model.predict(features_test, **cfg.get("params", {}))
 
             np.savez_compressed(
                 os.path.join(deconv_out, "uncalibrated_predictions.npz"),
@@ -477,10 +390,8 @@ class CalibratorFittingPipeline:
                 val_calib = data["val_pred"]
                 test_calib = data["test_pred"]
             else:
-                val_calib, _ = linear_calibrator.predict(
-                    val_pred, norm_method=norm_method
-                )
-                test_calib, _ = linear_calibrator.predict(
+                val_calib = linear_calibrator.predict(val_pred, norm_method=norm_method)
+                test_calib = linear_calibrator.predict(
                     test_pred, norm_method=norm_method
                 )
                 np.savez_compressed(
@@ -642,51 +553,6 @@ class CalibratorFittingPipeline:
         }
 
         return result
-
-    # ═══════════════════════════════════════════════════════════════
-    #  Prediction helper
-    # ═══════════════════════════════════════════════════════════════
-
-    def _predict_with_model(
-        self,
-        name: str,
-        model: Any,
-        X: np.ndarray,  # pylint: disable=invalid-name
-        cfg: dict,
-    ) -> np.ndarray:
-        """Run inference with a fitted deconvolver."""
-        params = cfg.get("params", {})
-
-        if name == "xgb":
-            # pylint: disable=protected-access
-            raw = model._predict_raw(X)
-            return model._transform_output(raw)
-
-        elif name in ("swn", "mlp"):
-            device = params.get(
-                "device", "cuda" if torch.cuda.is_available() else "cpu"
-            )
-            model.eval()
-            with torch.inference_mode():
-                X_t = torch.FloatTensor(X).to(device)  # pylint: disable=invalid-name
-                pred = model(X_t).cpu().numpy()
-            return pred
-
-        elif name == "nnls":
-            pred, _, _ = model.predict(X, n_workers=1)
-            return pred
-
-        elif name == "psls":
-            if not "n_workers" in params:
-                self.logger.warning(
-                    f"Deconvolver config for '{name}' missing 'n_workers' param,"
-                    " using default 2"
-                )
-            n_workers = params.get("n_workers", 2)
-            return model.predict(X, n_workers=n_workers)
-
-        else:
-            raise ValueError(f"Cannot predict with model type '{name}'")
 
     # ═══════════════════════════════════════════════════════════════
     #  Summary
