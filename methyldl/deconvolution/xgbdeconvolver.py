@@ -9,9 +9,10 @@ import joblib
 from dataclasses import dataclass, field
 
 from methyldl.deconvolution.evaluation import (
-    compute_deconvolution_metrics,
-    compute_combined_loss,
+    compute_deconvolution_metrics
 )
+
+from methyldl.deconvolution.loss import build_loss_from_config
 from methyldl.deconvolution.abstract_deconvolver import AbstractDeconvolver
 
 _module_logger = logging.getLogger(__name__)
@@ -105,8 +106,6 @@ class XGBoostDeconvolver(AbstractDeconvolver):
         n_dmr_groups: int = 39,
         n_pred_classes: int = 40,
         n_cell_types: int = 39,
-        with_reject_features=True,
-        process_inputs=True,
         config: Optional[XGBDeconvolverConfig] = None,
         output_transform: Literal[
             "none", "clip_normalize", "softmax"
@@ -118,12 +117,6 @@ class XGBoostDeconvolver(AbstractDeconvolver):
         self.n_cell_types = n_cell_types
         self.config = config or XGBDeconvolverConfig()
         self.output_transform = output_transform
-        self.with_reject_features = with_reject_features
-        self.process_inputs = process_inputs
-        if with_reject_features:
-            self.n_features = n_dmr_groups * 2  # diagonal + reject column
-        else:
-            self.n_features = n_dmr_groups
         self.logger = logger if logger is not None else _module_logger
 
         self.model = None
@@ -148,43 +141,7 @@ class XGBoostDeconvolver(AbstractDeconvolver):
         )
         return MultiOutputRegressor(base_model)
 
-    def extract_features(
-        self, X: np.ndarray  # pylint: disable=invalid-name
-    ) -> np.ndarray:
-        """
-        Extract diagonal and rejection column features.
-
-        Parameters
-        ----------
-        X : np.ndarray
-            Input array of shape (n_samples, n_dmr_groups, n_pred_classes)
-
-        Returns
-        -------
-        features : np.ndarray
-            Extracted features of shape (n_samples, n_dmr_groups * 2)
-        """
-        if not self.process_inputs:
-            return X
-
-        if X.ndim == 2:
-            X = X[np.newaxis, ...]
-
-        n_samples = X.shape[0]
-
-        # Extract diagonal: x[i, i] for i in 0..n_dmr-1
-        # (n_samples, 39)
-        diagonal = np.array([np.diag(X[i, :, : self.n_dmr]) for i in range(n_samples)])
-
-        # Extract rejection column (last column)
-        if self.with_reject_features:
-            reject_col = X[:, :, -1]  # (n_samples, 39)
-            # Concatenate features
-            features = np.concatenate([diagonal, reject_col], axis=1)
-        else:
-            features = diagonal
-        return features
-
+    
     def _transform_output(self, raw_output: np.ndarray) -> np.ndarray:
         """
         Transform raw model outputs to valid proportions.
@@ -232,6 +189,9 @@ class XGBoostDeconvolver(AbstractDeconvolver):
             Validation data
         y_val : np.ndarray, optional
             Validation labels
+        loss: str, optional
+            Selected loss for evaluation. Dedaults to the one set in
+            build_loss_from_config
         loss_weights : dict, optional
             Weights for combined loss: {'mse': float, 'kl': float}
         verbose : int
@@ -242,14 +202,15 @@ class XGBoostDeconvolver(AbstractDeconvolver):
         self : XGBoostDeconvolver
         """
         # pylint: disable=invalid-name
-        loss_weights = kwargs.get("loss_weights", {"mse_weight": 1.0, "kl_weight": 0.5})
+        criterion = build_loss_from_config(**kwargs)
+
         X_val = kwargs.get("X_val", None)
         y_val = kwargs.get("y_val", None)
         verbose = kwargs.get("verbose", 1)
 
-        # Extract features
-        X_train_feat = self.extract_features(X)
-        X_val_feat = self.extract_features(X_val) if X_val is not None else None
+
+        X_train_feat = X
+        X_val_feat =X_val if X_val is not None else None
 
         if verbose:
             self.logger.info("Training XGBoost Deconvolver")
@@ -270,16 +231,13 @@ class XGBoostDeconvolver(AbstractDeconvolver):
         # Note: This is a workaround since sklearn's MultiOutputRegressor
         # doesn't support per-round callbacks easily
 
-        # For simplicity, we'll train the full model first, then evaluate
-        # If you need true incremental training, use the Native version below
-
         self.model.fit(X_train_feat, y)
 
         # Compute final metrics
         train_pred_raw = self._predict_raw(X_train_feat)
         train_pred = self._transform_output(train_pred_raw)
         train_metrics = compute_deconvolution_metrics(train_pred, y)
-        train_loss = compute_combined_loss(train_pred, y, **loss_weights)
+        train_loss = criterion(train_pred, y)
 
         self.cv_metric = train_loss  # For cross-validation model selection
 
@@ -294,7 +252,7 @@ class XGBoostDeconvolver(AbstractDeconvolver):
             val_pred_raw = self._predict_raw(X_val_feat)
             val_pred = self._transform_output(val_pred_raw)
             val_metrics = compute_deconvolution_metrics(val_pred, y_val)
-            val_loss = compute_combined_loss(val_pred, y_val, **loss_weights)
+            val_loss = criterion(val_pred, y_val)
             self.cv_metric = val_loss  # For cross-validation model selection
 
             self.history.val_loss.append(val_loss)
@@ -340,7 +298,7 @@ class XGBoostDeconvolver(AbstractDeconvolver):
         Parameters
         ----------
         X : np.ndarray
-            Input data of shape (n_samples, n_dmr_groups, n_pred_classes)
+            Input data of target shape (features already extracted)
 
         Returns
         -------
@@ -349,11 +307,10 @@ class XGBoostDeconvolver(AbstractDeconvolver):
         """
         if not self._is_fitted:
             raise RuntimeError("Model must be fitted before prediction")
+        
+        single_sample = X.shape[0] == 1
 
-        single_sample = X.ndim == 2
-        features = self.extract_features(X)
-
-        raw_output = self._predict_raw(features)
+        raw_output = self._predict_raw(X)
         proportions = self._transform_output(raw_output)
 
         if single_sample:
@@ -452,8 +409,6 @@ def train_xgb_deconvolver(
     n_dmr_groups=39,
     n_pred_classes=40,
     n_cell_types=39,
-    with_reject_features=True,
-    process_inputs=True,
     output_transform: Literal["none", "clip_normalize", "softmax"] = "clip_normalize",
     loss_weights: Optional[Dict[str, float]] = None,
     verbose: int = 1,
@@ -476,9 +431,7 @@ def train_xgb_deconvolver(
         output_transform=output_transform,
         n_dmr_groups=n_dmr_groups,
         n_pred_classes=n_pred_classes,
-        n_cell_types=n_cell_types,
-        with_reject_features=with_reject_features,
-        process_inputs=process_inputs,
+        n_cell_types=n_cell_types
     )
 
     model.fit(
