@@ -8,9 +8,7 @@ from sklearn.multioutput import MultiOutputRegressor
 import joblib
 from dataclasses import dataclass, field
 
-from methyldl.deconvolution.evaluation import (
-    compute_deconvolution_metrics
-)
+from methyldl.deconvolution.evaluation import compute_deconvolution_metrics
 
 from methyldl.deconvolution.loss import build_loss_from_config
 from methyldl.deconvolution.abstract_deconvolver import AbstractDeconvolver
@@ -141,7 +139,6 @@ class XGBoostDeconvolver(AbstractDeconvolver):
         )
         return MultiOutputRegressor(base_model)
 
-    
     def _transform_output(self, raw_output: np.ndarray) -> np.ndarray:
         """
         Transform raw model outputs to valid proportions.
@@ -208,9 +205,8 @@ class XGBoostDeconvolver(AbstractDeconvolver):
         y_val = kwargs.get("y_val", None)
         verbose = kwargs.get("verbose", 1)
 
-
         X_train_feat = X
-        X_val_feat =X_val if X_val is not None else None
+        X_val_feat = X_val if X_val is not None else None
 
         if verbose:
             self.logger.info("Training XGBoost Deconvolver")
@@ -307,7 +303,7 @@ class XGBoostDeconvolver(AbstractDeconvolver):
         """
         if not self._is_fitted:
             raise RuntimeError("Model must be fitted before prediction")
-        
+
         single_sample = X.shape[0] == 1
 
         raw_output = self._predict_raw(X)
@@ -395,7 +391,7 @@ class XGBoostDeconvolver(AbstractDeconvolver):
         # Basic validation to ensure it's the right class
         if not isinstance(model, cls):
             raise TypeError(f"Loaded object is not of type {cls.__name__}")
-        if not hasattr(model, 'logger'):
+        if not hasattr(model, "logger"):
             model.logger = _module_logger
 
         model.logger.info("Model loaded from %s", path)
@@ -433,7 +429,7 @@ def train_xgb_deconvolver(
         output_transform=output_transform,
         n_dmr_groups=n_dmr_groups,
         n_pred_classes=n_pred_classes,
-        n_cell_types=n_cell_types
+        n_cell_types=n_cell_types,
     )
 
     model.fit(

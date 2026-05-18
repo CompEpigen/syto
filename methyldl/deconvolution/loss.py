@@ -8,11 +8,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-
 ArrayLike = Union[torch.Tensor, np.ndarray]
 
 
 SUPPORTED_LOSSES = {}
+
 
 def register_loss(*names):
     def deco(cls):
@@ -20,7 +20,9 @@ def register_loss(*names):
             SUPPORTED_LOSSES[n] = cls
         SUPPORTED_LOSSES[cls.__name__] = cls
         return cls
+
     return deco
+
 
 class DeconvolutionLoss(ABC):
     """
@@ -49,13 +51,16 @@ class DeconvolutionLoss(ABC):
     def name(self) -> str:
         return self.__class__.__name__
 
+
 @register_loss("combined_mse_kl")
 class CombinedMSEKLLoss(DeconvolutionLoss):
     """
     MSE + KL(target || pred)
     """
 
-    def __init__(self, mse_weight: float = 1.0, kl_weight: float = 0.5, eps: float = 1e-8):
+    def __init__(
+        self, mse_weight: float = 1.0, kl_weight: float = 0.5, eps: float = 1e-8
+    ):
         self.mse_weight = mse_weight
         self.kl_weight = kl_weight
         self.eps = eps
@@ -63,8 +68,13 @@ class CombinedMSEKLLoss(DeconvolutionLoss):
     def torch_loss(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         mse = F.mse_loss(pred, target)
         kl = (
-            target * (target.clamp(min=self.eps).log() - pred.clamp(min=self.eps).log())
-        ).sum(dim=-1).mean()
+            (
+                target
+                * (target.clamp(min=self.eps).log() - pred.clamp(min=self.eps).log())
+            )
+            .sum(dim=-1)
+            .mean()
+        )
         return self.mse_weight * mse + self.kl_weight * kl
 
     def numpy_loss(self, pred: np.ndarray, target: np.ndarray) -> float:
@@ -75,13 +85,21 @@ class CombinedMSEKLLoss(DeconvolutionLoss):
         kl = (t * (np.log(t) - np.log(p))).sum(axis=-1).mean()
         return float(self.mse_weight * mse + self.kl_weight * kl)
 
+
 def build_loss_from_config(**kwargs):
     criterion = kwargs.get("loss", "combined_mse_kl")
     if criterion in SUPPORTED_LOSSES.keys():
         if criterion == "combined_mse_kl":
-            loss_weights = kwargs.get("loss_weights", {"mse_weight": 1.0, "kl_weight": 0.5})
-            return SUPPORTED_LOSSES[criterion](mse_weight=loss_weights["mse_weight"], kl_weight = loss_weights["kl_weight"])
+            loss_weights = kwargs.get(
+                "loss_weights", {"mse_weight": 1.0, "kl_weight": 0.5}
+            )
+            return SUPPORTED_LOSSES[criterion](
+                mse_weight=loss_weights["mse_weight"],
+                kl_weight=loss_weights["kl_weight"],
+            )
         else:
             return SUPPORTED_LOSSES[criterion]()
     else:
-        return ValueError(f"Wrong loss is specified. Must be one of {SUPPORTED_LOSSES.keys()}")
+        return ValueError(
+            f"Wrong loss is specified. Must be one of {SUPPORTED_LOSSES.keys()}"
+        )

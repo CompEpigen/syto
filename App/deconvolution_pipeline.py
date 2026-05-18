@@ -411,7 +411,7 @@ class DeconvolutionFittingPipeline:
             output_transform="clip_normalize",
             n_dmr_groups=self.num_output_labels,
             n_pred_classes=self.num_output_labels,
-            n_cell_types=self.num_output_labels
+            n_cell_types=self.num_output_labels,
         )
 
         model.fit(
