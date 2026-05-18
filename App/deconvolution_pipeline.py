@@ -306,7 +306,7 @@ class DeconvolutionFittingPipeline:
             else:
                 # Legacy key: features_{split}
                 features_dict[remainder] = val
-        print(features_dict.keys())
+
         if not np.any(["train" in x for x in features_dict]) or not np.any(
             ["valid" in x for x in features_dict]
         ):
@@ -411,9 +411,7 @@ class DeconvolutionFittingPipeline:
             output_transform="clip_normalize",
             n_dmr_groups=self.num_output_labels,
             n_pred_classes=self.num_output_labels,
-            n_cell_types=self.num_output_labels,
-            with_reject_features=False,
-            process_inputs=False,
+            n_cell_types=self.num_output_labels
         )
 
         model.fit(
