@@ -8,7 +8,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
 
 from methyldl.deconvolution.evaluation import compute_deconvolution_metrics
-
+from methyldl.deconvolution.loss import build_loss_from_config
 
 @dataclass
 class DeconvolverOutput:
@@ -124,6 +124,7 @@ def train_matrix_deconvolver(
     early_stopping_min_delta: float = 1e-5,
     scheduler_type: Literal["cosine", "plateau", "none"] = "plateau",
     loss_weights: dict = None,
+    loss: str = "combined_mse_kl",
     verbose: int = 1,
     save_path: Optional[str] = None,
 ) -> tuple[nn.Module, TrainingHistory]:
@@ -157,9 +158,12 @@ def train_matrix_deconvolver(
         Minimum change to qualify as improvement.
     scheduler_type : str
         Learning rate scheduler type: 'cosine', 'plateau', or 'none'.
+    loss: str, optional
+        Selected loss for evaluation and fitting. Dedaults to the one set in
+        build_loss_from_config
     loss_weights : dict
-        Weights for loss components: {'mse': float, 'kl': float}.
-        Default: {'mse': 1.0, 'kl': 0.5}
+        Weights for loss components: {'mse_weight': float, 'kl_weight': float}.
+        Default: {'mse_weight': 1.0, 'kl_weight': 0.5}
     verbose : int
         Verbosity level (0=silent, 1=progress, 2=detailed).
     save_path : str, optional
@@ -175,7 +179,11 @@ def train_matrix_deconvolver(
 
     # Default loss weights
     if loss_weights is None:
-        loss_weights = {"mse": 1.0, "kl": 0.5}
+        loss_weights = {"mse_weight": 1.0, "kl_weight": 0.5}
+    loss_config = {
+        "loss": loss,
+        "loss_weights": loss_weights
+    }
 
     # Determine early stopping mode
     maximize_metrics = {"val_cosine_sim"}
@@ -203,15 +211,7 @@ def train_matrix_deconvolver(
     else:
         scheduler = None
 
-    # Loss function
-    def loss_fn(pred, target, eps=1e-8):
-        mse = nn.functional.mse_loss(pred, target)
-        kl = (
-            (target * (target.clamp(min=eps).log() - pred.clamp(min=eps).log()))
-            .sum(dim=-1)
-            .mean()
-        )
-        return loss_weights["mse"] * mse + loss_weights["kl"] * kl
+    criterion = build_loss_from_config(**loss_config)
 
     # Initialize tracking
     history = TrainingHistory()
@@ -233,7 +233,7 @@ def train_matrix_deconvolver(
             X, y = X.to(device), y.to(device)
 
             pred = model(X)
-            loss = loss_fn(pred, y)
+            loss = criterion(pred, y)
 
             optimizer.zero_grad()
             loss.backward()
@@ -256,7 +256,7 @@ def train_matrix_deconvolver(
                 X, y = X.to(device), y.to(device)
                 pred = model(X)
 
-                val_loss += loss_fn(pred, y).item()
+                val_loss += criterion(pred, y).item()
                 all_preds.append(pred.cpu())
                 all_targets.append(y.cpu())
 
