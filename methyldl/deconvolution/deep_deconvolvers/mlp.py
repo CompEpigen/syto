@@ -62,8 +62,7 @@ class _MLPDeconvolverModel(nn.Module):
 
 class MLPDeconvolver(AbstractDeconvolver):
     """
-    The MLP Deconvolver used in the Syto paper.
-
+    The MLP Deconvolver used in the Syto paper
     """
 
     def __init__(
@@ -150,6 +149,10 @@ class MLPDeconvolver(AbstractDeconvolver):
 
     def save(self, path: Union[str, Path], **kwargs) -> None:
         """Save the model to the specified path."""
+        if not self.is_fitted:
+            raise ValueError(
+                "Cannot save an unfitted MLPDeconvolver. Call fit() first."
+            )
         path = Path(path)
         file_extension = path.suffix
         assert file_extension == ".pt"
@@ -199,12 +202,12 @@ class MLPDeconvolver(AbstractDeconvolver):
             metadata = json.load(f)
 
         n_input_features = metadata.get("n_input_features")
-        n_targets = metadata.get("n_targets", metadata["n_cell_types"])
+        n_targets = metadata["n_targets"] or metadata["n_cell_types"]
         mlp_deconv = cls(
             n_input_features=n_input_features,
             n_targets=n_targets,
         )
-        mlp_deconv.model.load_state_dict(torch.load(path))
+        mlp_deconv.model.load_state_dict(torch.load(path, weights_only=True))
         mlp_deconv.is_fitted = metadata["is_fitted"]
         for param, value in metadata.get("params", {}).items():
             setattr(mlp_deconv, param, value)
