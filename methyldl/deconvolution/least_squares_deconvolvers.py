@@ -193,6 +193,7 @@ class NNLSDeconvolver(AbstractLSDeconvolver):
         X: np.ndarray,  # pylint: disable=invalid-name
         n_workers: int = 1,
         chunk_size: int = 100,
+        return_only_norm_pred: bool = False,
     ) -> np.ndarray:
         """
         Predict mixture proportions for a batch of samples in parallel.
@@ -205,11 +206,14 @@ class NNLSDeconvolver(AbstractLSDeconvolver):
                 deconvolve.
             n_workers: Number of worker threads to use.
             chunk_size: Number of samples assigned to each chunk.
+            return_only_norm_pred: If True, only return the normalized predictions and skip
+                unnormalized predictions and residuals.
 
         Returns:
             A tuple ``(normalized, unnormalized, residuals)`` where the first two
             arrays have shape (n_samples, n_cell_types) and ``residuals`` has shape
             (n_samples,).
+            If ``return_only_norm_pred`` is True, only the normalized predictions are returned.
 
         Raises:
             ValueError: If ``chunk_size`` is not strictly positive.
@@ -231,12 +235,18 @@ class NNLSDeconvolver(AbstractLSDeconvolver):
             )
 
         mixture_prop_pred = np.vstack([res[0] for res in results])
+        if return_only_norm_pred:
+            return mixture_prop_pred
+
         mixture_prop_unnorm_pred = np.vstack([res[1] for res in results])
         residuals = np.concatenate([res[2] for res in results])
+
         return mixture_prop_pred, mixture_prop_unnorm_pred, residuals
 
     def _predict_sequential(
-        self, X: np.ndarray  # pylint: disable=invalid-name
+        self,
+        X: np.ndarray,  # pylint: disable=invalid-name
+        return_only_norm_pred: bool = False,
     ) -> np.ndarray:
         """
         Predict mixture proportions for a batch of samples sequentially.
@@ -264,6 +274,9 @@ class NNLSDeconvolver(AbstractLSDeconvolver):
             mixture_prop_pred[i], mixture_prop_unnorm_pred[i], residuals[i] = (
                 self.predict_single_sample(sample)
             )
+
+        if return_only_norm_pred:
+            return mixture_prop_pred
         return mixture_prop_pred, mixture_prop_unnorm_pred, residuals
 
     def predict(
@@ -290,10 +303,18 @@ class NNLSDeconvolver(AbstractLSDeconvolver):
         """
         n_workers = kwargs.get("n_workers", 1)
         chunk_size = kwargs.get("chunk_size", 100)
+        return_only_norm_pred = kwargs.get("return_only_norm_pred", True)
         if n_workers > 1:
-            return self._predict_parallel(X, n_workers, chunk_size=chunk_size)
+            return self._predict_parallel(
+                X,
+                n_workers,
+                chunk_size=chunk_size,
+                return_only_norm_pred=return_only_norm_pred,
+            )
         else:
-            return self._predict_sequential(X)
+            return self._predict_sequential(
+                X, return_only_norm_pred=return_only_norm_pred
+            )
 
 
 class PSLSDeconvolver(AbstractLSDeconvolver):

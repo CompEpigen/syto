@@ -61,7 +61,7 @@ class TestLinearCalibrator(unittest.TestCase):
         # pylint: disable-next=assignment-from-no-return
         fit_result = calibrator.fit(X, y)
 
-        self.assertIsNone(fit_result)
+        self.assertIs(fit_result, calibrator)
         self.assertTrue(calibrator.__sklearn_is_fitted__())
         self.assertEqual(calibrator.n_cell_types, 2)
         self.assertEqual(len(calibrator.slopes), 2)
@@ -132,7 +132,9 @@ class TestLinearCalibrator(unittest.TestCase):
             dtype=float,
         )
 
-        normalized, adjusted = calibrator.predict(X, norm_method="clip0-normalize")
+        normalized, adjusted = calibrator.predict(
+            X, norm_method="clip0-normalize", return_adjusted=True
+        )
 
         expected_adjusted = np.array(
             [
@@ -179,7 +181,9 @@ class TestLinearCalibrator(unittest.TestCase):
             dtype=float,
         )
 
-        normalized, adjusted = calibrator.predict(X, norm_method="clip0-normalize")
+        normalized, adjusted = calibrator.predict(
+            X, norm_method="clip0-normalize", return_adjusted=True
+        )
 
         expected_adjusted = np.array(
             [
@@ -215,7 +219,9 @@ class TestLinearCalibrator(unittest.TestCase):
             dtype=float,
         )
 
-        normalized, adjusted = calibrator.predict(X, norm_method="clip0-normalize")
+        normalized, adjusted = calibrator.predict(
+            X, norm_method="clip0-normalize", return_adjusted=True
+        )
 
         expected_adjusted = np.array(
             [
@@ -242,7 +248,9 @@ class TestLinearCalibrator(unittest.TestCase):
         )
 
         zero_row_normalized, zero_row_adjusted = zero_row_calibrator.predict(
-            np.array([[0.1, 0.2]], dtype=float), norm_method="clip0-normalize"
+            np.array([[0.1, 0.2]], dtype=float),
+            norm_method="clip0-normalize",
+            return_adjusted=True,
         )
 
         np.testing.assert_allclose(zero_row_adjusted, np.array([[-0.9, -0.8]]))
@@ -262,7 +270,9 @@ class TestLinearCalibrator(unittest.TestCase):
             dtype=float,
         )
 
-        normalized, adjusted = calibrator.predict(X, norm_method="simplex-projection")
+        normalized, adjusted = calibrator.predict(
+            X, norm_method="simplex-projection", return_adjusted=True
+        )
 
         expected_adjusted = np.array(
             [
@@ -299,7 +309,9 @@ class TestLinearCalibrator(unittest.TestCase):
             dtype=float,
         )
 
-        normalized, adjusted = calibrator.predict(X, norm_method="simplex-projection")
+        normalized, adjusted = calibrator.predict(
+            X, norm_method="simplex-projection", return_adjusted=True
+        )
 
         expected_adjusted = np.array(
             [
@@ -330,7 +342,9 @@ class TestLinearCalibrator(unittest.TestCase):
         )
 
         normalized, adjusted = calibrator.predict(
-            np.array([[0.1, 0.2]], dtype=float), norm_method="simplex-projection"
+            np.array([[0.1, 0.2]], dtype=float),
+            norm_method="simplex-projection",
+            return_adjusted=True,
         )
 
         np.testing.assert_allclose(adjusted, np.array([[-0.9, -0.8]]))

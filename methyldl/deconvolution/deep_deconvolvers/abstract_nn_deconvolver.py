@@ -118,7 +118,15 @@ class AbstractNNDeconvolver(AbstractDeconvolver):
         return predictions
 
     def save(self, path: Union[str, Path], **kwargs) -> None:
-        """Save the model to the specified path."""
+        """Save the model to the specified path.
+
+        Args:
+            path: The path to save the model file (should end with .pt).
+            **kwargs: Additional keyword arguments, such as:
+                - metadata_path: Optional path to the metadata JSON file.
+                If not provided, it is assumed to be in the same directory as the model
+                file with the same name but ending with "_metadata.json".
+        """
         if not self.is_fitted:
             raise ValueError("Cannot save an unfitted NNDeconvolver. Call fit() first.")
         path = Path(path)
