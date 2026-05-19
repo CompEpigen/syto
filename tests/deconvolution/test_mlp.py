@@ -19,7 +19,7 @@ from methyldl.deconvolution.deep_deconvolvers.mlp import (
     MLPDeconvolver,
     _MLPDeconvolverModel,
 )
-from methyldl.deconvolution.deep_deconvolvers.training import TrainingHistory
+from methyldl.deconvolution.history import DeconvolutionHistory
 
 # ── Shared constants ──────────────────────────────────────────────────────────
 N_FEATURES = 12
@@ -266,8 +266,8 @@ class TestMLPDeconvolverFit(unittest.TestCase):
         """fit() should store a TrainingHistory with at least one recorded epoch."""
         deconvolver = self._make_deconvolver()
         self._fit(deconvolver)
-        self.assertIsInstance(deconvolver.history_, TrainingHistory)
-        self.assertGreater(len(deconvolver.history_.val_loss), 0)
+        self.assertIsInstance(deconvolver.history, DeconvolutionHistory)
+        self.assertGreater(len(deconvolver.history.val_loss), 0)
 
     def test_fit_stores_overridden_hyperparameters(self):
         """Custom training kwargs should be persisted as fitted attributes."""
@@ -558,8 +558,8 @@ class TestMLPDeconvolverCVInterface(unittest.TestCase):
 
     def test_get_cv_metric_returns_best_epoch_val_loss(self):
         """get_cv_metric should return the validation loss at the best epoch."""
-        expected = self.deconvolver.history_.val_loss[
-            self.deconvolver.history_.best_epoch
+        expected = self.deconvolver.history.val_loss[
+            self.deconvolver.history.best_epoch
         ]
         actual = self.deconvolver.get_cv_metric(self.data["X_val"], self.data["y_val"])
         self.assertAlmostEqual(actual, expected, places=10)

@@ -7,9 +7,9 @@ import torch.nn as nn
 
 from methyldl.deconvolution.deep_deconvolvers.training import (
     EarlyStopping,
-    TrainingHistory,
     train_matrix_deconvolver,
 )
+from methyldl.deconvolution.history import DeconvolutionHistory
 
 
 class TinySoftmaxRegressor(nn.Module):
@@ -55,14 +55,16 @@ class TestTrainingDataclasses(unittest.TestCase):
 
     def test_training_history_to_dict_returns_all_fields(self):
         """The history helper should expose metric series and scalar metadata in dictionary form."""
-        history = TrainingHistory(
+        history = DeconvolutionHistory(
             train_loss=[0.4],
             val_loss=[0.3],
-            val_mae=[0.2],
-            val_mse=[0.1],
-            val_kl=[0.05],
-            val_max_error=[0.3],
-            val_cosine_sim=[0.8],
+            val_metrics={
+                "mae": [0.2],
+                "mse": [0.1],
+                "kl": [0.05],
+                "max_error": [0.3],
+                "cosine_sim": [0.8],
+            },
             learning_rates=[1e-3],
             best_epoch=2,
             stopped_early=True,
@@ -234,7 +236,7 @@ class TestTrainMatrixDeconvolver(unittest.TestCase):
         self.assertEqual(history.best_epoch, 1)
         self.assertEqual(len(history.train_loss), 4)
         self.assertEqual(len(history.val_loss), 4)
-        self.assertEqual(history.val_mae, [0.30, 0.20, 0.21, 0.22])
+        self.assertEqual(history.val_metrics["mae"], [0.30, 0.20, 0.21, 0.22])
 
     def test_train_with_cosine_scheduler_uses_max_mode_metric(self):
         """Cosine scheduling should advance once per epoch and maximize cosine similarity when requested."""
@@ -284,7 +286,7 @@ class TestTrainMatrixDeconvolver(unittest.TestCase):
         self.assertEqual(scheduler.step_calls, 2)
         self.assertFalse(history.stopped_early)
         self.assertEqual(history.best_epoch, 1)
-        self.assertEqual(history.val_cosine_sim, [0.55, 0.72])
+        self.assertEqual(history.val_metrics["cosine_sim"], [0.55, 0.72])
 
     def test_train_without_scheduler_accepts_custom_loss_weights(self):
         """Disabling the scheduler should still train and record history with custom loss weights."""
@@ -328,4 +330,4 @@ class TestTrainMatrixDeconvolver(unittest.TestCase):
         self.assertFalse(history.stopped_early)
         self.assertEqual(history.best_epoch, 0)
         self.assertEqual(len(history.learning_rates), 1)
-        self.assertEqual(history.val_mse, [0.09])
+        self.assertEqual(history.val_metrics["mse"], [0.09])

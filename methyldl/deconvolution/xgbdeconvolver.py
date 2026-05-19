@@ -6,10 +6,11 @@ import numpy as np
 import xgboost as xgb
 from sklearn.multioutput import MultiOutputRegressor
 import joblib
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from methyldl.deconvolution.evaluation import compute_deconvolution_metrics
 
+from methyldl.deconvolution.history import DeconvolutionHistory
 from methyldl.deconvolution.loss import build_loss_from_config
 from methyldl.deconvolution.abstract_deconvolver import AbstractDeconvolver
 
@@ -33,44 +34,8 @@ class XGBDeconvolverConfig:
     random_state: int = 42
 
 
-@dataclass
-class XGBTrainingHistory:
-    """Stores training metrics matching PyTorch version."""
-
-    train_loss: list = field(default_factory=list)
-    train_mae: list = field(default_factory=list)
-    train_mse: list = field(default_factory=list)
-    train_kl: list = field(default_factory=list)
-    train_max_error: list = field(default_factory=list)
-    train_cosine_sim: list = field(default_factory=list)
-    val_loss: list = field(default_factory=list)
-    val_mae: list = field(default_factory=list)
-    val_mse: list = field(default_factory=list)
-    val_kl: list = field(default_factory=list)
-    val_max_error: list = field(default_factory=list)
-    val_cosine_sim: list = field(default_factory=list)
-    best_iteration: int = 0
-    # useless but kept for backwards compatibility
-    stopped_early: bool = False
-
-    def to_dict(self) -> dict:
-        """Convert history to a dictionary for easier logging or analysis."""
-        return {
-            "train_loss": self.train_loss,
-            "train_mae": self.train_mae,
-            "train_mse": self.train_mse,
-            "train_kl": self.train_kl,
-            "train_max_error": self.train_max_error,
-            "train_cosine_sim": self.train_cosine_sim,
-            "val_loss": self.val_loss,
-            "val_mae": self.val_mae,
-            "val_mse": self.val_mse,
-            "val_kl": self.val_kl,
-            "val_max_error": self.val_max_error,
-            "val_cosine_sim": self.val_cosine_sim,
-            "best_iteration": self.best_iteration,
-            "stopped_early": self.stopped_early,
-        }
+# XGBTrainingHistory has been replaced by DeconvolutionHistory
+# (imported from methyldl.deconvolution.history)
 
 
 class XGBoostDeconvolver(AbstractDeconvolver):
@@ -110,6 +75,7 @@ class XGBoostDeconvolver(AbstractDeconvolver):
         ] = "clip_normalize",
         logger=None,
     ):
+        super().__init__()
         self.n_dmr = n_dmr_groups
         self.n_pred_classes = n_pred_classes
         self.n_cell_types = n_cell_types
@@ -119,7 +85,6 @@ class XGBoostDeconvolver(AbstractDeconvolver):
 
         self.model = None
         self.best_model = None
-        self.history = None
         self._is_fitted = False
 
     def _build_model(self, verbose=0) -> MultiOutputRegressor:
@@ -218,7 +183,7 @@ class XGBoostDeconvolver(AbstractDeconvolver):
             self.logger.info("-" * 60)
 
         # Initialize history
-        self.history = XGBTrainingHistory()
+        self.history = DeconvolutionHistory()
 
         # Build fresh model
         self.model = self._build_model(verbose=verbose)
@@ -238,11 +203,7 @@ class XGBoostDeconvolver(AbstractDeconvolver):
         self.cv_metric = train_loss  # For cross-validation model selection
 
         self.history.train_loss.append(train_loss)
-        self.history.train_mae.append(train_metrics["mae"])
-        self.history.train_mse.append(train_metrics["mse"])
-        self.history.train_kl.append(train_metrics["kl"])
-        self.history.train_max_error.append(train_metrics["max_error"])
-        self.history.train_cosine_sim.append(train_metrics["cosine_sim"])
+        self.history.record_metrics(train_metrics, "train")
 
         if X_val is not None and y_val is not None:
             val_pred_raw = self._predict_raw(X_val_feat)
@@ -252,31 +213,41 @@ class XGBoostDeconvolver(AbstractDeconvolver):
             self.cv_metric = val_loss  # For cross-validation model selection
 
             self.history.val_loss.append(val_loss)
-            self.history.val_mae.append(val_metrics["mae"])
-            self.history.val_mse.append(val_metrics["mse"])
-            self.history.val_kl.append(val_metrics["kl"])
-            self.history.val_max_error.append(val_metrics["max_error"])
-            self.history.val_cosine_sim.append(val_metrics["cosine_sim"])
+            self.history.record_metrics(val_metrics, "val")
 
         self._is_fitted = True
 
         if verbose:
             self.logger.info("Training Results:")
             self.logger.info("  Train Loss: %f", train_loss)
-            self.logger.info("  Train MAE:  %f", train_metrics["mae"])
-            self.logger.info("  Train MSE:  %f", train_metrics["mse"])
-            self.logger.info("  Train KL:   %f", train_metrics["kl"])
-            self.logger.info("  Train Max Error: %f", train_metrics["max_error"])
-            self.logger.info("  Train Cosine Sim: %f", train_metrics["cosine_sim"])
+            self.logger.info("  Train MAE:  %f", train_metrics.get("mae", float("nan")))
+            self.logger.info("  Train MSE:  %f", train_metrics.get("mse", float("nan")))
+            self.logger.info("  Train KL:   %f", train_metrics.get("kl", float("nan")))
+            self.logger.info(
+                "  Train Max Error: %f", train_metrics.get("max_error", float("nan"))
+            )
+            self.logger.info(
+                "  Train Cosine Sim: %f", train_metrics.get("cosine_sim", float("nan"))
+            )
 
             if X_val is not None:
                 self.logger.info("Validation Results:")
                 self.logger.info("  Val Loss:   %f", val_loss)
-                self.logger.info("  Val MAE:    %f", val_metrics["mae"])
-                self.logger.info("  Val MSE:    %f", val_metrics["mse"])
-                self.logger.info("  Val KL:     %f", val_metrics["kl"])
-                self.logger.info("  Val Max Error: %f", val_metrics["max_error"])
-                self.logger.info("  Val Cosine Sim: %f", val_metrics["cosine_sim"])
+                self.logger.info(
+                    "  Val MAE:    %f", val_metrics.get("mae", float("nan"))
+                )
+                self.logger.info(
+                    "  Val MSE:    %f", val_metrics.get("mse", float("nan"))
+                )
+                self.logger.info(
+                    "  Val KL:     %f", val_metrics.get("kl", float("nan"))
+                )
+                self.logger.info(
+                    "  Val Max Error: %f", val_metrics.get("max_error", float("nan"))
+                )
+                self.logger.info(
+                    "  Val Cosine Sim: %f", val_metrics.get("cosine_sim", float("nan"))
+                )
 
         return self
 
@@ -418,7 +389,7 @@ def train_xgb_deconvolver(
     -------
     model : XGBoostDeconvolver
         Trained model
-    history : XGBTrainingHistory
+    history : DeconvolutionHistory
         Training history
     """
     if config is None:

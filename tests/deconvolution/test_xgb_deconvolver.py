@@ -7,10 +7,10 @@ import numpy as np
 
 from methyldl.deconvolution.xgbdeconvolver import (
     XGBDeconvolverConfig,
-    XGBTrainingHistory,
     XGBoostDeconvolver,
     train_xgb_deconvolver,
 )
+from methyldl.deconvolution.history import DeconvolutionHistory
 
 
 class DummyEstimator:
@@ -47,15 +47,15 @@ class DummyMultiOutputModel:
 
 
 class TestXGBTrainingHistory(unittest.TestCase):
-    """Tests for the XGBTrainingHistory convenience dataclass."""
+    """Tests for the DeconvolutionHistory convenience dataclass."""
 
     def test_to_dict_contains_expected_keys_and_values(self):
         """to_dict should expose metric keys and scalar metadata fields."""
-        history = XGBTrainingHistory(
+        history = DeconvolutionHistory(
             train_loss=[0.1],
-            train_mae=[0.2],
+            train_metrics={"mae": [0.2]},
             val_loss=[0.3],
-            best_iteration=7,
+            best_epoch=7,
             stopped_early=True,
         )
 
@@ -63,7 +63,7 @@ class TestXGBTrainingHistory(unittest.TestCase):
 
         self.assertIn("train_loss", as_dict)
         self.assertIn("val_loss", as_dict)
-        self.assertEqual(as_dict["best_iteration"], 7)
+        self.assertEqual(as_dict["best_epoch"], 7)
         self.assertTrue(as_dict["stopped_early"])
 
 
@@ -307,8 +307,8 @@ class TestXGBoostDeconvolverFitEvaluateAndIO(unittest.TestCase):
         self.assertEqual(dummy.fit_calls, 1)
         self.assertEqual(self.model.history.train_loss, [0.5])
         self.assertEqual(self.model.history.val_loss, [0.6])
-        self.assertEqual(self.model.history.train_mae, [0.1])
-        self.assertEqual(self.model.history.val_mae, [0.11])
+        self.assertEqual(self.model.history.train_metrics["mae"], [0.1])
+        self.assertEqual(self.model.history.val_metrics["mae"], [0.11])
 
     @patch("methyldl.deconvolution.xgbdeconvolver.compute_combined_loss")
     @patch("methyldl.deconvolution.xgbdeconvolver.compute_deconvolution_metrics")
@@ -368,7 +368,7 @@ class TestXGBoostDeconvolverFitEvaluateAndIO(unittest.TestCase):
         """save/load should round-trip a fitted model and its history."""
         self.model._is_fitted = True
         self.model.model = DummyMultiOutputModel(output=[0.2, 0.3, 0.5])
-        self.model.history = XGBTrainingHistory(train_loss=[0.1])
+        self.model.history = DeconvolutionHistory(train_loss=[0.1])
 
         with tempfile.TemporaryDirectory() as tmpdir:
             path = os.path.join(tmpdir, "model.joblib")
@@ -412,7 +412,7 @@ class TestTrainXGBDeconvolverConvenience(unittest.TestCase):
 
         def fake_fit(self, *args, **kwargs):
             # autospec=True passes model instance as first argument.
-            self.history = XGBTrainingHistory(train_loss=[0.2], val_loss=[0.25])
+            self.history = DeconvolutionHistory(train_loss=[0.2], val_loss=[0.25])
             self._is_fitted = True
             return self
 
@@ -429,7 +429,7 @@ class TestTrainXGBDeconvolverConvenience(unittest.TestCase):
         )
 
         self.assertIsInstance(model, XGBoostDeconvolver)
-        self.assertIsInstance(history, XGBTrainingHistory)
+        self.assertIsInstance(history, DeconvolutionHistory)
         self.assertEqual(history.train_loss, [0.2])
 
     @patch(
@@ -446,7 +446,7 @@ class TestTrainXGBDeconvolverConvenience(unittest.TestCase):
 
         def fake_fit(self, *args, **kwargs):
             # Keep this lightweight: we only need to emulate history population.
-            self.history = XGBTrainingHistory(train_loss=[0.3])
+            self.history = DeconvolutionHistory(train_loss=[0.3])
             return self
 
         mock_fit.side_effect = fake_fit

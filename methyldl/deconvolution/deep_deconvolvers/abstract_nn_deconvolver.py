@@ -86,7 +86,7 @@ class AbstractNNDeconvolver(AbstractDeconvolver):
         self.scheduler_type_ = kwargs.get("scheduler_type", "plateau")
         self.verbose_ = kwargs.get("verbose", 1)
 
-        self.model, self.history_ = train_matrix_deconvolver(
+        self.model, self.history = train_matrix_deconvolver(
             model=self.model,
             X_train=X,
             y_train=y,
@@ -197,7 +197,7 @@ class AbstractNNDeconvolver(AbstractDeconvolver):
     def get_cv_metric(self, X, y, **kwargs) -> float:
         if not self.is_fitted:
             raise ValueError("Model must be fitted before returning CV metric.")
-        return self.history_.val_loss[self.history_.best_epoch]
+        return self.history.val_loss[self.history.best_epoch]
 
     @property
     def cv_metric_name(self) -> str:

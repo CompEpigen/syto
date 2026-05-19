@@ -1,5 +1,4 @@
 from copy import deepcopy
-from dataclasses import dataclass, field
 from typing import Literal, Optional
 
 import numpy as np
@@ -8,37 +7,11 @@ import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
 
 from methyldl.deconvolution.evaluation import compute_deconvolution_metrics
+from methyldl.deconvolution.history import DeconvolutionHistory
 from methyldl.deconvolution.loss import build_loss_from_config
 
-
-@dataclass
-class TrainingHistory:
-    """Stores training metrics over epochs."""
-
-    train_loss: list = field(default_factory=list)
-    val_loss: list = field(default_factory=list)
-    val_mae: list = field(default_factory=list)
-    val_mse: list = field(default_factory=list)
-    val_kl: list = field(default_factory=list)
-    val_max_error: list = field(default_factory=list)
-    val_cosine_sim: list = field(default_factory=list)
-    learning_rates: list = field(default_factory=list)
-    best_epoch: int = 0
-    stopped_early: bool = False
-
-    def to_dict(self):
-        return {
-            "train_loss": self.train_loss,
-            "val_loss": self.val_loss,
-            "val_mae": self.val_mae,
-            "val_mse": self.val_mse,
-            "val_kl": self.val_kl,
-            "val_max_error": self.val_max_error,
-            "val_cosine_sim": self.val_cosine_sim,
-            "learning_rates": self.learning_rates,
-            "best_epoch": self.best_epoch,
-            "stopped_early": self.stopped_early,
-        }
+# TrainingHistory has been replaced by DeconvolutionHistory
+# (imported from methyldl.deconvolution.history)
 
 
 class EarlyStopping:
@@ -114,7 +87,7 @@ def train_matrix_deconvolver(
     loss: str = "combined_mse_kl",
     verbose: int = 1,
     save_path: Optional[str] = None,
-) -> tuple[nn.Module, TrainingHistory]:
+) -> tuple[nn.Module, DeconvolutionHistory]:
     """
     Train a deconvolution model with early stopping support.
 
@@ -160,7 +133,7 @@ def train_matrix_deconvolver(
     -------
     model : nn.Module
         The trained model (loaded with best weights).
-    history : TrainingHistory
+    history : DeconvolutionHistory
         Training history with all metrics.
     """
 
@@ -172,6 +145,13 @@ def train_matrix_deconvolver(
     # Determine early stopping mode
     maximize_metrics = {"val_cosine_sim"}
     es_mode = "max" if early_stopping_metric in maximize_metrics else "min"
+
+    # Strip the val_ prefix for metric lookup into history
+    es_metric_key = (
+        early_stopping_metric.removeprefix("val_")
+        if early_stopping_metric != "val_loss"
+        else "loss"
+    )
 
     # Setup data loaders
     train_dataset = TensorDataset(
@@ -198,7 +178,7 @@ def train_matrix_deconvolver(
     criterion = build_loss_from_config(**loss_config)
 
     # Initialize tracking
-    history = TrainingHistory()
+    history = DeconvolutionHistory()
     early_stopping = EarlyStopping(
         patience=early_stopping_patience,
         min_delta=early_stopping_min_delta,
@@ -257,23 +237,14 @@ def train_matrix_deconvolver(
         # Record history
         history.train_loss.append(train_loss)
         history.val_loss.append(val_loss)
-        history.val_mae.append(metrics["mae"])
-        history.val_mse.append(metrics["mse"])
-        history.val_kl.append(metrics["kl"])
-        history.val_max_error.append(metrics["max_error"])
-        history.val_cosine_sim.append(metrics["cosine_sim"])
+        history.record_metrics(metrics, "val")
         history.learning_rates.append(current_lr)
 
         # Get the metric value for early stopping
-        metric_map = {
-            "val_loss": val_loss,
-            "val_mae": metrics["mae"],
-            "val_mse": metrics["mse"],
-            "val_kl": metrics["kl"],
-            "val_max_error": metrics["max_error"],
-            "val_cosine_sim": metrics["cosine_sim"],
-        }
-        current_metric = metric_map[early_stopping_metric]
+        if es_metric_key == "loss":
+            current_metric = val_loss
+        else:
+            current_metric = metrics[es_metric_key]
 
         # Check if this is the best model
         is_best = False
