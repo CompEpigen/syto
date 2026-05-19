@@ -4,14 +4,21 @@ import torch.nn.functional as F
 
 
 class ConfidenceWeightedCrossEntropy(nn.Module):
-    def __init__(self, num_classes=39):
+    def __init__(self, num_classes=39, penalty_scale=1.0, on_target_weight=None):
+        """
+        Args:
+            num_classes: Number of distinct cell types.
+            penalty_scale: Scaling factor for the penalty applied to background reads.
+            on_target_weight: Optional fixed weight for on-target reads (default is 1.0).
+        """
         super().__init__()
         self.num_classes = num_classes
-        self.min_prob = (
-            1.0 / num_classes
-        )  # The baseline for a perfectly flat distribution
+        self.min_prob = 1.0 / num_classes # Baseline for a perfectly flat distribution
+        self.penalty_scale = penalty_scale
+        self.on_target_weight = on_target_weight
+        self.use_specific_on_target_weight = on_target_weight is not None
 
-    def forward(self, logits, soft_targets):
+    def forward(self, logits: torch.Tensor, soft_targets: torch.Tensor, ) -> torch.Tensor:
         """
         Args:
             logits: Unnormalized predictions from the model, shape (batch_size, num_classes)
@@ -53,7 +60,12 @@ class OnTargetSoftLoss(nn.Module):
         self.min_prob = 1.0 / num_classes  # Baseline for a perfectly flat distribution
         self.min_bg_weight = min_bg_weight
 
-    def forward(self, logits, soft_targets, is_on_target):
+    def forward(
+        self,
+        logits: torch.Tensor,
+        soft_targets: torch.Tensor,
+        is_on_target: torch.Tensor,
+    ) -> torch.Tensor:
         """
         Args:
             logits: (batch_size, num_classes) Unnormalized predictions
