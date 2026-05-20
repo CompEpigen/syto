@@ -9,16 +9,59 @@ from typing import Union, Tuple, Any
 from scipy.special import softmax
 
 
-def calculate_metric_with_sklearn(predictions: np.ndarray, labels: np.ndarray):
+def _safe_average_precision(labels: np.ndarray, predictions_proba: np.ndarray) -> float:
+    """Compute average_precision_score, handling multi-class edge cases.
+
+    When labels contain class IDs that exceed the number of columns in
+    predictions_proba (e.g. a background class added by
+    compute_metrics_soft_labels), a pseudo-probability column for the
+    background class is appended as ``1 - max(predictions_proba, axis=1)``.
+    This lets AP measure how well the model separates confident (real-class)
+    predictions from uncertain (background) ones.
+    """
+    if predictions_proba.ndim >= 2:
+        n_prob_classes = predictions_proba.shape[1]
+        has_background = np.any(labels >= n_prob_classes)
+
+        if has_background:
+            # Append a pseudo-probability column for the background class:
+            # high value when the model is unconfident (low max probability)
+            background_proba = 1.0 - np.max(predictions_proba, axis=1, keepdims=True)
+            predictions_proba = np.concatenate(
+                [predictions_proba, background_proba], axis=1
+            )
+
+        # Compute macro AP by taking the mean of class-wise AP scores.
+        # This prevents shape mismatches/IndexError in sklearn if some classes are missing in labels.
+        class_aps = []
+        for c in range(predictions_proba.shape[1]):
+            y_true_c = (labels == c).astype(int)
+            if len(np.unique(y_true_c)) == 2:
+                ap_c = sklearn.metrics.average_precision_score(
+                    y_true_c, predictions_proba[:, c]
+                )
+                class_aps.append(ap_c)
+
+        if len(class_aps) == 0:
+            return float("nan")
+
+        return float(np.mean(class_aps))
+    else:
+        # Binary: predictions_proba is 1-D
+        if len(labels) == 0 or len(np.unique(labels)) < 2:
+            return float("nan")
+
+        return sklearn.metrics.average_precision_score(labels, predictions_proba)
+
+
+def calculate_metric_with_sklearn(predictions_proba: np.ndarray, predictions: np.ndarray, labels: np.ndarray):
     valid_mask = (
         labels != -100
     )  # Exclude padding tokens (assuming -100 is the padding token ID)
     valid_predictions = predictions[valid_mask]
     valid_labels = labels[valid_mask]
-    # print(valid_labels, valid_predictions)
-    # print(sklearn.metrics.f1_score(
-    #         valid_labels, valid_predictions, average="macro", zero_division=0
-    #     ))
+    valid_predictions_proba = predictions_proba[valid_mask]
+
     return {
         "accuracy": sklearn.metrics.accuracy_score(valid_labels, valid_predictions),
         "f1": sklearn.metrics.f1_score(
@@ -32,6 +75,9 @@ def calculate_metric_with_sklearn(predictions: np.ndarray, labels: np.ndarray):
         ),
         "recall": sklearn.metrics.recall_score(
             valid_labels, valid_predictions, average="macro", zero_division=0
+        ),
+        "average_precision": _safe_average_precision(
+            valid_labels, valid_predictions_proba
         ),
     }
 
@@ -78,28 +124,27 @@ def keep_logits_only(raw_model_output, labels):
     return raw_model_output
 
 
-"""
-Compute metrics used for huggingface trainer.
-"""
-
 
 def compute_metrics(eval_pred):
-    logits, labels = eval_pred
+    processed_logits, labels = eval_pred
     # Handle soft labels: convert [B, C] probabilities to [B] hard indices
     if labels.ndim >= 2:
         labels = np.argmax(labels, axis=-1)
-    num_classes = logits.shape[-1]
+    num_classes = processed_logits.shape[-1]
     if num_classes == 1:
         # Binary with single output
-        predictions = predictions > 0.5
+        predictions_proba = processed_logits.squeeze(-1)
+        predictions = (predictions_proba > 0.5).astype(int)
     elif num_classes == 2:
         # Binary with 2 outputs (use argmax or softmax)
-        predictions = np.argmax(logits, axis=-1)
+        predictions = np.argmax(processed_logits, axis=-1)
+        predictions_proba = processed_logits[:, 1]
     else:
         # Multi-class
-        predictions = np.argmax(logits, axis=-1)
+        predictions = np.argmax(processed_logits, axis=-1)
+        predictions_proba = processed_logits
 
-    return calculate_metric_with_sklearn(predictions, labels)
+    return calculate_metric_with_sklearn(predictions_proba, predictions, labels)
 
 
 """
@@ -118,19 +163,19 @@ def compute_metrics_soft_labels(eval_pred, threshold_func=lambda n: 0.5):
     # 1. Calculate the threshold (e.g., 1/sqrt(39) ≈ 0.16)
     threshold = threshold_func(num_classes)
 
-    # The rejection class will be assigned the index N (e.g., 39, if classes are 0-38)
-    rejection_class_id = num_classes
+    # The background class will be assigned the index N (e.g., 39, if classes are 0-38)
+    background_class_id = num_classes
 
     # ==========================================
     # PROCESS PREDICTIONS
     # ==========================================
     # Convert logits to probabilities
-    probs = softmax(logits, axis=-1)
-    max_probs = np.max(probs, axis=-1)
-    pred_indices = np.argmax(probs, axis=-1)
+    predictions_proba = logits
+    max_probs = np.max(predictions_proba, axis=-1)
+    pred_indices = np.argmax(predictions_proba, axis=-1)
 
     # If the highest probability is below the threshold, assign it to the Rejection class
-    predictions = np.where(max_probs < threshold, rejection_class_id, pred_indices)
+    predictions = np.where(max_probs < threshold, background_class_id, pred_indices)
 
     # ==========================================
     # PROCESS GROUND TRUTH
@@ -141,7 +186,7 @@ def compute_metrics_soft_labels(eval_pred, threshold_func=lambda n: 0.5):
 
         # Apply the same threshold logic to the ground truth
         hard_labels = np.where(
-            max_labels < threshold, rejection_class_id, label_indices
+            max_labels < threshold, background_class_id, label_indices
         )
 
         # Handle HuggingFace Padding (-100)
@@ -152,4 +197,4 @@ def compute_metrics_soft_labels(eval_pred, threshold_func=lambda n: 0.5):
         # Fallback just in case hard labels were passed somehow
         hard_labels = soft_labels
 
-    return calculate_metric_with_sklearn(predictions, hard_labels)
+    return calculate_metric_with_sklearn(predictions_proba,predictions, hard_labels)
