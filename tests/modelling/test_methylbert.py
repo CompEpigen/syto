@@ -7,7 +7,6 @@ from parameterized import parameterized
 from transformers import BertConfig, TrainingArguments
 import torch
 
-from methyldl.data.dataset import generate_example_data_for_methylbert
 import methyldl.modelling.classifiers.methylbert as methylbert_module
 from methyldl.modelling.classifiers.methylbert import (
     MethylBert,
@@ -19,8 +18,6 @@ from methyldl.modelling.classifiers.methylbert import (
     methylbert_finetune_collator,
     methylbert_pretrain_collator,
     default_methylbert_config,
-    FocalLoss,
-    sigmoid_focal_loss,
     _line2tokens_finetune,
     _line2tokens_pretrain,
 )
@@ -139,46 +136,6 @@ class TestMethylVocab(unittest.TestCase):
                     "dmr_label",
                 ],
             )
-
-
-class TestFocalLoss(unittest.TestCase):
-    """Test suite for Focal Loss implementation."""
-
-    def test_focal_loss_basic(self):
-        """Test basic focal loss computation."""
-        inputs = torch.randn(10, 2)
-        targets = torch.randint(0, 2, (10, 2)).float()
-
-        loss = sigmoid_focal_loss(inputs, targets, reduction="mean")
-
-        self.assertIsInstance(loss, torch.Tensor)
-        self.assertEqual(loss.shape, torch.Size([]))  # Scalar
-        self.assertGreaterEqual(loss.item(), 0)
-
-    def test_focal_loss_reduction_modes(self):
-        """Test different reduction modes."""
-        inputs = torch.randn(10, 2)
-        targets = torch.randint(0, 2, (10, 2)).float()
-
-        loss_none = sigmoid_focal_loss(inputs, targets, reduction="none")
-        loss_mean = sigmoid_focal_loss(inputs, targets, reduction="mean")
-        loss_sum = sigmoid_focal_loss(inputs, targets, reduction="sum")
-
-        self.assertEqual(loss_none.shape, inputs.shape)
-        self.assertEqual(loss_mean.shape, torch.Size([]))
-        self.assertEqual(loss_sum.shape, torch.Size([]))
-
-    def test_focal_loss_class(self):
-        """Test FocalLoss class wrapper."""
-        criterion = FocalLoss(reduction="mean")
-
-        inputs = torch.randn(10, 2)
-        targets = torch.randint(0, 2, (10, 2)).float()
-
-        loss = criterion(inputs, targets)
-
-        self.assertIsInstance(loss, torch.Tensor)
-        self.assertGreaterEqual(loss.item(), 0)
 
 
 class TestMethylBertFinetuneDataset(unittest.TestCase):
@@ -987,19 +944,11 @@ class TestMethylBertSoftLabelLossSetup(unittest.TestCase):
             model.classification_loss_fct, ConfidenceWeightedCrossEntropy
         )
 
-    def test_setup_loss_on_target_ce(self):
-        """Verify _setup_loss('on_target_ce') returns OnTargetSoftLoss."""
-        from methyldl.modelling.loss import OnTargetSoftLoss
-
-        config = self._build_small_hf_config(num_labels=5, loss="on_target_ce")
-        model = MethylBertEmbeddedDMR(config, seq_len=5)
-        self.assertIsInstance(model.classification_loss_fct, OnTargetSoftLoss)
-
 
 class TestMethylBertSoftLabelForward(unittest.TestCase):
     """Test forward pass with soft labels."""
 
-    def _build_small_hf_config(self, num_labels=5, loss="cwce"):
+    def _build_small_hf_config(self, num_labels=5, loss="cwce", on_target_weight=None):
         config = BertConfig(
             vocab_size=80,
             hidden_size=12,
@@ -1012,6 +961,7 @@ class TestMethylBertSoftLabelForward(unittest.TestCase):
         config.num_labels = num_labels
         config.num_dmr_labels = 4
         config.loss = loss
+        config.on_target_weight = on_target_weight
         return config
 
     def test_forward_with_soft_labels_cwce(self):
@@ -1036,9 +986,11 @@ class TestMethylBertSoftLabelForward(unittest.TestCase):
         self.assertFalse(torch.isnan(output.loss))
         self.assertEqual(output.logits.shape, (2, 5))
 
-    def test_forward_with_soft_labels_on_target_ce(self):
-        """Forward pass with loss='on_target_ce', soft labels, and on_target_mask."""
-        config = self._build_small_hf_config(num_labels=5, loss="on_target_ce")
+    def test_forward_with_soft_labels_cwce_with_on_target_weight(self):
+        """Forward pass with loss='cwce', soft labels, and on_target_mask."""
+        config = self._build_small_hf_config(
+            num_labels=5, loss="cwce", on_target_weight=1.0
+        )
         model = MethylBertEmbeddedDMR(config, seq_len=5)
 
         input_ids = torch.randint(5, 20, (2, 6))

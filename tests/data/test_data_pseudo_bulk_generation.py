@@ -831,7 +831,7 @@ class TestDMRSamplingStrategies(PseudoBulkGenerationTestBase):
                 proportions=[1.0],
                 grouped_splits=self._make_grouped_splits(),
                 target_columns=self.target_columns,
-                dmr_sampling="random",
+                dmr_sampling="uniform",
             )
         )
         self.assertEqual(labels, [0])
@@ -864,8 +864,8 @@ class TestComputeSamplesPerDmr(unittest.TestCase):
         self.assertEqual(result[0], 10)  # 390 / 39
         self.assertEqual(result[1], 5)  # 195 / 39
 
-    def test_random_returns_dict_of_lists(self):
-        result = pseudo_bulk_generation_module._compute_samples_per_dmr_random(
+    def test_uniform_multinomial_returns_dict_of_lists(self):
+        result = pseudo_bulk_generation_module._compute_samples_per_dmr_multinomial(
             labels=[0],
             n_samples_list=[390],
             num_labels=39,
@@ -961,6 +961,7 @@ class TestConsolidateVariantAware(PseudoBulkGenerationTestBase):
                 ios_dir=tmpdir,
                 output_path=output_path,
                 num_labels=39,
+                labels_dict={i: f"cell_{i}" for i in range(39)},
             )
 
         self.assertIn("features_train_uniform", result)

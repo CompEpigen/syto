@@ -50,7 +50,11 @@ class DummyModel(CrossValidationCompatibleModel):
     that the engine selects the best hyperparameter combination.
     """
 
-    def __init__(self, quality: float = 1.0, n_folds: int = 2):
+    def __init__(
+        self,
+        quality: float = 1.0,
+        n_folds: int = 2,
+    ):
         self.quality = quality
         self.n_folds = n_folds
         self._last_metric: float = float("inf")

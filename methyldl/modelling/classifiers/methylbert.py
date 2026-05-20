@@ -1,42 +1,37 @@
+""""""
+
+import os
+import gc
+from typing import Optional, Tuple, Union, List
+from collections import OrderedDict
+import itertools
+import random
+from dataclasses import dataclass
+from copy import deepcopy
+import multiprocessing as mp
+from functools import partial
+import pickle
+
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.data import DataLoader, Sampler, Dataset
 from transformers import BertPreTrainedModel, BertModel
-from torch.nn.modules.loss import _Loss
-
-import random
-import numpy as np
 from transformers.trainer_callback import TrainerCallback
-
-from dataclasses import dataclass
 from transformers.modeling_outputs import ModelOutput
-import os
-import gc
-import numpy as np
-from typing import Optional, Tuple, Union, List
-from methyldl.modelling.utils import calculate_batch_size
+from transformers import AutoTokenizer, Trainer, BertConfig
 
-from transformers import AutoTokenizer, Trainer, TrainingArguments, BertConfig
 
-from collections import OrderedDict
-import itertools
 from methyldl.modelling.evaluation import (
     compute_metrics,
     preprocess_logits_for_prediction,
     compute_metrics_soft_labels,
 )
-
-from torch.utils.data import Dataset
-import numpy as np
-from copy import deepcopy
-import multiprocessing as mp
-from functools import partial
-import pickle
 from methyldl.modelling.gr_group_attention_classification_head import (
     GRGAttentionClassificationHead,
 )
-from methyldl.modelling.loss import ConfidenceWeightedCrossEntropy, OnTargetSoftLoss
-from torch.utils.data import DataLoader, Sampler
+from methyldl.modelling.loss import ConfidenceWeightedCrossEntropy, FocalLoss
 
 default_methylbert_config = OrderedDict(
     [
@@ -287,68 +282,6 @@ METHYLBERT_PRETRAINED_MODEL_ARCHIVE_MAP = {
 }
 
 
-def sigmoid_focal_loss(
-    inputs: torch.Tensor,
-    targets: torch.Tensor,
-    alpha: float = 0.1,
-    gamma: float = 2,
-    reduction: str = "none",
-) -> torch.Tensor:
-    """
-    Loss used in RetinaNet for dense detection: https://arxiv.org/abs/1708.02002.
-    This code is from : https://pytorch.org/vision/main/_modules/torchvision/ops/focal_loss.html
-
-    Args:
-        inputs (Tensor): A float tensor of arbitrary shape.
-                The predictions for each example.
-        targets (Tensor): A float tensor with the same shape as inputs. Stores the binary
-                classification label for each element in inputs
-                (0 for the negative class and 1 for the positive class).
-        alpha (float): Weighting factor in range (0,1) to balance
-                positive vs negative examples or -1 for ignore. Default: ``0.25``.
-        gamma (float): Exponent of the modulating factor (1 - p_t) to
-                balance easy vs hard examples. Default: ``2``.
-        reduction (string): ``'none'`` | ``'mean'`` | ``'sum'``
-                ``'none'``: No reduction will be applied to the output.
-                ``'mean'``: The output will be averaged.
-                ``'sum'``: The output will be summed. Default: ``'none'``.
-    Returns:
-        Loss tensor with the reduction option applied.
-    """
-    # Original implementation from https://github.com/facebookresearch/fvcore/blob/master/fvcore/nn/focal_loss.py
-
-    p = torch.sigmoid(inputs)
-    ce_loss = F.binary_cross_entropy_with_logits(inputs, targets, reduction="none")
-    p_t = p * targets + (1 - p) * (1 - targets)
-    loss = ce_loss * ((1 - p_t) ** gamma)
-
-    if alpha >= 0:
-        alpha_t = alpha * targets + (1 - alpha) * (1 - targets)
-        loss = alpha_t * loss
-
-    # Check reduction option and return loss accordingly
-    if reduction == "none":
-        pass
-    elif reduction == "mean":
-        loss = loss.mean()
-    elif reduction == "sum":
-        loss = loss.sum()
-    else:
-        raise ValueError(
-            f"Invalid Value for arg 'reduction': '{reduction} \n Supported reduction modes: 'none', 'mean', 'sum'"
-        )
-    return loss
-
-
-class FocalLoss(_Loss):
-
-    def __init__(self, size_average=None, reduce=None, reduction: str = "mean") -> None:
-        super().__init__(size_average, reduce, reduction)
-
-    def forward(self, input: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        return sigmoid_focal_loss(input, target, reduction=self.reduction)
-
-
 @dataclass
 class MethylBertOutput(ModelOutput):
     """
@@ -444,13 +377,16 @@ class MethylBertEmbeddedDMR(BertPreTrainedModel):
         if not hasattr(config, "loss"):
             config.loss = "bce"  # Default loss
 
-        if config.loss not in ["bce", "focal_bce", "ce", "cwce", "on_target_ce"]:
+        if config.loss not in ["bce", "focal_bce", "ce", "cwce"]:
             raise ValueError(
-                f"loss must be bce, focal_bce, or ce. {config.loss} is given."
+                f"loss must be bce, focal_bce, ce, or cwce. {config.loss} is given."
             )
 
         self.loss = config.loss
-        self.classification_loss_fct = self._setup_loss(self.loss)
+        self.cwce_penalty_scale = getattr(config, "cwce_penalty_scale", 1.0)
+        self.cwce_on_target_weight = getattr(config, "cwce_on_target_weight", None)
+        self.classification_loss_fct = self._setup_loss()
+
         self.bert = BertModel(config)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
         self.seq_len = seq_len
@@ -489,27 +425,25 @@ class MethylBertEmbeddedDMR(BertPreTrainedModel):
 
         self.init_weights()
 
-    def _setup_loss(self, loss):
-        if loss == "bce":
+    def _setup_loss(self):
+        if self.loss == "bce":
             print("Binary Cross Entropy loss assigned")
             return nn.BCEWithLogitsLoss()
-        elif loss == "focal_bce":
+        elif self.loss == "focal_bce":
             print("Focal loss assigned")
             return FocalLoss()
-        elif loss == "ce":
+        elif self.loss == "ce":
             print("Cross Entropy loss assigned (multi-class)")
             return nn.CrossEntropyLoss()
-        elif loss == "cwce":
+        elif self.loss == "cwce":
             print("Confidence Weighted Cross Entropy assigned (multi-class)")
-            return ConfidenceWeightedCrossEntropy(self.num_labels)
-        elif loss == "on_target_ce":
-            print("On Target Confidence Weighted Cross Entropy assigned (multi-class)")
-            Warning(
-                "Make sure that dmr_ids are matching target labels!!! Otherwise, it wouldn't work and your model will likely not to learn anything usefull."
+            return ConfidenceWeightedCrossEntropy(
+                self.num_labels,
+                penalty_scale=self.cwce_penalty_scale,
+                on_target_weight=self.cwce_on_target_weight,
             )
-            return OnTargetSoftLoss(self.num_labels)
         else:
-            raise ValueError(f"Unknown loss type: {loss}")
+            raise ValueError(f"Unknown loss type: {self.loss}")
 
     def check_model_status(self):
         print(f"Bert model training mode: {self.bert.training}")
@@ -610,6 +544,7 @@ class MethylBertEmbeddedDMR(BertPreTrainedModel):
                     loss_ce = loss
 
             elif self.num_labels >= 2 and self.loss in ["bce", "focal_bce"]:
+                # pylint: disable=not-callable
                 ctype_label_onehot = F.one_hot(
                     labels, num_classes=self.num_labels
                 ).float()
@@ -930,34 +865,14 @@ class MethylBert:
             elif isinstance(resume_from_checkpoint, str):
                 # Resume from specific checkpoint path
                 checkpoint_path = resume_from_checkpoint
+        # pylint: disable-next=no-member
         elif hasattr(self, "resume_from_checkpoint") and self.resume_from_checkpoint:
             # Use checkpoint path from initialization if provided
-            checkpoint_path = self.resume_from_checkpoint
+            checkpoint_path = (
+                self.resume_from_checkpoint
+            )  # pylint: disable-next=no-member
 
         self.trainer.train(resume_from_checkpoint=checkpoint_path)
-
-        # if test_dataset:
-        #     results = self.trainer.evaluate(test_dataset)
-        #     print("Test results:", results)
-
-        # # Save final model
-        # # if self.training_args.save_model:
-        # if True:
-        #     self.trainer.save_state()
-        #     self.safe_save_model_for_hf_trainer(output_dir=self.output_dir)
-
-        # get the evaluation results from trainer
-        # if training_args.eval_and_save_results:
-        # if True:
-        #     results_path = os.path.join(self.output_dir, "results", training_args.run_name)
-        #     results = self.trainer.evaluate(eval_dataset=test_dataset)
-        #     os.makedirs(results_path, exist_ok=True)
-        #     with open(os.path.join(results_path, "eval_results.json"), "w") as f:
-        #         json.dump(results, f)
-
-        # if self.trainer.args.should_save:
-        #     self.trainer.save_model(self.trainer.args.output_dir)
-        #     self.safe_save_model_for_hf_trainer(self.trainer.args.output_dir)
 
     def predict(
         self,
@@ -991,6 +906,7 @@ class MethylBert:
         if self.trainer.args.should_save:
             cpu_state_dict = {k: v.cpu() for k, v in state_dict.items()}
             del state_dict
+            # pylint: disable-next=protected-access
             self.trainer._save(output_dir, state_dict=cpu_state_dict)
 
     def __str__(self):
