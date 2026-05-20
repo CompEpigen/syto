@@ -12,6 +12,16 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 
+from methyldl.modelling.evaluation import compute_metrics, compute_metrics_soft_labels
+
+try:
+    from transformers.utils.import_utils import is_in_notebook
+    from transformers.utils.notebook import NotebookTrainingTracker
+except ImportError:
+    def is_in_notebook():
+        return False
+    NotebookTrainingTracker = None
+
 from methyldl.modelling.gr_group_attention_classification_head import (
     GRGAttentionClassificationHead,
 )
@@ -640,21 +650,21 @@ class Dismir:
             return self._evaluate_fixed_length(split)
 
     def _evaluate_fixed_length(self, split):
-        """Fixed-length evaluation with DMR support."""
+        """Fixed-length evaluation with DMR support.
+
+        Returns:
+            (avg_loss, accuracy, metrics_dict)
+        """
+        use_dmr = self.classifier_type == "dmr_attention_based"
+
         if split == "test":
             X_data, y_data = self.test_x, self.test_y
-            dmr_data = (
-                self.test_dmr if self.classifier_type == "dmr_attention_based" else None
-            )
+            dmr_data = self.test_dmr if use_dmr else None
         else:
             X_data, y_data = self.valid_x, self.valid_y
-            dmr_data = (
-                self.valid_dmr
-                if self.classifier_type == "dmr_attention_based"
-                else None
-            )
+            dmr_data = self.valid_dmr if use_dmr else None
 
-        if self.classifier_type == "dmr_attention_based":
+        if use_dmr:
             dataset = torch.utils.data.TensorDataset(X_data, y_data, dmr_data)
         else:
             dataset = torch.utils.data.TensorDataset(X_data, y_data)
@@ -664,10 +674,12 @@ class Dismir:
         total_loss = 0.0
         correct = 0
         total = 0
+        eval_all_outputs = []
+        eval_all_labels = []
 
         with torch.no_grad():
             for batch in loader:
-                if self.classifier_type == "dmr_attention_based":
+                if use_dmr:
                     X_batch, y_batch, dmr_batch = batch
                     X_batch = X_batch.to(self.device)
                     y_batch = y_batch.to(self.device)
@@ -682,9 +694,18 @@ class Dismir:
                 loss = self.criterion(outputs, y_batch)
                 total_loss += loss.item() * X_batch.size(0)
 
+                # Collect outputs for metrics
+                batch_outputs = outputs.detach()
+                if use_dmr and self.num_labels == 1:
+                    batch_outputs = torch.sigmoid(batch_outputs)
+                elif use_dmr and self.num_labels > 1:
+                    batch_outputs = torch.softmax(batch_outputs, dim=-1)
+                eval_all_outputs.append(batch_outputs.cpu().numpy())
+                eval_all_labels.append(y_batch.detach().cpu().numpy())
+
                 # Prediction logic
                 if self.num_labels == 1:
-                    if self.classifier_type == "dmr_attention_based":
+                    if use_dmr:
                         # outputs are logits
                         preds = (torch.sigmoid(outputs) >= 0.5).float().squeeze()
                     else:
@@ -698,7 +719,10 @@ class Dismir:
 
         avg_loss = total_loss / len(loader.dataset)
         accuracy = correct / total
-        return avg_loss, accuracy
+        metrics = self._compute_epoch_metrics(
+            eval_all_outputs, eval_all_labels, "eval"
+        )
+        return avg_loss, accuracy, metrics
 
     def _train_fixed_length(
         self,
@@ -873,6 +897,33 @@ class Dismir:
             train_dir,
         )
 
+    def _compute_epoch_metrics(self, all_outputs, all_labels, prefix):
+        """
+        Compute sklearn metrics from accumulated epoch outputs.
+
+        Delegates to compute_metrics or compute_metrics_soft_labels
+        from methyldl.modelling.evaluation, depending on self.soft_labels.
+
+        Args:
+            all_outputs: list of numpy arrays – model output probabilities
+                         per batch, concatenated along dim 0.
+            all_labels:  list of numpy arrays – ground-truth labels per batch.
+            prefix:      'train' or 'val' – prepended to each metric key.
+
+        Returns:
+            dict with keys like '{prefix}_f1', '{prefix}_precision', etc.
+        """
+        outputs = np.concatenate(all_outputs, axis=0)
+        labels = np.concatenate(all_labels, axis=0)
+        eval_pred = (outputs, labels)
+
+        if self.soft_labels:
+            metrics = compute_metrics_soft_labels(eval_pred)
+        else:
+            metrics = compute_metrics(eval_pred)
+
+        return {f"{prefix}_{k}": v for k, v in metrics.items()}
+
     def _create_optimizer(self, optimizer_type, lr, weight_decay, momentum, nesterov):
         """Create optimizer based on parameters."""
         if optimizer_type.upper() == "SGD":
@@ -887,6 +938,85 @@ class Dismir:
             return optim.Adam(self.model.parameters(), lr=lr, weight_decay=weight_decay)
         else:
             raise ValueError("optimizer_type must be 'SGD' or 'Adam'")
+
+    def _update_training_tracker(
+        self, tracker, epoch, epochs, train_loss, val_loss, val_metrics, use_notebook
+    ):
+        """
+        Dynamically initializes the tracker / header and updates metrics.
+        Returns the tracker object (which is created/configured on the first update).
+        """
+        # Determine column names dynamically
+        columns = ["Epoch", "Training Loss", "Validation Loss"]
+        metric_keys = sorted([k for k in val_metrics.keys() if k.startswith("val_")])
+        metric_display_names = [
+            k[4:].replace("_", " ").title() for k in metric_keys
+        ]
+        column_names = columns + metric_display_names
+
+        # 1. Initialize tracker / print header on first update
+        if tracker is None:
+            if use_notebook and NotebookTrainingTracker is not None:
+                tracker = NotebookTrainingTracker(
+                    num_steps=epochs, column_names=column_names
+                )
+            else:
+                # Terminal/tqdm mode: compute column widths dynamically
+                column_widths = [max(len(col) + 2, 10) for col in column_names]
+                # Special override for Training Loss and Validation Loss to have slightly wider columns
+                for idx, col in enumerate(column_names):
+                    if col == "Training Loss":
+                        column_widths[idx] = max(column_widths[idx], 15)
+                    elif col == "Validation Loss":
+                        column_widths[idx] = max(column_widths[idx], 17)
+
+                tracker = {
+                    "column_names": column_names,
+                    "column_widths": column_widths,
+                }
+
+                # Print console header
+                header_str = "  ".join(
+                    col.ljust(w) for col, w in zip(column_names, column_widths)
+                )
+                separator_str = "  ".join("-" * w for w in column_widths)
+                tqdm.write(header_str)
+                tqdm.write(separator_str)
+
+        # 2. Format row values
+        row_dict = {
+            "Epoch": epoch,
+            "Training Loss": f"{train_loss:.6f}",
+            "Validation Loss": f"{val_loss:.6f}",
+        }
+
+        # Add validation metrics formatted
+        metric_key_mapping = {
+            col: f"val_{col.lower().replace(' ', '_')}" for col in column_names[3:]
+        }
+        for display_name in column_names[3:]:
+            key = metric_key_mapping[display_name]
+            val = val_metrics.get(key, None)
+            row_dict[display_name] = f"{val:.6f}" if val is not None else "-"
+
+        # 3. Log/render row values
+        if use_notebook and not isinstance(tracker, dict):
+            # Notebook mode
+            tracker.write_line(row_dict)
+            tracker.update(epoch, comment=f"Epoch {epoch}/{epochs}")
+        else:
+            # Console/tqdm mode
+            column_widths = tracker["column_widths"]
+            row_values = [
+                f"{epoch}/{epochs}".ljust(column_widths[0]),
+                row_dict["Training Loss"].ljust(column_widths[1]),
+                row_dict["Validation Loss"].ljust(column_widths[2]),
+            ]
+            for col_name, w in zip(column_names[3:], column_widths[3:]):
+                row_values.append(row_dict[col_name].ljust(w))
+            tqdm.write("  ".join(row_values))
+
+        return tracker
 
     def _training_loop(
         self,
@@ -909,11 +1039,23 @@ class Dismir:
         if verbose > 0:
             print(f"Start {mode}-length training...")
 
-        for epoch in range(1, epochs + 1):
+        use_notebook = is_in_notebook()
+        tracker = None
+        disable_tqdm = (verbose <= 0) or use_notebook
+
+        epoch_iterator = tqdm(
+            range(1, epochs + 1),
+            desc="Training",
+            disable=disable_tqdm,
+            leave=True,
+        )
+        for epoch in epoch_iterator:
             # Training
             self.model.train()
             epoch_loss = 0.0
             correct, total = 0, 0
+            train_all_outputs = []
+            train_all_labels = []
 
             for batch in train_loader:
                 if use_dmr:
@@ -939,6 +1081,15 @@ class Dismir:
 
                 epoch_loss += loss.item() * X_batch.size(0)
 
+                # Collect outputs for metrics
+                batch_outputs = outputs.detach()
+                if use_dmr and self.num_labels == 1:
+                    batch_outputs = torch.sigmoid(batch_outputs)
+                elif use_dmr and self.num_labels > 1:
+                    batch_outputs = torch.softmax(batch_outputs, dim=-1)
+                train_all_outputs.append(batch_outputs.cpu().numpy())
+                train_all_labels.append(y_batch.detach().cpu().numpy())
+
                 # Prediction logic
                 if self.num_labels == 1:
                     if use_dmr:
@@ -957,11 +1108,16 @@ class Dismir:
 
             train_loss = epoch_loss / len(train_loader.dataset)
             train_acc = correct / total
+            train_metrics = self._compute_epoch_metrics(
+                train_all_outputs, train_all_labels, "train"
+            )
 
             # Validation
             self.model.eval()
             val_loss = 0.0
             val_correct, val_total = 0, 0
+            val_all_outputs = []
+            val_all_labels = []
 
             with torch.no_grad():
                 for batch in valid_loader:
@@ -980,6 +1136,15 @@ class Dismir:
                     v_loss = criterion(val_outputs, y_val)
                     val_loss += v_loss.item() * X_val.size(0)
 
+                    # Collect outputs for metrics
+                    batch_val_outputs = val_outputs.detach()
+                    if use_dmr and self.num_labels == 1:
+                        batch_val_outputs = torch.sigmoid(batch_val_outputs)
+                    elif use_dmr and self.num_labels > 1:
+                        batch_val_outputs = torch.softmax(batch_val_outputs, dim=-1)
+                    val_all_outputs.append(batch_val_outputs.cpu().numpy())
+                    val_all_labels.append(y_val.detach().cpu().numpy())
+
                     if self.num_labels == 1:
                         if use_dmr:
                             val_preds = (
@@ -997,26 +1162,28 @@ class Dismir:
 
             val_loss /= len(valid_loader.dataset)
             val_acc = val_correct / val_total
+            val_metrics = self._compute_epoch_metrics(
+                val_all_outputs, val_all_labels, "val"
+            )
             epoch_time = time.time() - session_start_time
 
-            self.history.append(
-                {
-                    "session": len([h for h in self.history if h.get("epoch") == 1])
-                    + 1,
-                    "epoch": epoch,
-                    "train_loss": train_loss,
-                    "train_acc": train_acc,
-                    "val_loss": val_loss,
-                    "val_acc": val_acc,
-                    "elapsed_time": epoch_time,
-                }
-            )
+            epoch_record = {
+                "session": len([h for h in self.history if h.get("epoch") == 1])
+                + 1,
+                "epoch": epoch,
+                "train_loss": train_loss,
+                "train_acc": train_acc,
+                "val_loss": val_loss,
+                "val_acc": val_acc,
+                "elapsed_time": epoch_time,
+            }
+            epoch_record.update(train_metrics)
+            epoch_record.update(val_metrics)
+            self.history.append(epoch_record)
 
             if verbose > 0:
-                print(
-                    f"Epoch [{epoch}/{epochs}] "
-                    f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.4f} | "
-                    f"Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.4f}"
+                tracker = self._update_training_tracker(
+                    tracker, epoch, epochs, train_loss, val_loss, val_metrics, use_notebook
                 )
 
             # Early stopping
@@ -1053,11 +1220,23 @@ class Dismir:
         if verbose > 0:
             print("Start variable-length training...")
 
-        for epoch in range(1, epochs + 1):
+        use_notebook = is_in_notebook()
+        tracker = None
+        disable_tqdm = (verbose <= 0) or use_notebook
+
+        epoch_iterator = tqdm(
+            range(1, epochs + 1),
+            desc="Training",
+            disable=disable_tqdm,
+            leave=True,
+        )
+        for epoch in epoch_iterator:
             # Training
             self.model.train()
             epoch_loss = 0.0
             correct, total = 0, 0
+            train_all_outputs = []
+            train_all_labels = []
 
             for batch_data in train_loader:
                 all_chunks, all_weights, all_labels, chunk_to_read_mapping = batch_data
@@ -1077,6 +1256,7 @@ class Dismir:
                 batch_size = len(all_labels)
                 read_losses = []
                 read_preds = []
+                read_outputs_for_metrics = []
 
                 for read_idx in range(batch_size):
                     read_mask = chunk_to_read_mapping == read_idx
@@ -1095,6 +1275,7 @@ class Dismir:
                         )
                         read_losses.append(weighted_loss)
                         read_preds.append(weighted_pred)
+                        read_outputs_for_metrics.append(weighted_pred.detach())
                     else:
                         chunk_labels = read_label.expand(read_chunk_outputs.size(0))
 
@@ -1116,10 +1297,17 @@ class Dismir:
                             read_chunk_outputs * weights_expanded, dim=0
                         )
                         read_preds.append(weighted_logits.argmax())
+                        read_outputs_for_metrics.append(weighted_logits.detach())
 
                 total_loss = torch.stack(read_losses).mean()
                 total_loss.backward()
                 optimizer.step()
+
+                # Collect for metrics
+                train_all_outputs.append(
+                    torch.stack(read_outputs_for_metrics).cpu().numpy()
+                )
+                train_all_labels.append(all_labels.detach().cpu().numpy())
 
                 if self.num_labels == 1:
                     read_preds = torch.stack(read_preds)
@@ -1134,28 +1322,32 @@ class Dismir:
 
             train_loss = epoch_loss / len(train_loader.dataset)
             train_acc = correct / total
-
-            val_loss, val_acc = self._validate_variable_length(valid_loader, criterion)
-            epoch_time = time.time() - session_start_time
-
-            self.history.append(
-                {
-                    "session": len([h for h in self.history if h.get("epoch") == 1])
-                    + 1,
-                    "epoch": epoch,
-                    "train_loss": train_loss,
-                    "train_acc": train_acc,
-                    "val_loss": val_loss,
-                    "val_acc": val_acc,
-                    "elapsed_time": epoch_time,
-                }
+            train_metrics = self._compute_epoch_metrics(
+                train_all_outputs, train_all_labels, "train"
             )
 
+            val_loss, val_acc, val_metrics = self._validate_variable_length(
+                valid_loader, criterion
+            )
+            epoch_time = time.time() - session_start_time
+
+            epoch_record = {
+                "session": len([h for h in self.history if h.get("epoch") == 1])
+                + 1,
+                "epoch": epoch,
+                "train_loss": train_loss,
+                "train_acc": train_acc,
+                "val_loss": val_loss,
+                "val_acc": val_acc,
+                "elapsed_time": epoch_time,
+            }
+            epoch_record.update(train_metrics)
+            epoch_record.update(val_metrics)
+            self.history.append(epoch_record)
+
             if verbose > 0:
-                print(
-                    f"Epoch [{epoch}/{epochs}] "
-                    f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.4f} | "
-                    f"Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.4f}"
+                tracker = self._update_training_tracker(
+                    tracker, epoch, epochs, train_loss, val_loss, val_metrics, use_notebook
                 )
 
             if val_loss < best_val_loss:
@@ -1178,6 +1370,8 @@ class Dismir:
         val_loss = 0.0
         val_correct = 0
         val_total = 0
+        val_all_outputs = []
+        val_all_labels = []
 
         with torch.no_grad():
             for batch_data in valid_loader:
@@ -1196,6 +1390,7 @@ class Dismir:
                 batch_size = len(all_labels)
                 read_losses = []
                 read_preds = []
+                read_outputs_for_metrics = []
 
                 for read_idx in range(batch_size):
                     read_mask = chunk_to_read_mapping == read_idx
@@ -1214,6 +1409,7 @@ class Dismir:
                         )
                         read_losses.append(weighted_loss)
                         read_preds.append(weighted_pred)
+                        read_outputs_for_metrics.append(weighted_pred)
                     else:
                         chunk_labels = read_label.expand(read_chunk_outputs.size(0))
 
@@ -1235,9 +1431,16 @@ class Dismir:
                             read_chunk_outputs * weights_expanded, dim=0
                         )
                         read_preds.append(weighted_logits.argmax())
+                        read_outputs_for_metrics.append(weighted_logits)
 
                 total_loss = torch.stack(read_losses).mean()
                 val_loss += total_loss.item() * batch_size
+
+                # Collect for metrics
+                val_all_outputs.append(
+                    torch.stack(read_outputs_for_metrics).cpu().numpy()
+                )
+                val_all_labels.append(all_labels.cpu().numpy())
 
                 if self.num_labels == 1:
                     read_preds = torch.stack(read_preds)
@@ -1251,7 +1454,10 @@ class Dismir:
 
         val_loss /= len(valid_loader.dataset)
         val_acc = val_correct / val_total
-        return val_loss, val_acc
+        val_metrics = self._compute_epoch_metrics(
+            val_all_outputs, val_all_labels, "val"
+        )
+        return val_loss, val_acc, val_metrics
 
     def _evaluate_variable_length(self, split):
         """Variable-length evaluation."""
