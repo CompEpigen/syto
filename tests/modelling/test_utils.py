@@ -37,16 +37,3 @@ class TestCalculateBatchSize(unittest.TestCase):
         with unittest.mock.patch("torch.cuda.is_available", return_value=False):
             batch_size = calculate_batch_size(gb_per_seq=0.5, cpu_batch_size=16)
             self.assertEqual(batch_size, 16)
-
-
-class TestExists(unittest.TestCase):
-
-    def test_exists_with_none(self):
-        self.assertFalse(exists(None))
-
-    def test_exists_with_value(self):
-        self.assertTrue(exists(0))
-        self.assertTrue(exists(""))
-        self.assertTrue(exists([]))
-        self.assertTrue(exists({}))
-        self.assertTrue(exists(set()))

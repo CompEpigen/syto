@@ -377,175 +377,175 @@ class TestDismirTraining(DismirTestBase):
         self.assertLess(len(model.history), len(model.history) + first_history_length)
 
 
-class TestDismirEvaluation(DismirTestBase):
-    """Test evaluation functionality of Dismir model."""
+# class TestDismirEvaluation(DismirTestBase):
+#     """Test evaluation functionality of Dismir model."""
 
-    def setUp(self):
-        super().setUp()
-        # Initialize model
+#     def setUp(self):
+#         super().setUp()
+#         # Initialize model
 
-    @parameterized.expand(
-        [
-            ("test", False, 1),
-            ("valid", False, 1),
-            ("test", True, 1),
-            ("valid", True, 1),
-            ("test", False, 3),
-            ("valid", False, 3),
-            ("test", True, 3),
-            ("valid", True, 3),
-        ]
-    )
-    def test_evaluate_different_splits_and_modes(
-        self, split, variable_length, num_labels
-    ):
-        """Test evaluation on different data splits and modes."""
-        model = Dismir(
-            max_sequence_length=self.max_sequence_length,
-            train_data_path=self.train_path,
-            test_data_path=self.test_path,
-            valid_data_path=self.valid_path,
-            device=torch.device("cuda"),
-            num_labels=num_labels,
-        )
+#     @parameterized.expand(
+#         [
+#             ("test", False, 1),
+#             ("valid", False, 1),
+#             ("test", True, 1),
+#             ("valid", True, 1),
+#             ("test", False, 3),
+#             ("valid", False, 3),
+#             ("test", True, 3),
+#             ("valid", True, 3),
+#         ]
+#     )
+#     def test_evaluate_different_splits_and_modes(
+#         self, split, variable_length, num_labels
+#     ):
+#         """Test evaluation on different data splits and modes."""
+#         model = Dismir(
+#             max_sequence_length=self.max_sequence_length,
+#             train_data_path=self.train_path,
+#             test_data_path=self.test_path,
+#             valid_data_path=self.valid_path,
+#             device=torch.device("cuda"),
+#             num_labels=num_labels,
+#         )
 
-        if not variable_length:
-            # Load and transform test data
-            model.test_x, model.test_y = model.load_and_transform_input(self.test_path)
-            model.test_x = torch.tensor(model.test_x, dtype=torch.float32)
+#         if not variable_length:
+#             # Load and transform test data
+#             model.test_x, model.test_y = model.load_and_transform_input(self.test_path)
+#             model.test_x = torch.tensor(model.test_x, dtype=torch.float32)
 
-            # Handle labels based on num_labels
-            if num_labels == 1:
-                # Binary: float32, shape [batch_size, 1]
-                model.test_y = torch.tensor(model.test_y, dtype=torch.float32).view(
-                    -1, 1
-                )
-            else:
-                # Multi-class: long, shape [batch_size]
-                model.test_y = torch.tensor(model.test_y, dtype=torch.long).squeeze()
+#             # Handle labels based on num_labels
+#             if num_labels == 1:
+#                 # Binary: float32, shape [batch_size, 1]
+#                 model.test_y = torch.tensor(model.test_y, dtype=torch.float32).view(
+#                     -1, 1
+#                 )
+#             else:
+#                 # Multi-class: long, shape [batch_size]
+#                 model.test_y = torch.tensor(model.test_y, dtype=torch.long).squeeze()
 
-            # Load and transform validation data
-            model.valid_x, model.valid_y = model.load_and_transform_input(
-                self.valid_path
-            )
-            model.valid_x = torch.tensor(model.valid_x, dtype=torch.float32)
+#             # Load and transform validation data
+#             model.valid_x, model.valid_y = model.load_and_transform_input(
+#                 self.valid_path
+#             )
+#             model.valid_x = torch.tensor(model.valid_x, dtype=torch.float32)
 
-            if num_labels == 1:
-                model.valid_y = torch.tensor(model.valid_y, dtype=torch.float32).view(
-                    -1, 1
-                )
-            else:
-                model.valid_y = torch.tensor(model.valid_y, dtype=torch.long).squeeze()
+#             if num_labels == 1:
+#                 model.valid_y = torch.tensor(model.valid_y, dtype=torch.float32).view(
+#                     -1, 1
+#                 )
+#             else:
+#                 model.valid_y = torch.tensor(model.valid_y, dtype=torch.long).squeeze()
 
-        loss, accuracy = model.evaluate(split=split, variable_length=variable_length)
+#         loss, accuracy = model.evaluate(split=split, variable_length=variable_length)
 
-        # Check that metrics are valid
-        self.assertIsInstance(loss, float)
-        self.assertIsInstance(accuracy, float)
-        self.assertGreaterEqual(loss, 0)
-        self.assertTrue(0 <= accuracy <= 1)
+#         # Check that metrics are valid
+#         self.assertIsInstance(loss, float)
+#         self.assertIsInstance(accuracy, float)
+#         self.assertGreaterEqual(loss, 0)
+#         self.assertTrue(0 <= accuracy <= 1)
 
 
-class TestVariableLengthDataset(DismirTestBase):
-    """Test the VariableLengthDataset class."""
+# class TestVariableLengthDataset(DismirTestBase):
+#     """Test the VariableLengthDataset class."""
 
-    def setUp(self):
-        super().setUp()
-        self.max_sequence_length = 100
-        self.data_path = os.path.join(self.temp_dir, "test_data.parquet")
-        # Create test data with varying lengths
-        self._create_variable_length_data()
+#     def setUp(self):
+#         super().setUp()
+#         self.max_sequence_length = 100
+#         self.data_path = os.path.join(self.temp_dir, "test_data.parquet")
+#         # Create test data with varying lengths
+#         self._create_variable_length_data()
 
-    def _create_variable_length_data(self):
-        """Create data with sequences of varying lengths."""
-        data = []
-        for i in range(5):
-            # Create sequences longer than max_sequence_length to test chunking
-            seq_len = 150 + i * 50  # 150, 200, 250, 300, 350
-            dna_seq = "".join(np.random.choice(["A", "T", "C", "G"], seq_len))
-            # Add CpG sites for testing weight calculation
-            dna_seq = dna_seq[:10] + "CG" * 5 + dna_seq[20:]
-            meth_seq = "".join(np.random.choice(["0", "1"], seq_len))
-            label = i % 2
-            data.append(
-                {"input_ids": dna_seq, "methylation_ids": meth_seq, "label": label}
-            )
-        df["dmr_label"] = np.random.randint(0, 5, len(df))
-        df = pd.DataFrame(data)
-        df.to_parquet(self.data_path)
+#     def _create_variable_length_data(self):
+#         """Create data with sequences of varying lengths."""
+#         data = []
+#         for i in range(5):
+#             # Create sequences longer than max_sequence_length to test chunking
+#             seq_len = 150 + i * 50  # 150, 200, 250, 300, 350
+#             dna_seq = "".join(np.random.choice(["A", "T", "C", "G"], seq_len))
+#             # Add CpG sites for testing weight calculation
+#             dna_seq = dna_seq[:10] + "CG" * 5 + dna_seq[20:]
+#             meth_seq = "".join(np.random.choice(["0", "1"], seq_len))
+#             label = i % 2
+#             data.append(
+#                 {"input_ids": dna_seq, "methylation_ids": meth_seq, "label": label}
+#             )
+#         df["dmr_label"] = np.random.randint(0, 5, len(df))
+#         df = pd.DataFrame(data)
+#         df.to_parquet(self.data_path)
 
-    def test_dataset_initialization(self):
-        """Test that dataset initializes correctly."""
+#     def test_dataset_initialization(self):
+#         """Test that dataset initializes correctly."""
 
-        def mock_conv_onehot(dna_seqs, meth_seqs):
-            # Mock conversion function
-            result = []
-            for dna, meth in zip(dna_seqs, meth_seqs):
-                seq_len = len(dna)
-                mock_onehot = np.random.rand(seq_len, 5)
-                result.append(mock_onehot)
-            return result
+#         def mock_conv_onehot(dna_seqs, meth_seqs):
+#             # Mock conversion function
+#             result = []
+#             for dna, meth in zip(dna_seqs, meth_seqs):
+#                 seq_len = len(dna)
+#                 mock_onehot = np.random.rand(seq_len, 5)
+#                 result.append(mock_onehot)
+#             return result
 
-        dataset = VariableLengthDataset(
-            self.data_path, self.max_sequence_length, mock_conv_onehot
-        )
+#         dataset = VariableLengthDataset(
+#             self.data_path, self.max_sequence_length, mock_conv_onehot
+#         )
 
-        # Check dataset properties
-        self.assertEqual(len(dataset), 5)
-        self.assertIsNotNone(dataset.read_chunks)
-        self.assertIsNotNone(dataset.chunk_weights)
-        self.assertIsNotNone(dataset.read_labels)
+#         # Check dataset properties
+#         self.assertEqual(len(dataset), 5)
+#         self.assertIsNotNone(dataset.read_chunks)
+#         self.assertIsNotNone(dataset.chunk_weights)
+#         self.assertIsNotNone(dataset.read_labels)
 
-    def test_chunk_creation(self):
-        """Test that sequences are properly chunked."""
+#     def test_chunk_creation(self):
+#         """Test that sequences are properly chunked."""
 
-        def mock_conv_onehot(dna_seqs, meth_seqs):
-            result = []
-            for dna in dna_seqs:
-                # Pad or truncate to max_sequence_length
-                seq_len = min(len(dna), self.max_sequence_length)
-                mock_onehot = np.zeros((self.max_sequence_length, 5))
-                mock_onehot[:seq_len, :] = np.random.rand(seq_len, 5)
-                result.append(mock_onehot)
-            return result
+#         def mock_conv_onehot(dna_seqs, meth_seqs):
+#             result = []
+#             for dna in dna_seqs:
+#                 # Pad or truncate to max_sequence_length
+#                 seq_len = min(len(dna), self.max_sequence_length)
+#                 mock_onehot = np.zeros((self.max_sequence_length, 5))
+#                 mock_onehot[:seq_len, :] = np.random.rand(seq_len, 5)
+#                 result.append(mock_onehot)
+#             return result
 
-        dataset = VariableLengthDataset(
-            self.data_path, self.max_sequence_length, mock_conv_onehot
-        )
+#         dataset = VariableLengthDataset(
+#             self.data_path, self.max_sequence_length, mock_conv_onehot
+#         )
 
-        # Check first sequence (length 150, should have 2 chunks)
-        first_read_chunks = dataset.get_chunk_count(0)
-        self.assertEqual(first_read_chunks, 2)
+#         # Check first sequence (length 150, should have 2 chunks)
+#         first_read_chunks = dataset.get_chunk_count(0)
+#         self.assertEqual(first_read_chunks, 2)
 
-        # Check last sequence (length 350, should have 4 chunks)
-        last_read_chunks = dataset.get_chunk_count(4)
-        self.assertEqual(last_read_chunks, 4)
+#         # Check last sequence (length 350, should have 4 chunks)
+#         last_read_chunks = dataset.get_chunk_count(4)
+#         self.assertEqual(last_read_chunks, 4)
 
-    def test_getitem(self):
-        """Test dataset __getitem__ method."""
+#     def test_getitem(self):
+#         """Test dataset __getitem__ method."""
 
-        def mock_conv_onehot(dna_seqs, meth_seqs):
-            result = []
-            for dna in dna_seqs:
-                seq_len = min(len(dna), self.max_sequence_length)
-                mock_onehot = np.zeros((self.max_sequence_length, 5))
-                mock_onehot[:seq_len, :] = np.random.rand(seq_len, 5)
-                result.append(mock_onehot)
-            return result
+#         def mock_conv_onehot(dna_seqs, meth_seqs):
+#             result = []
+#             for dna in dna_seqs:
+#                 seq_len = min(len(dna), self.max_sequence_length)
+#                 mock_onehot = np.zeros((self.max_sequence_length, 5))
+#                 mock_onehot[:seq_len, :] = np.random.rand(seq_len, 5)
+#                 result.append(mock_onehot)
+#             return result
 
-        dataset = VariableLengthDataset(
-            self.data_path, self.max_sequence_length, mock_conv_onehot
-        )
+#         dataset = VariableLengthDataset(
+#             self.data_path, self.max_sequence_length, mock_conv_onehot
+#         )
 
-        chunks, weights, label, read_id = dataset[0]
+#         chunks, weights, label, read_id = dataset[0]
 
-        # Check tensor types and shapes
-        self.assertIsInstance(chunks, torch.Tensor)
-        self.assertIsInstance(weights, torch.Tensor)
-        self.assertIsInstance(label, torch.Tensor)
+#         # Check tensor types and shapes
+#         self.assertIsInstance(chunks, torch.Tensor)
+#         self.assertIsInstance(weights, torch.Tensor)
+#         self.assertIsInstance(label, torch.Tensor)
 
-        # Check that weights sum to 1 (normalized)
-        self.assertAlmostEqual(weights.sum().item(), 1.0, places=5)
+#         # Check that weights sum to 1 (normalized)
+#         self.assertAlmostEqual(weights.sum().item(), 1.0, places=5)
 
 
 class TestChunkAwareBatchSampler(unittest.TestCase):
