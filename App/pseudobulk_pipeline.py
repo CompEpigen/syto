@@ -25,7 +25,7 @@ from methyldl.data.pseudo_bulk_generation import (
 )
 from methyldl.data.read_preparation import prepare_splits_for_pseudobulk
 from methyldl.data.split_rebalancing import rebalance_splits
-from methyldl.modelling.classifier_adapter import ClassifierAdapter
+from methyldl.modelling.abstract_read_classifier import ClassifierAdapter
 
 
 class PseudoBulkPipeline:
@@ -498,6 +498,8 @@ class PseudoBulkPipeline:
                 splits_data[split_name] = pd.read_parquet(
                     os.path.join(data_path, f"{split_name}.parquet")
                 )
+                # TODO: remove the following line after testing
+                splits_data[split_name] = splits_data[split_name][:1000]
         elif input_type == "pre_predicted":
             pickle_paths = self.config["pickle_paths"]
             first_pickle_file = pickle_paths[list(pickle_paths.keys())[0]]

@@ -30,7 +30,7 @@ from methyldl.data.sequencing.bam_processing import process_bam_with_chunking
 from methyldl.modelling.prediction_aggregation import (
     aggregate_predictions_by_dmr,
 )
-from methyldl.modelling.classifier_adapter import ClassifierAdapter
+from methyldl.modelling.abstract_read_classifier import ClassifierAdapter
 
 from methyldl.deconvolution.uxm import (
     prepare_reads_for_uxm,
