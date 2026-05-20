@@ -168,22 +168,6 @@ def compute_feature_mask(
         return mask
 
 
-# Dirty patch to fill in zero rows in generated pseudobulks. TODO: Fix it in the upstream logic!!!
-def fill_zero_rows(y):
-    # Create a copy to avoid modifying the original array
-    y_out = np.copy(y).astype(float)
-
-    # Get the number of columns (dim_size)
-    dim_size = y_out.shape[1]
-
-    # Create a boolean mask for rows where the sum is 0
-    zero_rows_mask = np.sum(y_out, axis=1) == 0
-
-    # Substitute all values in those rows with 1 / dim_size
-    y_out[zero_rows_mask] = 1.0 / dim_size
-
-    return y_out
-
 
 def apply_feature_mask(
     matrix: np.ndarray,
@@ -214,7 +198,7 @@ def apply_feature_mask(
         results = []
         for i in range(n_samples):
             compressed = np.ma.masked_array(
-                fill_zero_rows(matrix[i]), ~bool_mask
+                matrix[i], ~bool_mask
             ).compressed()
             results.append(compressed)
         return np.array(results)
