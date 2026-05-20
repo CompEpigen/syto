@@ -437,7 +437,11 @@ class MethylBertEmbeddedDMR(BertPreTrainedModel):
             return nn.CrossEntropyLoss()
         elif self.loss == "cwce":
             print("Confidence Weighted Cross Entropy assigned (multi-class)")
-            return ConfidenceWeightedCrossEntropy(self.num_labels, penalty_scale=self.cwce_penalty_scale, on_target_weight=self.cwce_on_target_weight)
+            return ConfidenceWeightedCrossEntropy(
+                self.num_labels,
+                penalty_scale=self.cwce_penalty_scale,
+                on_target_weight=self.cwce_on_target_weight,
+            )
         else:
             raise ValueError(f"Unknown loss type: {self.loss}")
 

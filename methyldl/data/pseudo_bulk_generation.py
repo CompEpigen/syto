@@ -336,36 +336,6 @@ def _compute_samples_per_dmr_uniform(labels, n_samples_list, num_labels):
     return {label: int(n / num_labels) for label, n in zip(labels, n_samples_list)}
 
 
-# def _compute_samples_per_dmr_random(labels, n_samples_list, num_labels):
-#     """Random DMR allocation: random weights per DMR, normalized, times n.
-
-#     For each label, generate ``num_labels`` random weights, normalize them
-#     to sum to 1, then multiply by the total read count for that label to
-#     obtain per-DMR read counts.
-
-#     Parameters
-#     ----------
-#     labels : list[int]
-#         Cell-type labels in this mixture.
-#     n_samples_list : list[int]
-#         Total reads to sample for each label.
-#     num_labels : int
-#         Number of DMR groups.
-
-#     Returns
-#     -------
-#     dict
-#         ``{label: list[int]}`` with per-DMR read counts for each label.
-#     """
-#     result = {}
-#     for label, n in zip(labels, n_samples_list):
-#         weights = [random.random() for _ in range(num_labels)]
-#         total_w = sum(weights)
-#         counts = [int(n * w / total_w) for w in weights]
-#         result[label] = counts
-#     return result
-
-
 def _compute_samples_per_dmr_multinomial(labels, n_samples_list, num_labels):
     """Realistic DMR allocation using multinomial sampling.
 

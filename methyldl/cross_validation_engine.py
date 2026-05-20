@@ -127,7 +127,7 @@ class CrossValidationEngine(CrossValidationCompatibleModel):
                     X_tr_fold, X_val_fold = X[train_idx], X[val_idx]
                     y_tr_fold, y_val_fold = y[train_idx], y[val_idx]
 
-                    model = self.model_class_(**params, verbose=False)
+                    model = self.model_class_(**params)
                     model.fit(X_tr_fold, y_tr_fold, X_val=X_val_fold, y_val=y_val_fold)
                     metric = model.get_cv_metric(X_val_fold, y_val_fold)
                     fold_metrics.append(metric)
