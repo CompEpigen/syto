@@ -35,7 +35,7 @@ class AbstractReadClassifier(ABC):
 
     @classmethod
     @abstractmethod
-    def load(cls, path: Union[str, Path], **kwargs) -> "ReadClassifier":
+    def load(cls, path: Union[str, Path], **kwargs) -> "AbstractReadClassifier":
         """Load a ReadClassifier from a checkpoint."""
 
 

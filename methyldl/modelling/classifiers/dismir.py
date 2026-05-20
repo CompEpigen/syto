@@ -18,8 +18,10 @@ try:
     from transformers.utils.import_utils import is_in_notebook
     from transformers.utils.notebook import NotebookTrainingTracker
 except ImportError:
+
     def is_in_notebook():
         return False
+
     NotebookTrainingTracker = None
 
 from methyldl.modelling.gr_group_attention_classification_head import (
@@ -719,9 +721,7 @@ class Dismir:
 
         avg_loss = total_loss / len(loader.dataset)
         accuracy = correct / total
-        metrics = self._compute_epoch_metrics(
-            eval_all_outputs, eval_all_labels, "eval"
-        )
+        metrics = self._compute_epoch_metrics(eval_all_outputs, eval_all_labels, "eval")
         return avg_loss, accuracy, metrics
 
     def _train_fixed_length(
@@ -949,9 +949,7 @@ class Dismir:
         # Determine column names dynamically
         columns = ["Epoch", "Training Loss", "Validation Loss"]
         metric_keys = sorted([k for k in val_metrics.keys() if k.startswith("val_")])
-        metric_display_names = [
-            k[4:].replace("_", " ").title() for k in metric_keys
-        ]
+        metric_display_names = [k[4:].replace("_", " ").title() for k in metric_keys]
         column_names = columns + metric_display_names
 
         # 1. Initialize tracker / print header on first update
@@ -1168,8 +1166,7 @@ class Dismir:
             epoch_time = time.time() - session_start_time
 
             epoch_record = {
-                "session": len([h for h in self.history if h.get("epoch") == 1])
-                + 1,
+                "session": len([h for h in self.history if h.get("epoch") == 1]) + 1,
                 "epoch": epoch,
                 "train_loss": train_loss,
                 "train_acc": train_acc,
@@ -1183,7 +1180,13 @@ class Dismir:
 
             if verbose > 0:
                 tracker = self._update_training_tracker(
-                    tracker, epoch, epochs, train_loss, val_loss, val_metrics, use_notebook
+                    tracker,
+                    epoch,
+                    epochs,
+                    train_loss,
+                    val_loss,
+                    val_metrics,
+                    use_notebook,
                 )
 
             # Early stopping
@@ -1332,8 +1335,7 @@ class Dismir:
             epoch_time = time.time() - session_start_time
 
             epoch_record = {
-                "session": len([h for h in self.history if h.get("epoch") == 1])
-                + 1,
+                "session": len([h for h in self.history if h.get("epoch") == 1]) + 1,
                 "epoch": epoch,
                 "train_loss": train_loss,
                 "train_acc": train_acc,
@@ -1347,7 +1349,13 @@ class Dismir:
 
             if verbose > 0:
                 tracker = self._update_training_tracker(
-                    tracker, epoch, epochs, train_loss, val_loss, val_metrics, use_notebook
+                    tracker,
+                    epoch,
+                    epochs,
+                    train_loss,
+                    val_loss,
+                    val_metrics,
+                    use_notebook,
                 )
 
             if val_loss < best_val_loss:
