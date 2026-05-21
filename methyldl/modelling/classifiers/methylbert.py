@@ -10,9 +10,11 @@ from dataclasses import dataclass
 from copy import deepcopy
 import multiprocessing as mp
 from functools import partial
-import pickle
+from pathlib import Path
 
+import pickle
 import numpy as np
+import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -32,6 +34,15 @@ from methyldl.modelling.gr_group_attention_classification_head import (
     GRGAttentionClassificationHead,
 )
 from methyldl.modelling.loss import ConfidenceWeightedCrossEntropy, FocalLoss
+from methyldl.modelling.classifiers.abstract_read_classifier import (
+    AbstractReadClassifier,
+)
+from methyldl.modelling.data_preprocessing_for_inference import (
+    prepare_methylbert_list_inference,
+)
+from methyldl.modelling.prediction_aggregation import (
+    aggregate_chuncked_predictions_weighted,
+)
 
 default_methylbert_config = OrderedDict(
     [
@@ -568,7 +579,7 @@ class MethylBertEmbeddedDMR(BertPreTrainedModel):
         )
 
 
-class MethylBert:
+class MethylBert(AbstractReadClassifier):
     """
     High-level wrapper class for MethylBERT with support for classifier selection.
     """
@@ -608,6 +619,8 @@ class MethylBert:
         self.cache_dir = cache_dir
         self.classifier_implementation = classifier_implementation
         self.soft_labels = soft_labels
+        self.num_labels = num_labels
+        self.num_dmr_labels = num_dmr_labels
 
         # Validate classifier implementation
         if classifier_implementation not in ["vanilla", "dmr_attention_based"]:
@@ -911,6 +924,112 @@ class MethylBert:
 
     def __str__(self):
         return str(self.model)
+
+    @classmethod
+    def load(cls, path: Union[str, Path], **kwargs) -> "MethylBert":
+        """
+        Create a MethylBert instance from a saved checkpoint, with optional overrides for configuration.
+
+        Args:
+            path:
+        """
+        soft_labels: bool = kwargs.get("soft_labels", True)
+        num_labels: int = kwargs.get("num_labels", 2)
+        if soft_labels:
+            loss = "cwce"
+        elif num_labels == 2:
+            loss = "bce"
+        else:
+            loss = "ce"
+        rrms_config = OrderedDict(
+            [
+                ("lr", 0.0004),
+                ("beta", (0.9, 0.98)),
+                ("weight_decay", 0.1),
+                ("warmup_step", 100),
+                ("eps", 1e-6),
+                ("with_cuda", True),
+                ("log_freq", 200),
+                ("eval_freq", 200),
+                ("n_hidden", None),
+                ("decrease_steps", 200),
+                ("eval", False),
+                ("amp", True),
+                ("gradient_accumulation_steps", 1),
+                ("max_grad_norm", 1.0),
+                ("save_freq", None),
+                ("loss", loss),
+                ("adam_beta1", 0.9),
+                ("adam_beta2", 0.98),
+                ("seed", 950410),
+            ]
+        )
+
+        instance = cls(
+            custom_config=rrms_config,
+            foundation_model_path=kwargs.get(
+                "foundation_model_path", "hanyangii/methylbert_hg19_12l"
+            ),
+            num_labels=num_labels,
+            num_dmr_labels=kwargs.get("num_dmr_labels", 39),
+            fine_tuned_model_path=path,
+            classifier_implementation=kwargs.get(
+                "classifier_head_implementation", "dmr_attention_based"
+            ),
+            soft_labels=soft_labels,
+            seq_len=kwargs.get("seq_length", 150),
+            batch_size=kwargs.get("batch_size", 2200),
+        )
+        return instance
+
+    def predict_split(self, split_df: pd.DataFrame, **kwargs) -> pd.DataFrame:
+        """Run MethylBERT prediction on a single split.
+
+        Args:
+            split_df: DataFrame containing the data for a single split, with columns 'seq'
+                and 'pattern' for input sequences and methylation patterns, respectively.
+            **kwargs: Additional keyword arguments for prediction, such as :
+                - dmr_label_column: Name of the column in split_df that contains DMR labels
+                    (default: 'dmr_ctype_label')
+                - batch_size: Batch size for prediction (default: 2200)
+        """
+        # Prepare chunked input data
+        input_df = split_df.rename(
+            columns={"seq": "input_ids", "pattern": "methylation_ids"}
+        )
+
+        data_list = prepare_methylbert_list_inference(
+            input_df,
+            dmr_label_column=kwargs.get("dmr_label_column", "dmr_ctype_label"),
+            seq_length=self.seq_len,
+            stride=int(self.seq_len / 2),
+            soft_labels=self.soft_labels,
+            is_binary=True if self.num_labels == 2 else False,
+        )
+
+        dataset = MethylBertFinetuneDataset(
+            data_source=data_list,
+            vocab=MethylVocab(k=3),
+            seq_len=self.seq_len,
+            lazy_tokenization=True,
+            soft_labels=self.soft_labels,
+        )
+
+        # Run predictions
+        predictions = self.predict(dataset, batch_size=kwargs.get("batch_size", 2200))
+
+        # Build predictions DataFrame
+        pred_cols = [f"prediction_{i}" for i in range(self.num_labels)]
+        pred_df = pd.DataFrame(predictions[0], columns=pred_cols)
+        pred_df["read_name"] = [data_list[i][-3] for i in range(1, len(data_list))]
+        pred_df["ncpgs_marked"] = [data_list[i][-2] for i in range(1, len(data_list))]
+
+        # Aggregate chunked predictions by read
+        pred_df = aggregate_chuncked_predictions_weighted(pred_df)
+
+        # Merge back with original split
+        result = pd.merge(split_df, pred_df, on="read_name")
+        return result
 
 
 class MethylVocab(object):

@@ -65,7 +65,7 @@ class ClassifierAdapter:
         Prediction batch size.  Default: 2200.
     """
 
-    SUPPORTED_CLASSIFIERS = ("methylbert", "dismir")
+    SUPPORTED_CLASSIFIERS = ("methylbert",)
 
     def __init__(
         self,
@@ -109,16 +109,6 @@ class ClassifierAdapter:
         self._model = None
         self.num_dmr_labels = num_dmr_labels
 
-    def _lazy_load_model(self):
-        """Load the model on first use."""
-        if self._model is not None:
-            return
-
-        if self.classifier_type == "methylbert":
-            self._load_methylbert()
-        elif self.classifier_type == "dismir":
-            self._load_dismir()
-
     # ─── MethylBERT ─────────────────────────────────────────────────
 
     def _load_methylbert(self):
@@ -158,9 +148,6 @@ class ClassifierAdapter:
             custom_config=rrms_config,
             foundation_model_path=self.foundation_model_path,
             num_labels=self.num_labels,
-            # num_dmr_labels=(
-            #     self.num_labels if self.soft_labels else self.num_labels - 1
-            # ),  # Will be overridden per-split if needed
             num_dmr_labels=self.num_dmr_labels,
             fine_tuned_model_path=self.checkpoint_path,
             classifier_implementation=self.classifier_head_implementation,
@@ -220,85 +207,6 @@ class ClassifierAdapter:
         result = pd.merge(split_df, pred_df, on="read_name")
         return result
 
-    # ─── Dismir ─────────────────────────────────────────────────────
-
-    def _load_dismir(self):
-        from methyldl.modelling.classifiers.dismir import Dismir
-
-        # For prediction-only mode, we don't need train/valid/test paths
-        # but Dismir's __init__ requires them. We'll use a dummy approach:
-        # instantiate with placeholder paths and load weights manually.
-        self._dismir_instance = None
-        self._dismir_checkpoint = self.checkpoint_path
-        logger.info(
-            f"Dismir adapter initialized with checkpoint: {self.checkpoint_path}"
-        )
-
-    def _predict_dismir(self, split_df: pd.DataFrame) -> pd.DataFrame:
-        """Run Dismir prediction on a single split.
-
-        Extracts DNA sequence and methylation strings directly from the
-        DataFrame columns and passes them through ``Dismir.predict()``.
-        """
-        import torch
-        from methyldl.modelling.classifiers.dismir import Dismir
-
-        # Lazy-init the Dismir model for prediction
-        if self._dismir_instance is None:
-            # Create a minimal Dismir instance suitable for prediction
-            self._dismir_instance = Dismir(
-                max_sequence_length=self.seq_length,
-                train_data_path="",
-                test_data_path="",
-                valid_data_path="",
-                flavour=self.dismir_flavor,
-                num_labels=self.num_labels,
-                classifier_type=self.classifier_head_implementation,
-                num_dmr_labels=self.num_dmr_labels,
-                dmr_label_col=(
-                    self.dmr_label_column
-                    if self.classifier_head_implementation == "dmr_attention_based"
-                    else None
-                ),
-            )
-            # Load pre-trained weights
-            self._dismir_instance.model.load_state_dict(
-                torch.load(self._dismir_checkpoint, weights_only=True)
-            )
-            self._dismir_instance.model.eval()
-            logger.info("Dismir model loaded for prediction.")
-
-        # Extract DNA and methylation sequences
-        dna_col = "seq" if "seq" in split_df.columns else "input_ids"
-        meth_col = "pattern" if "pattern" in split_df.columns else "methylation_ids"
-
-        dna_sequences = split_df[dna_col].tolist()
-        methylation_sequences = split_df[meth_col].tolist()
-
-        # DMR ids if using attention-based classifier
-        dmr_ids = None
-        if self.classifier_head_implementation == "dmr_attention_based":
-            dmr_ids = split_df[self.dmr_label_column].values
-
-        # Run prediction
-        probabilities, predicted_labels = self._dismir_instance.predict(
-            dna_sequences=dna_sequences,
-            methylation_sequences=methylation_sequences,
-            dmr_ids=dmr_ids,
-            batch_size=self.batch_size,
-        )
-
-        # Build predictions DataFrame
-        pred_cols = [f"prediction_{i}" for i in range(self.num_labels)]
-        pred_df = pd.DataFrame(probabilities, columns=pred_cols)
-
-        # Merge with original DataFrame
-        result = split_df.copy()
-        for col in pred_cols:
-            result[col] = pred_df[col].values
-
-        return result
-
     # ─── Public API ─────────────────────────────────────────────────
 
     def predict_split(
@@ -322,5 +230,3 @@ class ClassifierAdapter:
 
         if self.classifier_type == "methylbert":
             return self._predict_methylbert(split_df)
-        elif self.classifier_type == "dismir":
-            return self._predict_dismir(split_df)
