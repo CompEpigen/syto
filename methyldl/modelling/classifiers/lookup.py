@@ -8,14 +8,14 @@ the Jaccard signature distance.
 """
 
 from __future__ import annotations
-
-import json
 import logging
-import pickle
+from typing import Dict, List, Optional, Tuple, Union
 from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
 
+import joblib
+import json
+import pickle
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
@@ -25,8 +25,11 @@ from methyldl.data.soft_labeling import (
     signature_distance,
     apply_normalized_knn_smoothing,
 )
+from methyldl.modelling.classifiers.abstract_read_classifier import (
+    AbstractReadClassifier,
+)
 
-logger = logging.getLogger(__name__)
+_module_logger = logging.getLogger(__name__)
 
 # ──────────────────────────────────────────────────────────────────────
 # Config
@@ -63,7 +66,7 @@ SoftLabelConfig = LabelConfig
 # ──────────────────────────────────────────────────────────────────────
 
 
-class LookupClassifier:
+class LookupClassifier(AbstractReadClassifier):
     """Lookup-table classifier backed by soft or hard labels.
 
     Parameters
@@ -90,6 +93,11 @@ class LookupClassifier:
         self._region_index: Dict[str, List[Tuple[tuple, dict]]] = {}
         self._is_fitted: bool = False
 
+    @property
+    def n_keys(self) -> int:
+        """Number of unique (region, signature) keys in the lookup table."""
+        return len(self._lookup)
+
     # ------------------------------------------------------------------ fit
     def fit(self, df: pd.DataFrame) -> "LookupClassifier":
         """Build the soft-label lookup table from a single DataFrame.
@@ -114,7 +122,7 @@ class LookupClassifier:
             self._region_index.setdefault(region, []).append((sig, entry))
 
         self._is_fitted = True
-        logger.info(
+        _module_logger.info(
             "Fitted with %d unique (region, signature) keys across %d regions.",
             len(self._lookup),
             len(self._region_index),
@@ -177,33 +185,64 @@ class LookupClassifier:
     def save(self, path: Union[str, Path]) -> None:
         """Persist the fitted classifier to disk."""
         path = Path(path)
-        payload = {
-            "config": self.config.to_dict(),
-            "lookup": {self._key_to_str(k): v for k, v in self._lookup.items()},
-        }
         path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "wb") as f:
-            pickle.dump(payload, f, protocol=pickle.HIGHEST_PROTOCOL)
-        logger.info("Saved classifier to %s", path)
+        file_extension = path.suffix.lower()
+
+        if file_extension == ".pkl":
+            _module_logger.warning(
+                "Saving in .pkl format is deprecated; please switch to .joblib"
+            )
+            payload = {
+                "config": self.config.to_dict(),
+                "lookup": {self._key_to_str(k): v for k, v in self._lookup.items()},
+            }
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "wb") as f:
+                pickle.dump(payload, f, protocol=pickle.HIGHEST_PROTOCOL)
+        elif file_extension == ".joblib":
+            joblib.dump(value=self, filename=path)
+        else:
+            raise ValueError(
+                f"Unsupported file extension '{file_extension}' for saving."
+                " Use .joblib or .pkl."
+            )
+
+        _module_logger.info("Saved LookupClassifier to %s", path)
 
     @classmethod
-    def load(cls, path: Union[str, Path]) -> "LookupClassifier":
+    def load(cls, path: Union[str, Path], **kwargs) -> "LookupClassifier":
         """Load a previously saved classifier."""
-        with open(path, "rb") as f:
-            payload = pickle.load(f)
+        path = Path(path)
+        file_extension = path.suffix.lower()
 
-        config = LabelConfig.from_dict(payload["config"])
-        clf = cls(config)
+        if file_extension == ".joblib":
+            clf = joblib.load(path)
+            if not isinstance(clf, cls):
+                raise ValueError(
+                    f"Loaded object from {path} is not a LookupClassifier."
+                )
+        elif file_extension == ".pkl":
+            _module_logger.warning(
+                "Loading from .pkl format is deprecated; please switch to .joblib"
+            )
+            with open(path, "rb") as f:
+                payload = pickle.load(f)
 
-        clf._lookup = {cls._str_to_key(k): v for k, v in payload["lookup"].items()}
+            config = LabelConfig.from_dict(payload["config"])
+            clf = cls(config)
 
-        # Rebuild per-region index
-        clf._region_index = {}
-        for (region, sig), entry in clf._lookup.items():
-            clf._region_index.setdefault(region, []).append((sig, entry))
+            clf._lookup = {cls._str_to_key(k): v for k, v in payload["lookup"].items()}
 
-        clf._is_fitted = True
-        logger.info("Loaded classifier with %d keys from %s", len(clf._lookup), path)
+            # Rebuild per-region index
+            clf._region_index = {}
+            for (region, sig), entry in clf._lookup.items():
+                clf._region_index.setdefault(region, []).append((sig, entry))
+
+            clf._is_fitted = True
+
+        _module_logger.info(
+            "Loaded LookupClassifier with %d keys from %s", clf.n_keys, path
+        )
         return clf
 
     # ================================================================== private
@@ -337,11 +376,13 @@ class LookupClassifier:
         if not candidates:
             if self.config.label_mode == "soft":
                 # Region completely unseen — return uniform
-                logger.warning("Region '%s' not in lookup; returning uniform.", region)
+                _module_logger.warning(
+                    "Region '%s' not in lookup; returning uniform.", region
+                )
                 return [1.0 / num_classes] * num_classes
             elif self.config.label_mode == "hard":
                 # Region completely unseen — return one hot of rejection class (last class)
-                logger.warning(
+                _module_logger.warning(
                     "Region '%s' not in lookup; returning rejection class.", region
                 )
                 rejection_class = num_classes - 1
@@ -391,3 +432,7 @@ class LookupClassifier:
         """Inverse of _key_to_str."""
         region, sig = json.loads(s)
         return (region, tuple(tuple(x) for x in sig))
+
+    def predict_split(self, split_df: pd.DataFrame) -> pd.DataFrame:
+        """Predict method for compatibility with AbstractReadClassifier interface."""
+        return self.predict(split_df)

@@ -64,7 +64,7 @@ class ClassifierAdapter:
         Prediction batch size.  Default: 2200.
     """
 
-    SUPPORTED_CLASSIFIERS = ("methylbert", "dismir", "lookup")
+    SUPPORTED_CLASSIFIERS = ("methylbert", "dismir")
 
     def __init__(
         self,
@@ -117,10 +117,6 @@ class ClassifierAdapter:
             self._load_methylbert()
         elif self.classifier_type == "dismir":
             self._load_dismir()
-        elif self.classifier_type == "cancer_detector":
-            self._load_cancer_detector()
-        elif self.classifier_type == "lookup":
-            self._load_lookup()
 
     # ─── MethylBERT ─────────────────────────────────────────────────
 
@@ -311,24 +307,6 @@ class ClassifierAdapter:
 
         return result
 
-    # ─── Lookup ─────────────────────────────────────────────────────
-
-    def _load_lookup(self):
-        from methyldl.modelling.classifiers.lookup import LookupClassifier
-
-        self._model = LookupClassifier.load(self.checkpoint_path)
-        logger.info(
-            "LookupClassifier model loaded with checkpoint: %s", self.checkpoint_path
-        )
-
-    def _predict_lookup(self, split_df: pd.DataFrame) -> pd.DataFrame:
-        """Run LookupClassifier prediction on a single split."""
-        model = self._model
-        if model is None:
-            raise ValueError("LookupClassifier model is not loaded.")
-
-        return model.predict(split_df)
-
     # ─── Public API ─────────────────────────────────────────────────
 
     def predict_split(
@@ -354,7 +332,3 @@ class ClassifierAdapter:
             return self._predict_methylbert(split_df)
         elif self.classifier_type == "dismir":
             return self._predict_dismir(split_df)
-        elif self.classifier_type == "cancer_detector":
-            return self._predict_cancer_detector(split_df)
-        elif self.classifier_type == "lookup":
-            return self._predict_lookup(split_df)

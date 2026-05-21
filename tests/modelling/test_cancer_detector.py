@@ -12,7 +12,7 @@ import unittest
 
 import numpy as np
 import pandas as pd
-from scipy.special import beta as beta_func
+from scipy.special import beta as beta_func  # pylint: disable=no-name-in-module
 
 from methyldl.modelling.classifiers.cancer_detector import (
     CancerDetectorClassifier,
@@ -37,7 +37,7 @@ def _make_train_df(
     column-name forwarding logic.
     """
     if rng is None:
-        rng = np.random.RandomState(42)
+        rng = np.random.RandomState(42)  # pylint: disable=no-member
     rows = []
     for marker in markers:
         for cls in classes:
@@ -94,10 +94,8 @@ class TestFitSingleBetaDistribution(unittest.TestCase):
 
     def test_insufficient_data_zero_reads(self):
         """Empty arrays (0 reads) should also trigger the insufficient-data path."""
-        eta, rho, be0, be1, insuf = (
-            CancerDetectorClassifier.fit_single_beta_distribution(
-                np.array([]), np.array([]), self.eps
-            )
+        eta, rho, _, _, insuf = CancerDetectorClassifier.fit_single_beta_distribution(
+            np.array([]), np.array([]), self.eps
         )
         self.assertTrue(insuf)
         self.assertEqual(eta, 1)
@@ -135,7 +133,7 @@ class TestFitSingleBetaDistribution(unittest.TestCase):
 
     def test_normal_mle_fitting(self):
         """Mixed rates should produce a standard MLE fit with no fallback flags."""
-        rng = np.random.RandomState(0)
+        rng = np.random.RandomState(0)  # pylint: disable=no-member
         n_meth = rng.randint(1, 10, size=50)
         n_unmeth = rng.randint(1, 10, size=50)
         eta, rho, be0, be1, insuf = (
@@ -264,6 +262,8 @@ class TestFit(unittest.TestCase):
 class TestComputeLikelihoodSingleRead(unittest.TestCase):
     """Tests for :meth:`CancerDetectorClassifier._compute_likelihood_single_read`."""
 
+    # pylint: disable=protected-access
+
     def setUp(self):
         """Fit a default classifier for reuse across tests."""
         self.clf, _ = _fitted_classifier()
@@ -329,6 +329,7 @@ class TestComputeLikelihoodBulk(unittest.TestCase):
         markers = np.array([marker, marker])
         bulk = self.clf.compute_likelihood_bulk(n_meth, n_unmeth, markers)
         for i in range(2):
+            # pylint: disable=protected-access
             single = self.clf._compute_likelihood_single_read(
                 n_meth[i], n_unmeth[i], markers[i]
             )
@@ -347,6 +348,8 @@ class TestComputeLikelihoodBulk(unittest.TestCase):
 # ---------------------------------------------------------------------------
 class TestPredictProbaFromLikelihoods(unittest.TestCase):
     """Tests for :meth:`CancerDetectorClassifier._predict_proba_from_likelihoods`."""
+
+    # pylint: disable=protected-access
 
     def setUp(self):
         """Fit a default classifier for reuse across tests."""

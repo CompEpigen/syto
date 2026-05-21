@@ -1,3 +1,8 @@
+"""
+Defines a factory function to load read classifiers from checkpoints,
+using a registry of known classifier types.
+"""
+
 import importlib
 import warnings
 
@@ -15,7 +20,7 @@ _CLF_REGISTRY = {
 
 # Validate module paths at import time (no heavy deps triggered)
 for _key, _entry in _CLF_REGISTRY.items():
-    _module_path, _cls_name = _entry.split(":")
+    _module_path = _entry.split(":", maxsplit=1)[0]
     if importlib.util.find_spec(_module_path) is None:
         warnings.warn(
             f"Registry entry '{_key}': module '{_module_path}' not found.",
@@ -39,7 +44,6 @@ def read_classifier_factory(name: str, path: str, **kwargs) -> AbstractReadClass
     if name not in _CLF_REGISTRY:
         raise ValueError(f"Unknown classifier '{name}'")
     module_path, cls_name = _CLF_REGISTRY[name].split(":")
-    import importlib
 
     cls = getattr(importlib.import_module(module_path), cls_name)
     return cls.load(path, **kwargs)
