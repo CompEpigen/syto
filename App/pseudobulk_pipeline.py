@@ -25,7 +25,9 @@ from methyldl.data.pseudo_bulk_generation import (
 )
 from methyldl.data.read_preparation import prepare_splits_for_pseudobulk
 from methyldl.data.split_rebalancing import rebalance_splits
-from methyldl.modelling.abstract_read_classifier import ClassifierAdapter
+from methyldl.modelling.classifiers.lazy_classifier_factory import (
+    read_classifier_factory,
+)
 
 
 class PseudoBulkPipeline:
@@ -153,11 +155,38 @@ class PseudoBulkPipeline:
         # ── Stage 3: Classifier predictions (if needed) ───────────
         if self.config["input_type"] in ["raw_splits", "uxm_prepared"]:
             self.logger.info("Stage 3: Running classifier predictions ...")
-            adapter = self._build_classifier_adapter()
+            # adapter = self._build_classifier_adapter()
+            read_level_classifier = read_classifier_factory(
+                name=self.config["classifier_type"],
+                path=self.config["classifier_checkpoint"],
+                labels_dict=self.labels_dict,
+                num_labels=self.num_labels,
+                seq_length=self.config.get("classifier_config", {}).get(
+                    "seq_length", 150
+                ),
+                foundation_model_path=self.config.get("classifier_config", {}).get(
+                    "foundation_model", "hanyangii/methylbert_hg19_12l"
+                ),
+                classifier_head_implementation=self.config.get(
+                    "classifier_config", {}
+                ).get("classifier_head_implementation", "dmr_attention_based"),
+                dmr_label_column=self.config.get("classifier_config", {}).get(
+                    "dmr_label_column", "dmr_ctype_label"
+                ),
+                soft_labels=self.config.get("classifier_config", {}).get(
+                    "soft_labels", True
+                ),
+                dismir_flavor=self.config.get("classifier_config", {}).get(
+                    "dismir_flavor", "lstm"
+                ),
+                batch_size=self.config.get("classifier_config", {}).get(
+                    "batch_size", 2200
+                ),
+            )
 
             for name, df in splits_data.items():
                 self.logger.info(f"  Predicting {name} split ({len(df)} reads) ...")
-                predicted = adapter.predict_split(df)
+                predicted = read_level_classifier.predict_split(df)
 
                 # Save intermediate predicted split
                 intermediate_path = os.path.join(
@@ -529,24 +558,24 @@ class PseudoBulkPipeline:
 
         return splits_data
 
-    def _build_classifier_adapter(self) -> ClassifierAdapter:
-        """Build a ClassifierAdapter from config."""
-        classifier_cfg = self.config.get("classifier_config", {})
+    # def _build_classifier_adapter(self) -> ClassifierAdapter:
+    #     """Build a ClassifierAdapter from config."""
+    #     classifier_cfg = self.config.get("classifier_config", {})
 
-        return ClassifierAdapter(
-            classifier_type=self.config["classifier_type"],
-            checkpoint_path=self.config["classifier_checkpoint"],
-            labels_dict=self.labels_dict,
-            num_labels=self.num_labels,
-            seq_length=classifier_cfg.get("seq_length", 150),
-            foundation_model_path=classifier_cfg.get(
-                "foundation_model", "hanyangii/methylbert_hg19_12l"
-            ),
-            classifier_head_implementation=classifier_cfg.get(
-                "classifier_head_implementation", "dmr_attention_based"
-            ),
-            dmr_label_column=classifier_cfg.get("dmr_label_column", "dmr_ctype_label"),
-            soft_labels=classifier_cfg.get("soft_labels", True),
-            dismir_flavor=classifier_cfg.get("dismir_flavor", "lstm"),
-            batch_size=classifier_cfg.get("batch_size", 2200),
-        )
+    #     return ClassifierAdapter(
+    #         classifier_type=self.config["classifier_type"],
+    #         checkpoint_path=self.config["classifier_checkpoint"],
+    #         labels_dict=self.labels_dict,
+    #         num_labels=self.num_labels,
+    #         seq_length=classifier_cfg.get("seq_length", 150),
+    #         foundation_model_path=classifier_cfg.get(
+    #             "foundation_model", "hanyangii/methylbert_hg19_12l"
+    #         ),
+    #         classifier_head_implementation=classifier_cfg.get(
+    #             "classifier_head_implementation", "dmr_attention_based"
+    #         ),
+    #         dmr_label_column=classifier_cfg.get("dmr_label_column", "dmr_ctype_label"),
+    #         soft_labels=classifier_cfg.get("soft_labels", True),
+    #         dismir_flavor=classifier_cfg.get("dismir_flavor", "lstm"),
+    #         batch_size=classifier_cfg.get("batch_size", 2200),
+    #     )

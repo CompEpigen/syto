@@ -33,7 +33,7 @@ class AbstractReadClassifier(ABC):
 
     @classmethod
     @abstractmethod
-    def load(cls, path: Union[str, Path], **kwargs) -> "ReadClassifier":
+    def load(cls, path: Union[str, Path], **kwargs) -> "AbstractReadClassifier":
         """Load a ReadClassifier from a checkpoint."""
 
 
@@ -64,7 +64,7 @@ class ClassifierAdapter:
         Prediction batch size.  Default: 2200.
     """
 
-    SUPPORTED_CLASSIFIERS = ("methylbert", "dismir", "cancer_detector", "lookup")
+    SUPPORTED_CLASSIFIERS = ("methylbert", "dismir", "lookup")
 
     def __init__(
         self,
@@ -309,40 +309,6 @@ class ClassifierAdapter:
         for col in pred_cols:
             result[col] = pred_df[col].values
 
-        return result
-
-    # ─── CancerDetector ─────────────────────────────────────────────
-
-    def _load_cancer_detector(self):
-        from methyldl.modelling.classifiers.cancer_detector import (
-            CancerDetectorClassifier,
-        )
-
-        self._cancer_detector_instance = CancerDetectorClassifier()
-        self._cancer_detector_instance.load(self.checkpoint_path)
-        logger.info(
-            "CancerDetector model loaded with checkpoint: %s", self.checkpoint_path
-        )
-        logger.info("CancerDetector model loaded: %s", self._cancer_detector_instance)
-
-    def _predict_cancer_detector(self, split_df: pd.DataFrame) -> pd.DataFrame:
-        """Run CancerDetector prediction on a single split."""
-        if self._cancer_detector_instance is None:
-            raise ValueError("CancerDetector model is not loaded.")
-
-        probabilities = self._cancer_detector_instance.predict_proba(
-            test_data=split_df,
-            col_n_meth_cpgs="M",
-            col_n_unmeth_cpgs="U",
-            col_marker_label=self.dmr_label_column,
-            return_likelihoods=False,
-            verbose=False,
-        )
-        pred_cols = [f"prediction_{i}" for i in range(self.num_labels)]
-        pred_df = pd.DataFrame(probabilities, columns=pred_cols)
-        result = split_df.copy()
-        for col in pred_cols:
-            result[col] = pred_df[col].values
         return result
 
     # ─── Lookup ─────────────────────────────────────────────────────

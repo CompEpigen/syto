@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 import torch.nn as nn
 import torch
+from copy import deepcopy
 
 import numpy as np
 import pandas as pd
@@ -23,15 +24,15 @@ import pandas as pd
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from copy import deepcopy
 
 from methyldl.data import LOYFER_CELL_TYPE_MATCH_DICT
 from methyldl.data.sequencing.bam_processing import process_bam_with_chunking
 from methyldl.modelling.prediction_aggregation import (
     aggregate_predictions_by_dmr,
 )
-from methyldl.modelling.abstract_read_classifier import ClassifierAdapter
-
+from methyldl.modelling.classifiers.lazy_classifier_factory import (
+    read_classifier_factory,
+)
 from methyldl.deconvolution.uxm import (
     prepare_reads_for_uxm,
     uxm_deconvolution,
@@ -42,11 +43,9 @@ from methyldl.deconvolution.least_squares_deconvolvers import (
     PSLSDeconvolver,
     NNLSDeconvolver,
 )
-
 from methyldl.deconvolution.xgbdeconvolver import (
     XGBoostDeconvolver,
 )
-
 from methyldl.calibration.linear_calibrator import LinearCalibrator
 from methyldl.cross_validation_engine import CrossValidationEngine
 
@@ -59,7 +58,7 @@ class InferencePipeline:
 
     Stages:
         1. BAM → processed reads (or load pre-processed)
-        2. Reads × atlas → region-overlapped, annotated reads
+        2. Reads x atlas → region-overlapped, annotated reads
         3. Annotated reads → classifier predictions
            (MethylBERT / Dismir / CancerDetector / LookupClassifier)
         4. Read-level predictions → DMR-level aggregation
@@ -322,7 +321,7 @@ class InferencePipeline:
         pd.DataFrame
             Prepared reads with atlas-region annotations.  Column names
             are kept as-is (``seq``, ``pattern``, …) so that the
-            :class:`ClassifierAdapter` can handle any downstream
+            :class:`AbstractReadClassifier` can handle any downstream
             transformations internally.
         """
         df = self.processed_reads.copy()
@@ -357,30 +356,70 @@ class InferencePipeline:
     #  Stage 3: classifier predictions
     # ═══════════════════════════════════════════════════════════════════
 
-    def _build_classifier_adapter(self) -> ClassifierAdapter:
-        """Build a :class:`ClassifierAdapter` from the pipeline config.
+    # def _build_classifier_adapter(self) -> ClassifierAdapter:
+    #     """Build a :class:`ClassifierAdapter` from the pipeline config.
 
-        Reads the ``classifier`` (or legacy ``model``) section of the
-        configuration to determine which classifier backend to use and
-        how to initialise it.
+    #     Reads the ``classifier`` (or legacy ``model``) section of the
+    #     configuration to determine which classifier backend to use and
+    #     how to initialise it.
+
+    #     Returns
+    #     -------
+    #     ClassifierAdapter
+    #     """
+    #     classifier_cfg = self.config.get("classifier", self.config.get("model", {}))
+    #     classifier_type = classifier_cfg.get("classifier_type", "methylbert")
+    #     self.classifier_type = classifier_type
+    #     checkpoint_path = self.config["checkpoint_path"]
+    #     seq_len = self.config.get("max_sequence_length", 150)
+    #     batch_size = self.config.get("prediction_batch_size", 2200)
+
+    #     adapter = ClassifierAdapter(
+    #         classifier_type=classifier_type,
+    #         checkpoint_path=checkpoint_path,
+    #         labels_dict=self.labels_dict,
+    #         num_labels=self.num_labels,
+    #         seq_length=seq_len,
+    #         foundation_model_path=classifier_cfg.get(
+    #             "foundation_model", "hanyangii/methylbert_hg19_12l"
+    #         ),
+    #         classifier_head_implementation=classifier_cfg.get(
+    #             "classifier_head_implementation", "dmr_attention_based"
+    #         ),
+    #         dmr_label_column=classifier_cfg.get("dmr_label_column", "dmr_ctype_label"),
+    #         dismir_flavor=classifier_cfg.get("dismir_flavor", "lstm"),
+    #         cancer_detector_prior_type=classifier_cfg.get(
+    #             "cancer_detector_prior_type", "uniform"
+    #         ),
+    #         soft_labels=classifier_cfg.get("soft_labels", False),
+    #         batch_size=batch_size,
+    #     )
+
+    #     self.logger.info(
+    #         f"Built ClassifierAdapter: type={classifier_type}, "
+    #         f"checkpoint={checkpoint_path}"
+    #     )
+    #     return adapter
+
+    def _predict_classifier(self) -> pd.DataFrame:
+        """
+        Run the configured classifier on the prepared reads.
 
         Returns
         -------
-        ClassifierAdapter
+        pd.DataFrame
+            The prepared_reads DataFrame augmented with ``prediction_*``
+            columns (one per cell type).
         """
+        # adapter = self._build_classifier_adapter()
         classifier_cfg = self.config.get("classifier", self.config.get("model", {}))
-        classifier_type = classifier_cfg.get("classifier_type", "methylbert")
-        self.classifier_type = classifier_type
-        checkpoint_path = self.config["checkpoint_path"]
-        seq_len = self.config.get("max_sequence_length", 150)
-        batch_size = self.config.get("prediction_batch_size", 2200)
-
-        adapter = ClassifierAdapter(
-            classifier_type=classifier_type,
-            checkpoint_path=checkpoint_path,
+        self.classifier_type = classifier_cfg.get("classifier_type")
+        read_classifier = read_classifier_factory(
+            name=self.classifier_type,
+            path=self.config["checkpoint_path"],
             labels_dict=self.labels_dict,
             num_labels=self.num_labels,
-            seq_length=seq_len,
+            seq_length=self.config.get("max_sequence_length", 150),
             foundation_model_path=classifier_cfg.get(
                 "foundation_model", "hanyangii/methylbert_hg19_12l"
             ),
@@ -393,33 +432,11 @@ class InferencePipeline:
                 "cancer_detector_prior_type", "uniform"
             ),
             soft_labels=classifier_cfg.get("soft_labels", False),
-            batch_size=batch_size,
+            batch_size=self.config.get("prediction_batch_size", 2200),
         )
-
-        self.logger.info(
-            f"Built ClassifierAdapter: type={classifier_type}, "
-            f"checkpoint={checkpoint_path}"
-        )
-        return adapter
-
-    def _predict_classifier(self) -> pd.DataFrame:
-        """
-        Run the configured classifier on the prepared reads.
-
-        Delegates to :class:`ClassifierAdapter` which supports
-        MethylBERT, Dismir, CancerDetector, and LookupClassifier
-        through a unified ``predict_split`` interface.
-
-        Returns
-        -------
-        pd.DataFrame
-            The prepared_reads DataFrame augmented with ``prediction_*``
-            columns (one per cell type).
-        """
-        adapter = self._build_classifier_adapter()
 
         self.logger.info("Running classifier predictions ...")
-        result_df = adapter.predict_split(self.prepared_reads)
+        result_df = read_classifier.predict_split(self.prepared_reads)
 
         result_df = result_df.dropna(
             subset=result_df.columns.difference(["soft_label"])
