@@ -239,6 +239,11 @@ class LookupClassifier(AbstractReadClassifier):
                 clf._region_index.setdefault(region, []).append((sig, entry))
 
             clf._is_fitted = True
+        else:
+            raise ValueError(
+                f"Unsupported file extension '{file_extension}' for loading."
+                " Use .joblib or .pkl."
+            )
 
         _module_logger.info(
             "Loaded LookupClassifier with %d keys from %s", clf.n_keys, path
