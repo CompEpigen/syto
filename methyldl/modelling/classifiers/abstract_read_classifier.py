@@ -21,11 +21,12 @@ class AbstractReadClassifier(ABC):
     """Abstract base class for read-level classifiers."""
 
     @abstractmethod
-    def predict_split(self, split_df: pd.DataFrame) -> pd.DataFrame:
+    def predict_split(self, split_df: pd.DataFrame, **kwargs) -> pd.DataFrame:
         """Run the classifier on a prepared split DataFrame.
 
         Args:
             split_df (pd.DataFrame): Input DataFrame with read-level data.
+            **kwargs: Additional parameters for prediction.
 
         Returns:
             pd.DataFrame: The input DataFrame enriched with prediction columns.
@@ -253,15 +254,6 @@ class ClassifierAdapter:
                 flavour=self.dismir_flavor,
                 num_labels=self.num_labels,
                 classifier_type=self.classifier_head_implementation,
-                # num_dmr_labels=(
-                #     self.num_labels
-                #     if self.soft_labels
-                #     else (
-                #         self.num_labels - 1
-                #         if self.classifier_head_implementation == "dmr_attention_based"
-                #         else None
-                #     )
-                # ),
                 num_dmr_labels=self.num_dmr_labels,
                 dmr_label_col=(
                     self.dmr_label_column

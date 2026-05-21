@@ -156,37 +156,30 @@ class PseudoBulkPipeline:
         if self.config["input_type"] in ["raw_splits", "uxm_prepared"]:
             self.logger.info("Stage 3: Running classifier predictions ...")
             # adapter = self._build_classifier_adapter()
+            classifier_config = self.config.get("classifier_config", {})
             read_level_classifier = read_classifier_factory(
                 name=self.config["classifier_type"],
                 path=self.config["classifier_checkpoint"],
                 labels_dict=self.labels_dict,
                 num_labels=self.num_labels,
-                seq_length=self.config.get("classifier_config", {}).get(
-                    "seq_length", 150
-                ),
-                foundation_model_path=self.config.get("classifier_config", {}).get(
+                seq_length=classifier_config.get("seq_length", 150),
+                foundation_model_path=classifier_config.get(
                     "foundation_model", "hanyangii/methylbert_hg19_12l"
                 ),
-                classifier_head_implementation=self.config.get(
-                    "classifier_config", {}
-                ).get("classifier_head_implementation", "dmr_attention_based"),
-                dmr_label_column=self.config.get("classifier_config", {}).get(
+                classifier_head_implementation=classifier_config.get(
+                    "classifier_head_implementation", "dmr_attention_based"
+                ),
+                dmr_label_column=classifier_config.get(
                     "dmr_label_column", "dmr_ctype_label"
                 ),
-                soft_labels=self.config.get("classifier_config", {}).get(
-                    "soft_labels", True
-                ),
-                dismir_flavor=self.config.get("classifier_config", {}).get(
-                    "dismir_flavor", "lstm"
-                ),
-                batch_size=self.config.get("classifier_config", {}).get(
-                    "batch_size", 2200
-                ),
+                soft_labels=classifier_config.get("soft_labels", True),
+                dismir_flavor=classifier_config.get("dismir_flavor", "lstm"),
+                batch_size=classifier_config.get("batch_size", 2200),
             )
 
             for name, df in splits_data.items():
                 self.logger.info(f"  Predicting {name} split ({len(df)} reads) ...")
-                predicted = read_level_classifier.predict_split(df)
+                predicted = read_level_classifier.predict_split(df, **classifier_config)
 
                 # Save intermediate predicted split
                 intermediate_path = os.path.join(

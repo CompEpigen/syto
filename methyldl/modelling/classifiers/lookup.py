@@ -438,6 +438,6 @@ class LookupClassifier(AbstractReadClassifier):
         region, sig = json.loads(s)
         return (region, tuple(tuple(x) for x in sig))
 
-    def predict_split(self, split_df: pd.DataFrame) -> pd.DataFrame:
+    def predict_split(self, split_df: pd.DataFrame, **kwargs) -> pd.DataFrame:
         """Predict method for compatibility with AbstractReadClassifier interface."""
         return self.predict(split_df)

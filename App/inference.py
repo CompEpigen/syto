@@ -436,7 +436,7 @@ class InferencePipeline:
         )
 
         self.logger.info("Running classifier predictions ...")
-        result_df = read_classifier.predict_split(self.prepared_reads)
+        result_df = read_classifier.predict_split(self.prepared_reads, **classifier_cfg)
 
         result_df = result_df.dropna(
             subset=result_df.columns.difference(["soft_label"])
