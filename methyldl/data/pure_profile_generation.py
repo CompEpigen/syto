@@ -115,6 +115,50 @@ def generate_pure_profiles(
     return pure_profiles
 
 
+def extract_pure_feature_matrix(
+    pure_profiles: list,
+    num_input_labels: int,
+    num_output_labels: int,
+    split_idx: int,
+    splits: list,
+) -> np.ndarray:
+    """Extract the feature matrix from purified profiles for one split.
+
+    Parameters
+    ----------
+    pure_profiles : list
+        Output of :func:`generate_pure_profiles` — a list of
+        ``(proportions, subs, uxm_data)`` tuples, one per cell type.
+    num_input_labels : int
+        Number of input prediction classes.
+    num_output_labels : int
+        Number of output cell-type labels.
+    split_idx : int
+        Index into ``subs``: 0 = train, 1 = valid, 2 = test.
+    splits : list
+        Split names (e.g. ``["train", "valid", "test"]``).
+
+    Returns
+    -------
+    np.ndarray
+        Matrix of shape ``(num_output_labels, num_input_labels)`` where row *i*
+        contains the GR-aggregated prediction profile for cell type *i*
+        within the chosen split.
+    """
+    target_columns = [f"prediction_{i}_wavg" for i in range(num_input_labels)]
+
+    if isinstance(pure_profiles[0][1], dict):
+        split_idx = splits[split_idx]
+
+    return np.array(
+        [
+            pure_profiles[i][1][split_idx][target_columns].to_numpy()
+            for i in range(num_output_labels)
+            if pure_profiles[i] is not None
+        ]
+    )
+
+
 def compute_uniform_prior_matrix(
     pure_profiles: List[Tuple[np.ndarray, Dict[str, pd.DataFrame], list]],
     split_key: str = "train",

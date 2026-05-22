@@ -22,46 +22,9 @@ logger = logging.getLogger(__name__)
 # ─────────────────────────────────────────────────────────────────────
 
 
-def extract_pure_feature_matrix(
-    pure_profiles: list,
-    num_input_labels: int,
-    num_output_labels: int,
-    split_idx: int,
-    splits: list,
-) -> np.ndarray:
-    """Extract the feature matrix from purified profiles for one split.
-
-    Parameters
-    ----------
-    pure_profiles : list
-        Output of :func:`generate_pure_profiles` — a list of
-        ``(proportions, subs, uxm_data)`` tuples, one per cell type.
-    num_input_labels : int
-        Number of input prediction classes.
-    num_output_labels : int
-        Number of output cell-type labels.
-    split_idx : int
-        Index into ``subs``: 0 = train, 1 = valid, 2 = test.
-
-    Returns
-    -------
-    np.ndarray
-        Matrix of shape ``(num_output_labels, num_input_labels)`` where row *i*
-        contains the DMR-aggregated prediction profile for cell type *i*
-        within the chosen split.
-    """
-    target_columns = [f"prediction_{i}_wavg" for i in range(num_input_labels)]
-
-    if isinstance(pure_profiles[0][1], dict):
-        split_idx = splits[split_idx]
-
-    return np.array(
-        [
-            pure_profiles[i][1][split_idx][target_columns].to_numpy()
-            for i in range(num_output_labels)
-            if pure_profiles[i] is not None
-        ]
-    )
+from methyldl.data.pure_profile_generation import (  # noqa: F401
+    extract_pure_feature_matrix,
+)
 
 
 def compute_feature_ratios(pure_matrix: np.ndarray) -> np.ndarray:
@@ -70,14 +33,14 @@ def compute_feature_ratios(pure_matrix: np.ndarray) -> np.ndarray:
     Parameters
     ----------
     pure_matrix : np.ndarray
-        Shape ``(n_cell_types, n_dmr_groups, n_pred_classes)`` feature
+        Shape ``(n_cell_types, n_gr_groups, n_pred_classes)`` feature
         matrix from :func:`extract_pure_feature_matrix`.
 
     Returns
     -------
     np.ndarray
         Ratio matrix of same shape as the last two dimensions of
-        ``pure_matrix`` (i.e. ``(n_dmr_groups, n_pred_classes)``).
+        ``pure_matrix`` (i.e. ``(n_gr_groups, n_pred_classes)``).
     """
     max_vals = pure_matrix.max(axis=0)
     mean_vals = pure_matrix.mean(axis=0)
@@ -177,10 +140,10 @@ def apply_feature_mask(
     Parameters
     ----------
     matrix : np.ndarray
-        Feature matrix of shape ``(n_dmr_groups, n_pred_classes)`` or
-        ``(n_samples, n_dmr_groups, n_pred_classes)``.
+        Feature matrix of shape ``(n_gr_groups, n_pred_classes)`` or
+        ``(n_samples, n_gr_groups, n_pred_classes)``.
     mask : np.ndarray
-        Binary mask of shape ``(n_dmr_groups, n_pred_classes)``.
+        Binary mask of shape ``(n_gr_groups, n_pred_classes)``.
 
     Returns
     -------
@@ -218,7 +181,7 @@ def apply_mask_to_ios(
     ios_path : str
         Path to the ``ios_full_matrices.npz`` file.
     mask : np.ndarray
-        Binary feature mask of shape ``(n_dmr_groups, n_pred_classes)``.
+        Binary feature mask of shape ``(n_gr_groups, n_pred_classes)``.
     output_path : str
         Where to save the filtered ``.npz`` file.
     cutoff : float

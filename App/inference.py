@@ -38,6 +38,7 @@ from methyldl.deconvolution.uxm import (
     rearange_uxm_deconvolution_results,
     load_atlas,
 )
+from methyldl.deconvolution.feature_selection import apply_feature_mask
 from methyldl.deconvolution.least_squares_deconvolvers import (
     PSLSDeconvolver,
     NNLSDeconvolver,
@@ -638,7 +639,7 @@ class InferencePipeline:
         checkpoint_path = method_cfg["checkpoint_path"]
         flavor = method_cfg["flavor"]
         self.logger.info(f"Loading {flavor} from {checkpoint_path}")
-        X = self._extract_features_by_mask(
+        X = apply_feature_mask(
             np.array(
                 self.dmr_aggregated[
                     [f"prediction_{i}_wavg" for i in range(self.num_labels)]
@@ -646,7 +647,6 @@ class InferencePipeline:
             ),
             self.features_mask,
         )
-        X = X.flatten()
         if "nnls" in flavor:
             deconvolver = NNLSDeconvolver.load(checkpoint_path)
             proportions, _, _ = deconvolver.predict_single_sample(X)
@@ -676,15 +676,14 @@ class InferencePipeline:
         deconvolver = XGBoostDeconvolver.load(checkpoint_path)
 
         # Build the prediction matrix from DMR-aggregated data
-        # prediction_matrix = self._build_prediction_matrix()
-        X = self._extract_features_by_mask(
+        X = apply_feature_mask(
             np.array(
                 self.dmr_aggregated[
                     [f"prediction_{i}_wavg" for i in range(self.num_labels)]
                 ]
             ),
             self.features_mask,
-        )
+        )[np.newaxis]
         deconv_preds = deconvolver.predict(X)
         proportions = np.round(deconv_preds, 4)
         self.logger.debug(f"XGBoost proportions: {proportions}")
@@ -711,14 +710,14 @@ class InferencePipeline:
                 "Architecture for NN method should be either Shallow_Wide_Network or 3Layer_MLP"
             )
         X = torch.FloatTensor(
-            self._extract_features_by_mask(
+            apply_feature_mask(
                 np.array(
                     self.dmr_aggregated[
                         [f"prediction_{i}_wavg" for i in range(self.num_labels)]
                     ]
                 ),
                 self.features_mask,
-            )
+            )[np.newaxis]
         ).to("cuda")
 
         deconv_preds = deconvolver.predict(X)
@@ -757,48 +756,6 @@ class InferencePipeline:
 
         self.logger.debug(f"UXM proportions: {proportions_aligned}")
         return proportions_aligned
-
-    @staticmethod
-    def _extract_diag_and_bckg(matrix):
-        return np.reshape(np.concat([np.diag(matrix), matrix[:, -1]], axis=0), (1, 78))
-
-    @staticmethod
-    def _extract_features_by_mask(matrix, target_mask):
-        return np.expand_dims(
-            np.ma.masked_array(
-                matrix, ~np.array(target_mask, dtype=np.bool)
-            ).compressed(),
-            0,
-        )
-
-    def _build_prediction_matrix(self) -> np.ndarray:
-        """
-        Build the deconvolution input matrix from DMR-aggregated predictions.
-
-        Returns
-        -------
-        np.ndarray
-            Shape: (1, n_dmrs, n_cell_types + 1) — a single sample with
-            per-DMR predictions and a rejection column.
-        """
-        n_labels = len(self.labels_dict)
-        pred_cols = [f"prediction_{i}" for i in range(n_labels)]
-
-        # Pivot aggregated data: rows = DMR groups, cols = cell-type predictions
-        agg = self.dmr_aggregated.copy()
-
-        # Sort by dmr_ctype_label so matrix rows are in consistent order
-        agg = agg.sort_values("dmr_ctype_label").reset_index(drop=True)
-
-        # Extract prediction matrix
-        if all(col in agg.columns for col in pred_cols):
-            matrix = agg[pred_cols].values  # (n_dmrs, n_labels)
-        else:
-            # Auto-detect prediction columns
-            available = [c for c in agg.columns if c.startswith("prediction_")]
-            matrix = agg[available].values
-
-        return self._extract_diag_and_bckg(matrix)
 
     def _build_uxm_input(
         self, uxm_atlas: pd.DataFrame, ref_cells: list

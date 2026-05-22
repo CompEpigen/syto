@@ -20,14 +20,16 @@ import pandas as pd
 import torch
 import torch.nn as nn
 
-from methyldl.data.pure_profile_generation import generate_pure_profiles
+from methyldl.data.pure_profile_generation import (
+    extract_pure_feature_matrix,
+    generate_pure_profiles,
+)
 from methyldl.deconvolution.evaluation import compute_deconvolution_metrics
 from methyldl.deconvolution.feature_selection import (
     apply_feature_mask,
     apply_mask_to_ios,
     compute_feature_mask,
     compute_feature_ratios,
-    extract_pure_feature_matrix,
     generate_feature_selection_plot,
 )
 from methyldl.deconvolution.least_squares_deconvolvers import (
