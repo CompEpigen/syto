@@ -377,75 +377,6 @@ class TestDismirTraining(DismirTestBase):
         self.assertLess(len(model.history), len(model.history) + first_history_length)
 
 
-class TestDismirEvaluation(DismirTestBase):
-    """Test evaluation functionality of Dismir model."""
-
-    def setUp(self):
-        super().setUp()
-        # Initialize model
-
-    @parameterized.expand(
-        [
-            ("test", False, 1),
-            ("valid", False, 1),
-            ("test", True, 1),
-            ("valid", True, 1),
-            ("test", False, 3),
-            ("valid", False, 3),
-            ("test", True, 3),
-            ("valid", True, 3),
-        ]
-    )
-    def test_evaluate_different_splits_and_modes(
-        self, split, variable_length, num_labels
-    ):
-        """Test evaluation on different data splits and modes."""
-        model = Dismir(
-            max_sequence_length=self.max_sequence_length,
-            train_data_path=self.train_path,
-            test_data_path=self.test_path,
-            valid_data_path=self.valid_path,
-            device=torch.device("cuda"),
-            num_labels=num_labels,
-        )
-
-        if not variable_length:
-            # Load and transform test data
-            model.test_x, model.test_y = model.load_and_transform_input(self.test_path)
-            model.test_x = torch.tensor(model.test_x, dtype=torch.float32)
-
-            # Handle labels based on num_labels
-            if num_labels == 1:
-                # Binary: float32, shape [batch_size, 1]
-                model.test_y = torch.tensor(model.test_y, dtype=torch.float32).view(
-                    -1, 1
-                )
-            else:
-                # Multi-class: long, shape [batch_size]
-                model.test_y = torch.tensor(model.test_y, dtype=torch.long).squeeze()
-
-            # Load and transform validation data
-            model.valid_x, model.valid_y = model.load_and_transform_input(
-                self.valid_path
-            )
-            model.valid_x = torch.tensor(model.valid_x, dtype=torch.float32)
-
-            if num_labels == 1:
-                model.valid_y = torch.tensor(model.valid_y, dtype=torch.float32).view(
-                    -1, 1
-                )
-            else:
-                model.valid_y = torch.tensor(model.valid_y, dtype=torch.long).squeeze()
-
-        loss, accuracy = model.evaluate(split=split, variable_length=variable_length)
-
-        # Check that metrics are valid
-        self.assertIsInstance(loss, float)
-        self.assertIsInstance(accuracy, float)
-        self.assertGreaterEqual(loss, 0)
-        self.assertTrue(0 <= accuracy <= 1)
-
-
 class TestVariableLengthDataset(DismirTestBase):
     """Test the VariableLengthDataset class."""
 
@@ -470,8 +401,8 @@ class TestVariableLengthDataset(DismirTestBase):
             data.append(
                 {"input_ids": dna_seq, "methylation_ids": meth_seq, "label": label}
             )
-        df["dmr_label"] = np.random.randint(0, 5, len(df))
         df = pd.DataFrame(data)
+        df["dmr_label"] = np.random.randint(0, 5, len(df))
         df.to_parquet(self.data_path)
 
     def test_dataset_initialization(self):

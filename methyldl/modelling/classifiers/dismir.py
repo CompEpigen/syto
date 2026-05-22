@@ -18,8 +18,10 @@ try:
     from transformers.utils.import_utils import is_in_notebook
     from transformers.utils.notebook import NotebookTrainingTracker
 except ImportError:
+
     def is_in_notebook():
         return False
+
     NotebookTrainingTracker = None
 
 from methyldl.modelling.gr_group_attention_classification_head import (
@@ -640,90 +642,6 @@ class Dismir:
                 nesterov,
             )
 
-    def evaluate(self, split="test", variable_length=False):
-        """
-        Evaluate on the test or validation split with support for both modes.
-        """
-        if variable_length:
-            return self._evaluate_variable_length(split)
-        else:
-            return self._evaluate_fixed_length(split)
-
-    def _evaluate_fixed_length(self, split):
-        """Fixed-length evaluation with DMR support.
-
-        Returns:
-            (avg_loss, accuracy, metrics_dict)
-        """
-        use_dmr = self.classifier_type == "dmr_attention_based"
-
-        if split == "test":
-            X_data, y_data = self.test_x, self.test_y
-            dmr_data = self.test_dmr if use_dmr else None
-        else:
-            X_data, y_data = self.valid_x, self.valid_y
-            dmr_data = self.valid_dmr if use_dmr else None
-
-        if use_dmr:
-            dataset = torch.utils.data.TensorDataset(X_data, y_data, dmr_data)
-        else:
-            dataset = torch.utils.data.TensorDataset(X_data, y_data)
-        loader = DataLoader(dataset, batch_size=32, shuffle=False)
-
-        self.model.eval()
-        total_loss = 0.0
-        correct = 0
-        total = 0
-        eval_all_outputs = []
-        eval_all_labels = []
-
-        with torch.no_grad():
-            for batch in loader:
-                if use_dmr:
-                    X_batch, y_batch, dmr_batch = batch
-                    X_batch = X_batch.to(self.device)
-                    y_batch = y_batch.to(self.device)
-                    dmr_batch = dmr_batch.to(self.device)
-                    outputs, _ = self.model(X_batch, dmr_ids=dmr_batch)
-                else:
-                    X_batch, y_batch = batch
-                    X_batch = X_batch.to(self.device)
-                    y_batch = y_batch.to(self.device)
-                    outputs = self.model(X_batch)
-
-                loss = self.criterion(outputs, y_batch)
-                total_loss += loss.item() * X_batch.size(0)
-
-                # Collect outputs for metrics
-                batch_outputs = outputs.detach()
-                if use_dmr and self.num_labels == 1:
-                    batch_outputs = torch.sigmoid(batch_outputs)
-                elif use_dmr and self.num_labels > 1:
-                    batch_outputs = torch.softmax(batch_outputs, dim=-1)
-                eval_all_outputs.append(batch_outputs.cpu().numpy())
-                eval_all_labels.append(y_batch.detach().cpu().numpy())
-
-                # Prediction logic
-                if self.num_labels == 1:
-                    if use_dmr:
-                        # outputs are logits
-                        preds = (torch.sigmoid(outputs) >= 0.5).float().squeeze()
-                    else:
-                        # outputs already have sigmoid applied
-                        preds = (outputs >= 0.5).float().squeeze()
-                    correct += (preds == y_batch.squeeze()).sum().item()
-                else:
-                    preds = outputs.argmax(dim=1)
-                    correct += (preds == y_batch).sum().item()
-                total += y_batch.size(0)
-
-        avg_loss = total_loss / len(loader.dataset)
-        accuracy = correct / total
-        metrics = self._compute_epoch_metrics(
-            eval_all_outputs, eval_all_labels, "eval"
-        )
-        return avg_loss, accuracy, metrics
-
     def _train_fixed_length(
         self,
         train_dir,
@@ -949,9 +867,7 @@ class Dismir:
         # Determine column names dynamically
         columns = ["Epoch", "Training Loss", "Validation Loss"]
         metric_keys = sorted([k for k in val_metrics.keys() if k.startswith("val_")])
-        metric_display_names = [
-            k[4:].replace("_", " ").title() for k in metric_keys
-        ]
+        metric_display_names = [k[4:].replace("_", " ").title() for k in metric_keys]
         column_names = columns + metric_display_names
 
         # 1. Initialize tracker / print header on first update
@@ -1168,8 +1084,7 @@ class Dismir:
             epoch_time = time.time() - session_start_time
 
             epoch_record = {
-                "session": len([h for h in self.history if h.get("epoch") == 1])
-                + 1,
+                "session": len([h for h in self.history if h.get("epoch") == 1]) + 1,
                 "epoch": epoch,
                 "train_loss": train_loss,
                 "train_acc": train_acc,
@@ -1183,7 +1098,13 @@ class Dismir:
 
             if verbose > 0:
                 tracker = self._update_training_tracker(
-                    tracker, epoch, epochs, train_loss, val_loss, val_metrics, use_notebook
+                    tracker,
+                    epoch,
+                    epochs,
+                    train_loss,
+                    val_loss,
+                    val_metrics,
+                    use_notebook,
                 )
 
             # Early stopping
@@ -1332,8 +1253,7 @@ class Dismir:
             epoch_time = time.time() - session_start_time
 
             epoch_record = {
-                "session": len([h for h in self.history if h.get("epoch") == 1])
-                + 1,
+                "session": len([h for h in self.history if h.get("epoch") == 1]) + 1,
                 "epoch": epoch,
                 "train_loss": train_loss,
                 "train_acc": train_acc,
@@ -1347,7 +1267,13 @@ class Dismir:
 
             if verbose > 0:
                 tracker = self._update_training_tracker(
-                    tracker, epoch, epochs, train_loss, val_loss, val_metrics, use_notebook
+                    tracker,
+                    epoch,
+                    epochs,
+                    train_loss,
+                    val_loss,
+                    val_metrics,
+                    use_notebook,
                 )
 
             if val_loss < best_val_loss:
@@ -1458,27 +1384,6 @@ class Dismir:
             val_all_outputs, val_all_labels, "val"
         )
         return val_loss, val_acc, val_metrics
-
-    def _evaluate_variable_length(self, split):
-        """Variable-length evaluation."""
-        if split == "test":
-            dataset = VariableLengthDataset(
-                self.test_data_path, self.max_sequence_length, self.conv_onehot
-            )
-        else:
-            dataset = VariableLengthDataset(
-                self.valid_data_path, self.max_sequence_length, self.conv_onehot
-            )
-
-        max_chunks_per_batch = 32
-        batch_sampler = ChunkAwareBatchSampler(
-            dataset, max_chunks_per_batch, shuffle=False
-        )
-        loader = DataLoader(
-            dataset, batch_sampler=batch_sampler, collate_fn=variable_length_collate_fn
-        )
-
-        return self._validate_variable_length(loader, self.criterion)
 
     def predict(
         self,
