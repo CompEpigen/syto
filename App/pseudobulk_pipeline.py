@@ -351,8 +351,8 @@ class PseudoBulkPipeline:
         generation_mode = self.config["generation_mode"]
         shared_kwargs = self._build_shared_kwargs(splits_data, generate_uxm_in_ios)
 
-        # Resolve dmr_sampling variants from config (default: ["uniform"])
-        dmr_sampling = self.config.get("dmr_sampling", ["uniform"])
+        # Resolve dmr_sampling variants from config (default: ["uniform_multinomial"])
+        dmr_sampling = self.config.get("dmr_sampling", ["uniform_multinomial"])
         if isinstance(dmr_sampling, str):
             dmr_sampling = [dmr_sampling]
 
@@ -402,9 +402,8 @@ class PseudoBulkPipeline:
 
         - ``target_proportions_path`` — path to a ``.npz`` file with a
           ``proportions`` key.
-        - ``dmr_sampling`` — list of strategies (``["uniform"]``,
-          ``["random"]``, or ``["uniform", "random"]``).
-          Defaults to ``["uniform"]``.
+        - ``dmr_sampling`` — list of strategies (``["uniform_multinomial"]``,).
+          Defaults to ``["uniform_multinomial"]``.
         """
         for split_name, split_cfg in split_generation.items():
             if split_name not in splits_data:
@@ -417,7 +416,7 @@ class PseudoBulkPipeline:
             self.logger.info(f"  Generating IO examples for split '{split_name}' ...")
 
             # Per-split DMR sampling variants
-            dmr_sampling = split_cfg.get("dmr_sampling", ["uniform"])
+            dmr_sampling = split_cfg.get("dmr_sampling", ["uniform_multinomial"])
             if isinstance(dmr_sampling, str):
                 dmr_sampling = [dmr_sampling]
             self.logger.info(f"    DMR sampling variants: {dmr_sampling}")

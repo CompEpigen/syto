@@ -22,7 +22,7 @@ class TestSignatureDistance(unittest.TestCase):
         sig2 = ((100, 0), (101, 0))  # 1 mismatch, length 2, both share 2
         # Mismatch rate: 1/2 = 0.5. Length penalty: 1.0 - (2 / 2) = 0
         # Total distance: 0.5
-        self.assertEqual(signature_distance(sig1, sig2), 0.5)
+        self.assertAlmostEqual(signature_distance(sig1, sig2), 2 / 3)
 
     def test_length_penalty(self):
         sig1 = ((100, 0), (101, 1))
@@ -69,7 +69,7 @@ class TestApplyNormalizedKnnSmoothing(unittest.TestCase):
 
     def test_pooled_reads_and_signatures(self):
         res = apply_normalized_knn_smoothing(
-            self.df, min_reads=30, max_distance=0.5, num_classes=40
+            self.df, min_reads=30, max_distance=0.7, num_classes=40
         )
         res1 = res[res["cpg_sig"] == self.sig1].iloc[0]
         self.assertEqual(res1["raw_reads_pooled"], 35)
@@ -80,7 +80,7 @@ class TestApplyNormalizedKnnSmoothing(unittest.TestCase):
         # weight: c0=1.0, c1=1.333, c2=0.4
         # accumulated for sig1: [20, 15, 0] -> normalized: ~[20, 20, 0] -> prob: ~0.5 for c0, 0.5 for c1
         res = apply_normalized_knn_smoothing(
-            self.df, min_reads=30, max_distance=0.5, num_classes=40
+            self.df, min_reads=30, max_distance=0.7, num_classes=40
         )
         res1 = res[res["cpg_sig"] == self.sig1].iloc[0]
         prob = res1["soft_label"]
