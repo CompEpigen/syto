@@ -25,10 +25,10 @@ import numpy as np
 import pandas as pd
 
 # ── Project imports ───────────────────────────────────────────────
-from methyldl.deconvolution.evaluation import compute_deconvolution_metrics
-from methyldl.calibration.linear_calibrator import LinearCalibrator
-from methyldl.calibration.vector_scaling_calibrator import VectorScalingCalibrator
-from methyldl.cross_validation_engine import CrossValidationEngine
+from syto.deconvolution.evaluation import compute_deconvolution_metrics
+from syto.calibration.linear_calibrator import LinearCalibrator
+from syto.calibration.vector_scaling_calibrator import VectorScalingCalibrator
+from syto.cross_validation_engine import CrossValidationEngine
 
 # ══════════════════════════════════════════════════════════════════
 #  Configuration

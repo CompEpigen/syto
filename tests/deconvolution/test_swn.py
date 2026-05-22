@@ -1,4 +1,4 @@
-"""Tests for methyldl.deconvolution.deep_deconvolvers.swn.
+"""Tests for syto.deconvolution.deep_deconvolvers.swn.
 
 Only covers behavior specific to SWNDeconvolver and _SWNDeconvolverModel.
 Shared AbstractNNDeconvolver behavior (fit, predict, save/load round-trip,
@@ -11,10 +11,10 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from methyldl.deconvolution.deep_deconvolvers.abstract_nn_deconvolver import (
+from syto.deconvolution.deep_deconvolvers.abstract_nn_deconvolver import (
     AbstractNNDeconvolver,
 )
-from methyldl.deconvolution.deep_deconvolvers.swn import (
+from syto.deconvolution.deep_deconvolvers.swn import (
     SWNDeconvolver,
     _SWNDeconvolverModel,
 )

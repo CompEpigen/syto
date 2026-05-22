@@ -6,7 +6,7 @@ from parameterized import parameterized
 import numpy as np
 import torch
 
-from methyldl.calibration.vector_scaling_calibrator import (
+from syto.calibration.vector_scaling_calibrator import (
     CalibrationMethod,
     _TrainedLinearCalibrationModel,
     VectorScalingCalibrator,

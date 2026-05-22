@@ -5,11 +5,11 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from methyldl.deconvolution.deep_deconvolvers.training import (
+from syto.deconvolution.deep_deconvolvers.training import (
     EarlyStopping,
     train_matrix_deconvolver,
 )
-from methyldl.deconvolution.history import DeconvolutionHistory
+from syto.deconvolution.history import DeconvolutionHistory
 
 
 class TinySoftmaxRegressor(nn.Module):
@@ -199,13 +199,13 @@ class TestTrainMatrixDeconvolver(unittest.TestCase):
         ]
 
         with patch(
-            "methyldl.deconvolution.deep_deconvolvers.training.compute_deconvolution_metrics",
+            "syto.deconvolution.deep_deconvolvers.training.compute_deconvolution_metrics",
             side_effect=metrics,
         ) as mocked_metrics, patch(
-            "methyldl.deconvolution.deep_deconvolvers.training.torch.optim.lr_scheduler.ReduceLROnPlateau",
+            "syto.deconvolution.deep_deconvolvers.training.torch.optim.lr_scheduler.ReduceLROnPlateau",
             return_value=scheduler,
         ) as mocked_scheduler_ctor, patch(
-            "methyldl.deconvolution.deep_deconvolvers.training.torch.save"
+            "syto.deconvolution.deep_deconvolvers.training.torch.save"
         ) as mocked_save, patch(
             "builtins.print"
         ) as mocked_print:
@@ -260,10 +260,10 @@ class TestTrainMatrixDeconvolver(unittest.TestCase):
         ]
 
         with patch(
-            "methyldl.deconvolution.deep_deconvolvers.training.compute_deconvolution_metrics",
+            "syto.deconvolution.deep_deconvolvers.training.compute_deconvolution_metrics",
             side_effect=metrics,
         ), patch(
-            "methyldl.deconvolution.deep_deconvolvers.training.torch.optim.lr_scheduler.CosineAnnealingLR",
+            "syto.deconvolution.deep_deconvolvers.training.torch.optim.lr_scheduler.CosineAnnealingLR",
             return_value=scheduler,
         ) as mocked_scheduler_ctor:
             _, history = train_matrix_deconvolver(
@@ -302,12 +302,12 @@ class TestTrainMatrixDeconvolver(unittest.TestCase):
         ]
 
         with patch(
-            "methyldl.deconvolution.deep_deconvolvers.training.compute_deconvolution_metrics",
+            "syto.deconvolution.deep_deconvolvers.training.compute_deconvolution_metrics",
             side_effect=metrics,
         ), patch(
-            "methyldl.deconvolution.deep_deconvolvers.training.torch.optim.lr_scheduler.ReduceLROnPlateau"
+            "syto.deconvolution.deep_deconvolvers.training.torch.optim.lr_scheduler.ReduceLROnPlateau"
         ) as mocked_plateau_ctor, patch(
-            "methyldl.deconvolution.deep_deconvolvers.training.torch.optim.lr_scheduler.CosineAnnealingLR"
+            "syto.deconvolution.deep_deconvolvers.training.torch.optim.lr_scheduler.CosineAnnealingLR"
         ) as mocked_cosine_ctor:
             trained_model, history = train_matrix_deconvolver(
                 model=model,

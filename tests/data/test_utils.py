@@ -1,7 +1,7 @@
 import unittest
 import pandas as pd
 from parameterized import parameterized
-from methyldl.data.utils import count_unique_positions, split_long_reads
+from syto.data.utils import count_unique_positions, split_long_reads
 
 
 class TestCountUniquePositions(unittest.TestCase):
@@ -366,7 +366,7 @@ class TestSplitLongReads(unittest.TestCase):
             self.assertLessEqual(len(row["input_ids"]), 10)
 
 
-from methyldl.data.utils import split_by_file_and_class
+from syto.data.utils import split_by_file_and_class
 
 
 class TestSplitByFileAndClass(unittest.TestCase):

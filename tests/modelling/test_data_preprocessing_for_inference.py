@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import pandas as pd
 
-from methyldl.modelling.data_preprocessing_for_inference import (
+from syto.modelling.data_preprocessing_for_inference import (
     chunk_tokens,
     generate_valid_tokens,
     prepare_methylbert_list_inference,

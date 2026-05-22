@@ -1,5 +1,5 @@
 """
-Tests for methyldl.cross_validation_engine.
+Tests for syto.cross_validation_engine.
 
 Covers:
   - CrossValidationCompatibleModel (abstract interface)
@@ -19,7 +19,7 @@ import numpy as np
 
 warnings.filterwarnings("ignore")
 
-from methyldl.cross_validation_engine import (
+from syto.cross_validation_engine import (
     CrossValidationCompatibleModel,
     CrossValidationEngine,
 )

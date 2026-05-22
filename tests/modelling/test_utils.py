@@ -2,7 +2,7 @@ import unittest
 
 import torch.nn as nn
 
-from methyldl.modelling.utils import *
+from syto.modelling.utils import *
 
 
 class TestCountModelParameters(unittest.TestCase):

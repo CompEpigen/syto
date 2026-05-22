@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import pickle
 
-from methyldl.data import pseudo_bulk_generation as pseudo_bulk_generation_module
+from syto.data import pseudo_bulk_generation as pseudo_bulk_generation_module
 
 # pylint: disable=protected-access
 

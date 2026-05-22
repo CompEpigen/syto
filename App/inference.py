@@ -24,32 +24,32 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 
-from methyldl.data import LOYFER_CELL_TYPE_MATCH_DICT
-from methyldl.data.sequencing.bam_processing import process_bam_with_chunking
-from methyldl.modelling.prediction_aggregation import (
+from syto.data import LOYFER_CELL_TYPE_MATCH_DICT
+from syto.data.sequencing.bam_processing import process_bam_with_chunking
+from syto.modelling.prediction_aggregation import (
     aggregate_predictions_by_dmr,
 )
-from methyldl.modelling.classifiers.lazy_classifier_factory import (
+from syto.modelling.classifiers.lazy_classifier_factory import (
     read_classifier_factory,
 )
-from methyldl.deconvolution.uxm import (
+from syto.deconvolution.uxm import (
     prepare_reads_for_uxm,
     uxm_deconvolution,
     rearange_uxm_deconvolution_results,
     load_atlas,
 )
-from methyldl.deconvolution.feature_selection import apply_feature_mask
-from methyldl.deconvolution.least_squares_deconvolvers import (
+from syto.deconvolution.feature_selection import apply_feature_mask
+from syto.deconvolution.least_squares_deconvolvers import (
     PSLSDeconvolver,
     NNLSDeconvolver,
 )
-from methyldl.deconvolution.deep_deconvolvers.mlp import MLPDeconvolver
-from methyldl.deconvolution.deep_deconvolvers.swn import SWNDeconvolver
-from methyldl.deconvolution.xgbdeconvolver import (
+from syto.deconvolution.deep_deconvolvers.mlp import MLPDeconvolver
+from syto.deconvolution.deep_deconvolvers.swn import SWNDeconvolver
+from syto.deconvolution.xgbdeconvolver import (
     XGBoostDeconvolver,
 )
-from methyldl.calibration.linear_calibrator import LinearCalibrator
-from methyldl.cross_validation_engine import CrossValidationEngine
+from syto.calibration.linear_calibrator import LinearCalibrator
+from syto.cross_validation_engine import CrossValidationEngine
 
 LINEAR_NORM_METHODS = ["clip0-normalize", "simplex-projection"]
 
@@ -411,7 +411,7 @@ class InferencePipeline:
         ValueError
             If neither path is configured.
         """
-        from methyldl.data.pure_profile_generation import (
+        from syto.data.pure_profile_generation import (
             compute_uniform_prior_matrix,
             load_uniform_prior,
             save_uniform_prior,

@@ -20,29 +20,29 @@ import pandas as pd
 import torch
 import torch.nn as nn
 
-from methyldl.data.pure_profile_generation import (
+from syto.data.pure_profile_generation import (
     extract_pure_feature_matrix,
     generate_pure_profiles,
 )
-from methyldl.deconvolution.evaluation import compute_deconvolution_metrics
-from methyldl.deconvolution.feature_selection import (
+from syto.deconvolution.evaluation import compute_deconvolution_metrics
+from syto.deconvolution.feature_selection import (
     apply_feature_mask,
     apply_mask_to_ios,
     compute_feature_mask,
     compute_feature_ratios,
     generate_feature_selection_plot,
 )
-from methyldl.deconvolution.least_squares_deconvolvers import (
+from syto.deconvolution.least_squares_deconvolvers import (
     NNLSDeconvolver,
     PSLSDeconvolver,
 )
-from methyldl.calibration.linear_calibrator import LinearCalibrator
-from methyldl.deconvolution.xgbdeconvolver import (
+from syto.calibration.linear_calibrator import LinearCalibrator
+from syto.deconvolution.xgbdeconvolver import (
     XGBoostDeconvolver,
     XGBDeconvolverConfig,
 )
-from methyldl.deconvolution.deep_deconvolvers.mlp import MLPDeconvolver
-from methyldl.deconvolution.deep_deconvolvers.swn import SWNDeconvolver
+from syto.deconvolution.deep_deconvolvers.mlp import MLPDeconvolver
+from syto.deconvolution.deep_deconvolvers.swn import SWNDeconvolver
 
 
 class DeconvolutionFittingPipeline:

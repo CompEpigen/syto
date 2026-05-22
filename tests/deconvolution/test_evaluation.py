@@ -4,7 +4,7 @@ import numpy as np
 import torch
 from sklearn.metrics import r2_score
 
-from methyldl.deconvolution.evaluation import (
+from syto.deconvolution.evaluation import (
     compute_combined_loss,
     compute_deconvolution_metrics,
 )

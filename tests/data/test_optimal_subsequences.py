@@ -2,7 +2,7 @@ import unittest
 from parameterized import parameterized
 import pandas as pd
 
-from methyldl.data.optimal_subsequences import (
+from syto.data.optimal_subsequences import (
     select_optimal_subsequence,
     select_optimal_subsequence_vectorized,
     select_optimal_subsequence_rolling_window,

@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import pandas as pd
 
-from methyldl.data.sequencing import bam_processing as bp
+from syto.data.sequencing import bam_processing as bp
 
 
 class FakeRead:

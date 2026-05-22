@@ -3,7 +3,7 @@ import unittest
 import numpy as np
 import pandas as pd
 
-from methyldl.modelling.prediction_aggregation import (
+from syto.modelling.prediction_aggregation import (
     aggregate_chuncked_predictions_weighted,
     aggregate_predictions_by_dmr,
     aggregate_predictions_by_dmr_optimized,
@@ -769,7 +769,7 @@ class TestComputeUniformPriorMatrix(unittest.TestCase):
 
     def _make_mock_pure_profiles(self):
         """Build minimal mock pure profiles: 2 cell types, 2 prediction columns."""
-        from methyldl.data.pure_profile_generation import compute_uniform_prior_matrix
+        from syto.data.pure_profile_generation import compute_uniform_prior_matrix
 
         # Cell type 0: predictions [0.8, 0.2] for both DMR rows
         subs_0 = {
@@ -820,7 +820,7 @@ class TestComputeUniformPriorMatrix(unittest.TestCase):
         return [profile_0, profile_1]
 
     def test_averaging_across_profiles(self):
-        from methyldl.data.pure_profile_generation import compute_uniform_prior_matrix
+        from syto.data.pure_profile_generation import compute_uniform_prior_matrix
 
         profiles = self._make_mock_pure_profiles()
         prior = compute_uniform_prior_matrix(
@@ -845,7 +845,7 @@ class TestComputeUniformPriorMatrix(unittest.TestCase):
 
     def test_save_load_roundtrip(self):
         import tempfile
-        from methyldl.data.pure_profile_generation import (
+        from syto.data.pure_profile_generation import (
             compute_uniform_prior_matrix,
             save_uniform_prior,
             load_uniform_prior,
@@ -869,7 +869,7 @@ class TestComputeUniformPriorMatrix(unittest.TestCase):
         )
 
     def test_all_none_profiles_raises(self):
-        from methyldl.data.pure_profile_generation import compute_uniform_prior_matrix
+        from syto.data.pure_profile_generation import compute_uniform_prior_matrix
 
         with self.assertRaises(ValueError):
             compute_uniform_prior_matrix(

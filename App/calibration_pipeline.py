@@ -35,17 +35,17 @@ from typing import Any, Dict, List, Tuple
 import numpy as np
 import pandas as pd
 
-from methyldl.deconvolution.evaluation import compute_deconvolution_metrics
-from methyldl.calibration.linear_calibrator import LinearCalibrator
-from methyldl.calibration.vector_scaling_calibrator import VectorScalingCalibrator
-from methyldl.cross_validation_engine import CrossValidationEngine
-from methyldl.deconvolution.xgbdeconvolver import XGBoostDeconvolver
-from methyldl.deconvolution.least_squares_deconvolvers import (
+from syto.deconvolution.evaluation import compute_deconvolution_metrics
+from syto.calibration.linear_calibrator import LinearCalibrator
+from syto.calibration.vector_scaling_calibrator import VectorScalingCalibrator
+from syto.cross_validation_engine import CrossValidationEngine
+from syto.deconvolution.xgbdeconvolver import XGBoostDeconvolver
+from syto.deconvolution.least_squares_deconvolvers import (
     NNLSDeconvolver,
     PSLSDeconvolver,
 )
-from methyldl.deconvolution.deep_deconvolvers.swn import SWNDeconvolver
-from methyldl.deconvolution.deep_deconvolvers.mlp import MLPDeconvolver
+from syto.deconvolution.deep_deconvolvers.swn import SWNDeconvolver
+from syto.deconvolution.deep_deconvolvers.mlp import MLPDeconvolver
 
 LINEAR_NORM_METHODS = ["clip0-normalize", "simplex-projection"]
 

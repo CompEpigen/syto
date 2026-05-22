@@ -1,4 +1,4 @@
-"""Test suite for :mod:`methyldl.modelling.classifiers.cancer_detector`.
+"""Test suite for :mod:`syto.modelling.classifiers.cancer_detector`.
 
 Covers every public and private method of ``CancerDetectorClassifier`` as well
 as the module-level ``_fit_beta_worker`` helper.  Each test class targets one
@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 from scipy.special import beta as beta_func  # pylint: disable=no-name-in-module
 
-from methyldl.modelling.classifiers.cancer_detector import (
+from syto.modelling.classifiers.cancer_detector import (
     CancerDetectorClassifier,
     _fit_beta_worker,
 )

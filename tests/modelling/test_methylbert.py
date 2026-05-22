@@ -7,8 +7,8 @@ from parameterized import parameterized
 from transformers import BertConfig, TrainingArguments
 import torch
 
-import methyldl.modelling.classifiers.methylbert as methylbert_module
-from methyldl.modelling.classifiers.methylbert import (
+import syto.modelling.classifiers.methylbert as methylbert_module
+from syto.modelling.classifiers.methylbert import (
     MethylBert,
     MethylVocab,
     MethylBertFinetuneDataset,
@@ -381,14 +381,14 @@ class TestMethylBert(unittest.TestCase):
     def _create_small_model(self, **kwargs):
         """Create a wrapper with a tiny Hugging Face config for unit-level branches."""
         with patch(
-            "methyldl.modelling.classifiers.methylbert.BertConfig.from_pretrained",
+            "syto.modelling.classifiers.methylbert.BertConfig.from_pretrained",
             return_value=self._build_small_hf_config(
                 num_labels=kwargs.get("num_labels", 2),
                 num_dmr_labels=kwargs.get("num_dmr_labels", 4),
                 loss=(kwargs.get("custom_config") or self.config).get("loss", "bce"),
             ),
         ), patch(
-            "methyldl.modelling.classifiers.methylbert.AutoTokenizer.from_pretrained",
+            "syto.modelling.classifiers.methylbert.AutoTokenizer.from_pretrained",
             return_value=None,
         ):
             return MethylBert(
@@ -553,13 +553,13 @@ class TestMethylBert(unittest.TestCase):
         mocked_model = MagicMock()
 
         with patch(
-            "methyldl.modelling.classifiers.methylbert.BertConfig.from_pretrained",
+            "syto.modelling.classifiers.methylbert.BertConfig.from_pretrained",
             return_value=self._build_small_hf_config(),
         ), patch(
-            "methyldl.modelling.classifiers.methylbert.MethylBertEmbeddedDMR.from_pretrained",
+            "syto.modelling.classifiers.methylbert.MethylBertEmbeddedDMR.from_pretrained",
             return_value=mocked_model,
         ) as mocked_from_pretrained, patch(
-            "methyldl.modelling.classifiers.methylbert.AutoTokenizer.from_pretrained",
+            "syto.modelling.classifiers.methylbert.AutoTokenizer.from_pretrained",
             return_value=object(),
         ):
             model = MethylBert(
@@ -607,7 +607,7 @@ class TestMethylBertFineTune(unittest.TestCase):
 
     def _create_test_dataset(self, num_samples=5):
         """Helper to create a test dataset using generate_example_data_for_methylbert."""
-        from methyldl.data.dataset import generate_example_data_for_methylbert
+        from syto.data.dataset import generate_example_data_for_methylbert
 
         data = generate_example_data_for_methylbert(
             sequence_length=self.seq_len,
@@ -672,7 +672,7 @@ class TestMethylBertFineTune(unittest.TestCase):
             output_dir="../test_container_tmp/tmp_trainer",
         )
 
-        from methyldl.data.dataset import generate_example_data_for_methylbert
+        from syto.data.dataset import generate_example_data_for_methylbert
 
         # generate_example_data_for_methylbert should handle splitting
         data = generate_example_data_for_methylbert(
@@ -700,7 +700,7 @@ class TestMethylBertPretrainDataset(unittest.TestCase):
 
     def test_pretrain_dataset_from_file(self):
         """Test pretrain dataset creation from file."""
-        from methyldl.data.dataset import generate_example_data_for_methylbert
+        from syto.data.dataset import generate_example_data_for_methylbert
 
         # Generate synthetic data
         data = generate_example_data_for_methylbert(
@@ -741,7 +741,7 @@ class TestMethylBertPretrainDataset(unittest.TestCase):
     )
     def test_pretrain_dataset_masking(self, num_samples):
         """Test that masking is applied in pretrain dataset."""
-        from methyldl.data.dataset import generate_example_data_for_methylbert
+        from syto.data.dataset import generate_example_data_for_methylbert
 
         # Generate a longer sequence to ensure masking
         data = generate_example_data_for_methylbert(
@@ -774,7 +774,7 @@ class TestMethylBertPretrainDataset(unittest.TestCase):
 
     def test_pretrain_dataset_with_various_lengths(self):
         """Test pretrain dataset handles various sequence lengths."""
-        from methyldl.data.dataset import generate_example_data_for_methylbert
+        from syto.data.dataset import generate_example_data_for_methylbert
 
         for seq_len in [50, 120, 200]:
             with self.subTest(seq_len=seq_len):
@@ -858,7 +858,7 @@ class TestMethylBertSoftCollator(unittest.TestCase):
 
     def test_soft_finetune_collator(self):
         """Test soft-label collator stacks float labels and on_target_mask."""
-        from methyldl.modelling.classifiers.methylbert import (
+        from syto.modelling.classifiers.methylbert import (
             methylbert_finetune_soft_collator,
         )
 
@@ -897,7 +897,7 @@ class TestMethylBertSoftCollator(unittest.TestCase):
 
     def test_soft_finetune_collator_with_list_labels(self):
         """Test that collator handles list labels (non-tensor) too."""
-        from methyldl.modelling.classifiers.methylbert import (
+        from syto.modelling.classifiers.methylbert import (
             methylbert_finetune_soft_collator,
         )
 
@@ -936,7 +936,7 @@ class TestMethylBertSoftLabelLossSetup(unittest.TestCase):
 
     def test_setup_loss_cwce(self):
         """Verify _setup_loss('cwce') returns ConfidenceWeightedCrossEntropy."""
-        from methyldl.modelling.loss import ConfidenceWeightedCrossEntropy
+        from syto.modelling.loss import ConfidenceWeightedCrossEntropy
 
         config = self._build_small_hf_config(num_labels=5, loss="cwce")
         model = MethylBertEmbeddedDMR(config, seq_len=5)

@@ -2,7 +2,7 @@ import unittest
 import numpy as np
 import torch
 
-from methyldl.modelling.evaluation import (
+from syto.modelling.evaluation import (
     calculate_metric_with_sklearn,
     preprocess_logits_for_prediction,
     keep_logits_only,

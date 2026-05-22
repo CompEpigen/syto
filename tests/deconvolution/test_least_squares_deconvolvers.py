@@ -8,7 +8,7 @@ import joblib
 import numpy as np
 from sklearn.exceptions import NotFittedError
 
-from methyldl.deconvolution.least_squares_deconvolvers import (
+from syto.deconvolution.least_squares_deconvolvers import (
     AbstractLSDeconvolver,
     NNLSDeconvolver,
     PSLSDeconvolver,
@@ -200,7 +200,7 @@ class TestNNLSDeconvolver(unittest.TestCase, LeastSquaresDeconvolverAssertions):
         with self.assertRaises(AssertionError):
             self.deconvolver.predict_single_sample(np.array([1.0, 0.0], dtype=float))
 
-    @patch("methyldl.deconvolution.least_squares_deconvolvers.tqdm", _passthrough_tqdm)
+    @patch("syto.deconvolution.least_squares_deconvolvers.tqdm", _passthrough_tqdm)
     def test_predict_chunk_sequential_matches_expected_outputs(self):
         """Chunk-local sequential prediction should preserve the exact synthetic solution."""
         normalized, unnormalized, residuals = (
@@ -211,7 +211,7 @@ class TestNNLSDeconvolver(unittest.TestCase, LeastSquaresDeconvolverAssertions):
         np.testing.assert_allclose(unnormalized, self.samples[:3], atol=1e-10)
         np.testing.assert_allclose(residuals, np.zeros(3), atol=1e-10)
 
-    @patch("methyldl.deconvolution.least_squares_deconvolvers.tqdm", _passthrough_tqdm)
+    @patch("syto.deconvolution.least_squares_deconvolvers.tqdm", _passthrough_tqdm)
     def test_predict_sequential_matches_expected_outputs(self):
         """Sequential batch prediction should recover the known proportions exactly."""
         normalized, unnormalized, residuals = self.deconvolver._predict_sequential(
@@ -222,7 +222,7 @@ class TestNNLSDeconvolver(unittest.TestCase, LeastSquaresDeconvolverAssertions):
         np.testing.assert_allclose(unnormalized, self.samples, atol=1e-10)
         np.testing.assert_allclose(residuals, np.zeros(len(self.samples)), atol=1e-10)
 
-    @patch("methyldl.deconvolution.least_squares_deconvolvers.tqdm", _passthrough_tqdm)
+    @patch("syto.deconvolution.least_squares_deconvolvers.tqdm", _passthrough_tqdm)
     def test_predict_parallel_matches_sequential_outputs(self):
         """Parallel NNLS should match the sequential implementation on the same inputs."""
         sequential = self.deconvolver.predict(self.samples, n_workers=1)
@@ -238,7 +238,7 @@ class TestNNLSDeconvolver(unittest.TestCase, LeastSquaresDeconvolverAssertions):
         ):
             self.deconvolver._predict_parallel(self.samples, n_workers=2, chunk_size=0)
 
-    @patch("methyldl.deconvolution.least_squares_deconvolvers.tqdm", _passthrough_tqdm)
+    @patch("syto.deconvolution.least_squares_deconvolvers.tqdm", _passthrough_tqdm)
     def test_predict_dispatches_between_sequential_and_parallel_paths(self):
         """Public prediction should switch between sequential and parallel backends."""
         sequential = self.deconvolver.predict(self.samples, n_workers=1)
@@ -247,7 +247,7 @@ class TestNNLSDeconvolver(unittest.TestCase, LeastSquaresDeconvolverAssertions):
         for sequential_output, parallel_output in zip(sequential, parallel):
             np.testing.assert_allclose(parallel_output, sequential_output, atol=1e-10)
 
-    @patch("methyldl.deconvolution.least_squares_deconvolvers.tqdm", _passthrough_tqdm)
+    @patch("syto.deconvolution.least_squares_deconvolvers.tqdm", _passthrough_tqdm)
     def test_save_and_load_round_trip(self):
         """save/load should round-trip a fitted NNLS model and produce identical predictions."""
         expected = self.deconvolver.predict(self.samples, n_workers=1)
@@ -404,7 +404,7 @@ class TestPSLSDeconvolverCVXPY(unittest.TestCase, LeastSquaresDeconvolverAsserti
         with self.assertRaisesRegex(ValueError, "Unsupported solver_type: bogus"):
             self.deconvolver.predict_single_sample(self.samples[0])
 
-    @patch("methyldl.deconvolution.least_squares_deconvolvers.tqdm", _passthrough_tqdm)
+    @patch("syto.deconvolution.least_squares_deconvolvers.tqdm", _passthrough_tqdm)
     def test_predict_sequential_uses_cvxpy_solver(self):
         """Sequential PSLS prediction should honor the configured CVXPY backend."""
         predictions = self.deconvolver._predict_sequential(self.samples)
@@ -428,7 +428,7 @@ class TestPSLSDeconvolverCVXPY(unittest.TestCase, LeastSquaresDeconvolverAsserti
                 chunk_size=0,
             )
 
-    @patch("methyldl.deconvolution.least_squares_deconvolvers.tqdm", _passthrough_tqdm)
+    @patch("syto.deconvolution.least_squares_deconvolvers.tqdm", _passthrough_tqdm)
     def test_predict_parallel_matches_expected_outputs(self):
         """Parallel CVXPY PSLS should recover the known simplex solutions."""
         predictions = self.deconvolver._predict_parallel(
@@ -439,7 +439,7 @@ class TestPSLSDeconvolverCVXPY(unittest.TestCase, LeastSquaresDeconvolverAsserti
 
         np.testing.assert_allclose(predictions, self.samples, atol=CVXPY_ATOL)
 
-    @patch("methyldl.deconvolution.least_squares_deconvolvers.tqdm", _passthrough_tqdm)
+    @patch("syto.deconvolution.least_squares_deconvolvers.tqdm", _passthrough_tqdm)
     def test_predict_dispatches_between_sequential_and_parallel_paths(self):
         """Public PSLS prediction should switch between sequential and parallel backends."""
         sequential = self.deconvolver.predict(self.samples, n_workers=1)
@@ -448,7 +448,7 @@ class TestPSLSDeconvolverCVXPY(unittest.TestCase, LeastSquaresDeconvolverAsserti
         np.testing.assert_allclose(sequential, self.samples, atol=CVXPY_ATOL)
         np.testing.assert_allclose(parallel, self.samples, atol=CVXPY_ATOL)
 
-    @patch("methyldl.deconvolution.least_squares_deconvolvers.tqdm", _passthrough_tqdm)
+    @patch("syto.deconvolution.least_squares_deconvolvers.tqdm", _passthrough_tqdm)
     def test_save_and_load_round_trip(self):
         """save/load should round-trip a fitted CVXPY PSLS model and produce matching predictions."""
         expected = self.deconvolver.predict(self.samples, n_workers=1)
@@ -580,7 +580,7 @@ class TestPSLSDeconvolverPGD(unittest.TestCase, LeastSquaresDeconvolverAssertion
 
         np.testing.assert_allclose(prediction, self.samples[3], atol=1e-4)
 
-    @patch("methyldl.deconvolution.least_squares_deconvolvers.tqdm", _passthrough_tqdm)
+    @patch("syto.deconvolution.least_squares_deconvolvers.tqdm", _passthrough_tqdm)
     def test_predict_sequential_uses_pgd_solver(self):
         """Sequential PSLS prediction should honor the configured PGD backend."""
         predictions = self.deconvolver._predict_sequential(self.samples)
@@ -615,7 +615,7 @@ class TestPSLSDeconvolverPGD(unittest.TestCase, LeastSquaresDeconvolverAssertion
                 chunk_size=0,
             )
 
-    @patch("methyldl.deconvolution.least_squares_deconvolvers.tqdm", _passthrough_tqdm)
+    @patch("syto.deconvolution.least_squares_deconvolvers.tqdm", _passthrough_tqdm)
     def test_predict_parallel_matches_expected_outputs(self):
         """Parallel PGD PSLS should recover the known simplex solutions."""
         predictions = self.deconvolver._predict_parallel(
@@ -626,7 +626,7 @@ class TestPSLSDeconvolverPGD(unittest.TestCase, LeastSquaresDeconvolverAssertion
 
         np.testing.assert_allclose(predictions, self.samples, atol=1e-4)
 
-    @patch("methyldl.deconvolution.least_squares_deconvolvers.tqdm", _passthrough_tqdm)
+    @patch("syto.deconvolution.least_squares_deconvolvers.tqdm", _passthrough_tqdm)
     def test_predict_dispatches_between_sequential_and_parallel_paths(self):
         """Public PSLS prediction should switch between sequential and parallel backends."""
         sequential = self.deconvolver.predict(self.samples, n_workers=1)
@@ -635,7 +635,7 @@ class TestPSLSDeconvolverPGD(unittest.TestCase, LeastSquaresDeconvolverAssertion
         np.testing.assert_allclose(sequential, self.samples, atol=1e-4)
         np.testing.assert_allclose(parallel, self.samples, atol=1e-4)
 
-    @patch("methyldl.deconvolution.least_squares_deconvolvers.tqdm", _passthrough_tqdm)
+    @patch("syto.deconvolution.least_squares_deconvolvers.tqdm", _passthrough_tqdm)
     def test_save_and_load_round_trip(self):
         """save/load should round-trip a fitted PGD PSLS model and produce matching predictions."""
         expected = self.deconvolver.predict(self.samples, n_workers=1)

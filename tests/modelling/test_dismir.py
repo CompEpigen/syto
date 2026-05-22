@@ -7,9 +7,9 @@ import pandas as pd
 from unittest.mock import patch, MagicMock, mock_open
 from parameterized import parameterized
 import shutil
-from methyldl.data.dataset import generate_example_data
+from syto.data.dataset import generate_example_data
 
-from methyldl.modelling.classifiers.dismir import (
+from syto.modelling.classifiers.dismir import (
     Dismir,
     DISMIRNet,
     VariableLengthDataset,
@@ -758,7 +758,7 @@ class TestDismirSoftLabels(DismirTestBase):
 
     def test_soft_label_criterion_is_cwce(self):
         """With soft_labels=True and dmr_attention_based, criterion should be CWCE."""
-        from methyldl.modelling.loss import ConfidenceWeightedCrossEntropy
+        from syto.modelling.loss import ConfidenceWeightedCrossEntropy
 
         model = Dismir(
             max_sequence_length=128,

@@ -23,12 +23,12 @@ import logging
 import numpy as np
 import pandas as pd
 
-from methyldl.modelling.classifiers.lookup import (
+from syto.modelling.classifiers.lookup import (
     LabelConfig,
     LookupClassifier,
     SoftLabelConfig,
 )
-from methyldl.data.soft_labeling import extract_cpg_signature
+from syto.data.soft_labeling import extract_cpg_signature
 
 warnings.filterwarnings("ignore")
 

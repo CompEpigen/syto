@@ -18,18 +18,18 @@ import torch
 warnings.filterwarnings("ignore")
 
 # Import the experiment wrapper classes - adjust imports as needed
-from methyldl.modelling.experiment_wrappers import (
+from syto.modelling.experiment_wrappers import (
     AbstractMLFlowExperiment,
     DismirMLflowExperiment,
     EpigenBERT2MLflowExperiment,
     MethylBertMLflowExperiment,
     RestartOnPoorPerformanceCallback,
 )
-from methyldl.modelling.classifiers.dnabert2 import (
+from syto.modelling.classifiers.dnabert2 import (
     TrainingArguments as EpigenTrainingArguments,
 )
-from methyldl.data.dataset import generate_example_data
-from methyldl.modelling.classifiers.methylbert import default_methylbert_config
+from syto.data.dataset import generate_example_data
+from syto.modelling.classifiers.methylbert import default_methylbert_config
 
 
 def is_singularity_container():
@@ -658,7 +658,7 @@ class TestAbstractMLFlowExperiment(ExperimentTestBase):
 class TestDismirMLFlowExperiment(ExperimentTestBase):
     """Test the DismirMLFlowExperiment class."""
 
-    @patch("methyldl.modelling.experiment_wrappers")
+    @patch("syto.modelling.experiment_wrappers")
     def test_dismir_initialization(self, mock_dismir_class):
         """Test Dismir experiment initialization."""
         experiment = DismirMLflowExperiment(
@@ -743,8 +743,8 @@ class TestEpigenBERT2MLflowExperiment(ExperimentTestBase):
         self.assertIn("metrics", results)
         _ = self.verify_experiment_was_logged(experiment)
 
-    @patch("methyldl.modelling.experiment_wrappers.SupervisedDataset")
-    @patch("methyldl.modelling.experiment_wrappers.EpigenDnabert2")
+    @patch("syto.modelling.experiment_wrappers.SupervisedDataset")
+    @patch("syto.modelling.experiment_wrappers.EpigenDnabert2")
     def test_progressive_predict_train_valid_standard_branch(
         self, mock_epigen_class, mock_supervised_dataset
     ):
@@ -801,10 +801,10 @@ class TestEpigenBERT2MLflowExperiment(ExperimentTestBase):
             mock_dataset, batch_size=None
         )
 
-    @patch("methyldl.modelling.experiment_wrappers.mlflow.log_metric")
+    @patch("syto.modelling.experiment_wrappers.mlflow.log_metric")
     @patch.object(EpigenBERT2MLflowExperiment, "_progressive_predict")
     @patch.object(EpigenBERT2MLflowExperiment, "_get_best_checkpoint")
-    @patch("methyldl.modelling.experiment_wrappers.EpigenDnabert2")
+    @patch("syto.modelling.experiment_wrappers.EpigenDnabert2")
     def test_dnabert2_train_dataset_multiclass(
         self,
         mock_epigen_class,
@@ -876,10 +876,10 @@ class TestEpigenBERT2MLflowExperiment(ExperimentTestBase):
         self.assertTrue(mock_model_instance.fine_tune.called)
         self.assertEqual(mock_progressive_predict.call_count, len(experiment.splits))
 
-    @patch("methyldl.modelling.experiment_wrappers.mlflow.log_metric")
+    @patch("syto.modelling.experiment_wrappers.mlflow.log_metric")
     @patch.object(EpigenBERT2MLflowExperiment, "_progressive_predict")
     @patch.object(EpigenBERT2MLflowExperiment, "_get_best_checkpoint")
-    @patch("methyldl.modelling.experiment_wrappers.EpigenDnabert2")
+    @patch("syto.modelling.experiment_wrappers.EpigenDnabert2")
     def test_dnabert2_train_dataset_multiclass_with_training_args(
         self,
         mock_epigen_class,

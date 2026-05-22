@@ -18,14 +18,14 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from methyldl.data import LOYFER_CELL_TYPE_MATCH_DICT
-from methyldl.data.pseudo_bulk_generation import (
+from syto.data import LOYFER_CELL_TYPE_MATCH_DICT
+from syto.data.pseudo_bulk_generation import (
     consolidate_ios_pickles,
     run_ios_generation_parallel,
 )
-from methyldl.data.read_preparation import prepare_splits_for_pseudobulk
-from methyldl.data.split_rebalancing import rebalance_splits
-from methyldl.modelling.classifiers.lazy_classifier_factory import (
+from syto.data.read_preparation import prepare_splits_for_pseudobulk
+from syto.data.split_rebalancing import rebalance_splits
+from syto.modelling.classifiers.lazy_classifier_factory import (
     read_classifier_factory,
 )
 

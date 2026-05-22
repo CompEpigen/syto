@@ -3,10 +3,10 @@ import os
 from types import SimpleNamespace
 
 import torch
-import methyldl.modelling.classifiers.dnabert2 as dnabert2_module
+import syto.modelling.classifiers.dnabert2 as dnabert2_module
 
-from methyldl.data.dataset import SupervisedDataset, generate_example_data
-from methyldl.modelling.classifiers.dnabert2 import EpigenDnabert2, TrainingArguments
+from syto.data.dataset import SupervisedDataset, generate_example_data
+from syto.modelling.classifiers.dnabert2 import EpigenDnabert2, TrainingArguments
 from unittest.mock import patch, MagicMock
 import tempfile
 from parameterized import parameterized
@@ -305,7 +305,7 @@ class TestEpigenDnabert2TrainerBranches(unittest.TestCase):
         trainer_instance = MagicMock()
 
         with patch(
-            "methyldl.modelling.classifiers.dnabert2.transformers.Trainer",
+            "syto.modelling.classifiers.dnabert2.transformers.Trainer",
             return_value=trainer_instance,
         ) as mocked_trainer:
             trainer = model._init_trainer(
@@ -341,7 +341,7 @@ class TestEpigenDnabert2TrainerBranches(unittest.TestCase):
         trainer_instance = MagicMock()
 
         with patch(
-            "methyldl.modelling.classifiers.dnabert2.transformers.Trainer",
+            "syto.modelling.classifiers.dnabert2.transformers.Trainer",
             return_value=trainer_instance,
         ) as mocked_trainer:
             trainer = model._init_trainer(args=args)
@@ -362,7 +362,7 @@ class TestEpigenDnabert2TrainerBranches(unittest.TestCase):
         trainer_instance.predict.return_value = prediction
 
         with patch(
-            "methyldl.modelling.classifiers.dnabert2.transformers.Trainer",
+            "syto.modelling.classifiers.dnabert2.transformers.Trainer",
             return_value=trainer_instance,
         ) as mocked_trainer, patch("gc.collect") as mocked_collect, patch(
             "torch.cuda.empty_cache"
@@ -410,7 +410,7 @@ class TestEpigenDnabert2TrainerBranches(unittest.TestCase):
         trainer_instance.predict.return_value = prediction
 
         with patch(
-            "methyldl.modelling.classifiers.dnabert2.transformers.Trainer",
+            "syto.modelling.classifiers.dnabert2.transformers.Trainer",
             return_value=trainer_instance,
         ) as mocked_trainer, patch("gc.collect") as mocked_collect, patch(
             "torch.cuda.empty_cache"

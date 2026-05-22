@@ -1,7 +1,7 @@
 import unittest
 import numpy as np
 import pandas as pd
-from methyldl.data.soft_labeling import (
+from syto.data.soft_labeling import (
     extract_cpg_signature,
     signature_distance,
     apply_normalized_knn_smoothing,

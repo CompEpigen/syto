@@ -1,6 +1,6 @@
 import unittest
 
-from methyldl.data.dataset import (
+from syto.data.dataset import (
     generate_example_data,
     generate_example_data_for_methylbert,
 )

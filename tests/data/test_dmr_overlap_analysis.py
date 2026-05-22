@@ -1,6 +1,6 @@
 import unittest
 
-from methyldl.data.sequencing.dmr_overlap_analysis import (
+from syto.data.sequencing.dmr_overlap_analysis import (
     _empty_overlap_result,
     get_overlapping_dmrs,
     analyze_read_dmr_overlap,

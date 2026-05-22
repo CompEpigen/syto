@@ -5,12 +5,12 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 
-from methyldl.deconvolution.xgbdeconvolver import (
+from syto.deconvolution.xgbdeconvolver import (
     XGBDeconvolverConfig,
     XGBoostDeconvolver,
     train_xgb_deconvolver,
 )
-from methyldl.deconvolution.history import DeconvolutionHistory
+from syto.deconvolution.history import DeconvolutionHistory
 
 
 class DummyEstimator:
@@ -210,9 +210,7 @@ class TestXGBoostDeconvolverFitEvaluateAndIO(unittest.TestCase):
 class TestTrainXGBDeconvolverConvenience(unittest.TestCase):
     """Tests for the train_xgb_deconvolver convenience wrapper."""
 
-    @patch(
-        "methyldl.deconvolution.xgbdeconvolver.XGBoostDeconvolver.fit", autospec=True
-    )
+    @patch("syto.deconvolution.xgbdeconvolver.XGBoostDeconvolver.fit", autospec=True)
     def test_train_convenience_uses_default_config_and_returns_history(self, mock_fit):
         """Convenience function should build default config and return model history."""
         X_train = np.ones((2, 39, 40), dtype=float)
@@ -242,9 +240,7 @@ class TestTrainXGBDeconvolverConvenience(unittest.TestCase):
         self.assertIsInstance(history, DeconvolutionHistory)
         self.assertEqual(history.train_loss, [0.2])
 
-    @patch(
-        "methyldl.deconvolution.xgbdeconvolver.XGBoostDeconvolver.fit", autospec=True
-    )
+    @patch("syto.deconvolution.xgbdeconvolver.XGBoostDeconvolver.fit", autospec=True)
     def test_train_convenience_respects_provided_config(self, mock_fit):
         """Convenience function should preserve explicitly provided config values."""
         X_train = np.ones((2, 39, 40), dtype=float)

@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 import pandas as pd
 from parameterized import parameterized
-from methyldl.data.sequencing.genome import (
+from syto.data.sequencing.genome import (
     add_reference_cpg_counts,
     generate_kmer_str_with_overlap,
     get_alter_of_dna_sequence,
@@ -320,7 +320,7 @@ class TestAddReferenceCpgCounts(unittest.TestCase):
             ]
         )
 
-        with patch("methyldl.data.sequencing.genome.pysam.FastaFile") as fasta_cls:
+        with patch("syto.data.sequencing.genome.pysam.FastaFile") as fasta_cls:
             result = add_reference_cpg_counts(empty_df, "unused.fa", verbose=True)
 
         self.assertIs(result, empty_df)
@@ -354,7 +354,7 @@ class TestAddReferenceCpgCounts(unittest.TestCase):
         )
 
         with patch(
-            "methyldl.data.sequencing.genome.pysam.FastaFile", return_value=fake_ref
+            "syto.data.sequencing.genome.pysam.FastaFile", return_value=fake_ref
         ):
             with patch("sys.stdout", new_callable=io.StringIO) as stdout:
                 result = add_reference_cpg_counts(df, "reference.fa", verbose=True)
@@ -389,7 +389,7 @@ class TestAddReferenceCpgCounts(unittest.TestCase):
         fake_ref = FakeReferenceFasta(sequences={"chr1": "ACGAAA"})
 
         with patch(
-            "methyldl.data.sequencing.genome.pysam.FastaFile", return_value=fake_ref
+            "syto.data.sequencing.genome.pysam.FastaFile", return_value=fake_ref
         ):
             with patch("sys.stdout", new_callable=io.StringIO) as stdout:
                 result = add_reference_cpg_counts(df, "reference.fa", verbose=False)
@@ -415,7 +415,7 @@ class TestAddReferenceCpgCounts(unittest.TestCase):
         fake_ref = FakeReferenceFasta(sequences={"chr1": "ACGAAA"})
 
         with patch(
-            "methyldl.data.sequencing.genome.pysam.FastaFile", return_value=fake_ref
+            "syto.data.sequencing.genome.pysam.FastaFile", return_value=fake_ref
         ):
             result = add_reference_cpg_counts(df, "reference.fa", verbose=False)
 

@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Tuple
 import numpy as np
 import pandas as pd
 
-from methyldl.deconvolution.evaluation import compute_deconvolution_metrics
+from syto.deconvolution.evaluation import compute_deconvolution_metrics
 
 CALIBRATION_METHODS = [
     "uncalibrated",

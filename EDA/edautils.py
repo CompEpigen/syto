@@ -11,7 +11,7 @@ from matplotlib.gridspec import GridSpec
 from scipy import stats
 from sklearn.metrics import confusion_matrix, r2_score
 
-from methyldl.deconvolution.deep_deconvolvers.diagonal_aware_deconvolver import (
+from syto.deconvolution.deep_deconvolvers.diagonal_aware_deconvolver import (
     DiagonalAwareDeconvolver,
 )
 

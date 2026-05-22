@@ -1,4 +1,4 @@
-"""Tests for methyldl.deconvolution.deep_deconvolvers.mlp.
+"""Tests for syto.deconvolution.deep_deconvolvers.mlp.
 
 Covers:
     - _MLPDeconvolverModel  architecture and forward pass
@@ -15,11 +15,11 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from methyldl.deconvolution.deep_deconvolvers.mlp import (
+from syto.deconvolution.deep_deconvolvers.mlp import (
     MLPDeconvolver,
     _MLPDeconvolverModel,
 )
-from methyldl.deconvolution.history import DeconvolutionHistory
+from syto.deconvolution.history import DeconvolutionHistory
 
 # ── Shared constants ──────────────────────────────────────────────────────────
 N_FEATURES = 12

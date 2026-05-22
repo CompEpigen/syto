@@ -2,7 +2,7 @@ import unittest
 import torch
 import torch.nn.functional as F
 
-from methyldl.modelling.loss import (
+from syto.modelling.loss import (
     ConfidenceWeightedCrossEntropy,
     FocalLoss,
     sigmoid_focal_loss,
