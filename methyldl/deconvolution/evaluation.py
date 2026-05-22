@@ -129,23 +129,6 @@ def compute_deconvolution_metrics(
     return metrics
 
 
-def compute_combined_loss(
-    pred: np.ndarray,
-    target: np.ndarray,
-    mse_weight: float = 1.0,
-    kl_weight: float = 0.5,
-    eps: float = 1e-8,
-) -> float:
-    """Compute combined MSE + KL loss matching PyTorch version."""
-    assert pred.shape == target.shape, "pred and target must have the same shape"
-
-    mse = ((pred - target) ** 2).mean()
-    target_safe = np.clip(target, eps, None)
-    pred_safe = np.clip(pred, eps, None)
-    kl = (target_safe * (np.log(target_safe) - np.log(pred_safe))).sum(axis=-1).mean()
-    return mse_weight * mse + kl_weight * kl
-
-
 # CONFIDENCE INTERVALS USING BOOTSTRAP
 
 

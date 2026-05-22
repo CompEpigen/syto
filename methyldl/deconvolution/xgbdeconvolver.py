@@ -285,26 +285,6 @@ class XGBoostDeconvolver(AbstractDeconvolver):
 
         return proportions
 
-    def evaluate(
-        self,
-        X: np.ndarray,  # pylint: disable=invalid-name
-        y: np.ndarray,
-        loss_weights: Optional[Dict[str, float]] = None,
-    ) -> Dict[str, float]:
-        """
-        Evaluate model on given data.
-
-        Returns all metrics matching the PyTorch version.
-        """
-        if loss_weights is None:
-            loss_weights = {"mse": 1.0, "kl": 0.5}
-
-        pred = self.predict(X)
-        metrics = compute_deconvolution_metrics(pred, y)
-        metrics["loss"] = compute_combined_loss(pred, y, **loss_weights)
-
-        return metrics
-
     def get_feature_importance(self, aggregate: bool = True) -> Dict[str, np.ndarray]:
         """Get feature importance scores."""
         if not self._is_fitted:
