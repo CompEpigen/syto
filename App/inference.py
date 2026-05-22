@@ -14,7 +14,6 @@ import pickle
 import logging
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
-import torch.nn as nn
 import torch
 from copy import deepcopy
 
@@ -43,6 +42,8 @@ from methyldl.deconvolution.least_squares_deconvolvers import (
     PSLSDeconvolver,
     NNLSDeconvolver,
 )
+from methyldl.deconvolution.deep_deconvolvers.mlp import MLPDeconvolver
+from methyldl.deconvolution.deep_deconvolvers.swn import SWNDeconvolver
 from methyldl.deconvolution.xgbdeconvolver import (
     XGBoostDeconvolver,
 )
@@ -352,55 +353,6 @@ class InferencePipeline:
 
         return prepared_uxm
 
-    # ═══════════════════════════════════════════════════════════════════
-    #  Stage 3: classifier predictions
-    # ═══════════════════════════════════════════════════════════════════
-
-    # def _build_classifier_adapter(self) -> ClassifierAdapter:
-    #     """Build a :class:`ClassifierAdapter` from the pipeline config.
-
-    #     Reads the ``classifier`` (or legacy ``model``) section of the
-    #     configuration to determine which classifier backend to use and
-    #     how to initialise it.
-
-    #     Returns
-    #     -------
-    #     ClassifierAdapter
-    #     """
-    #     classifier_cfg = self.config.get("classifier", self.config.get("model", {}))
-    #     classifier_type = classifier_cfg.get("classifier_type", "methylbert")
-    #     self.classifier_type = classifier_type
-    #     checkpoint_path = self.config["checkpoint_path"]
-    #     seq_len = self.config.get("max_sequence_length", 150)
-    #     batch_size = self.config.get("prediction_batch_size", 2200)
-
-    #     adapter = ClassifierAdapter(
-    #         classifier_type=classifier_type,
-    #         checkpoint_path=checkpoint_path,
-    #         labels_dict=self.labels_dict,
-    #         num_labels=self.num_labels,
-    #         seq_length=seq_len,
-    #         foundation_model_path=classifier_cfg.get(
-    #             "foundation_model", "hanyangii/methylbert_hg19_12l"
-    #         ),
-    #         classifier_head_implementation=classifier_cfg.get(
-    #             "classifier_head_implementation", "dmr_attention_based"
-    #         ),
-    #         dmr_label_column=classifier_cfg.get("dmr_label_column", "dmr_ctype_label"),
-    #         dismir_flavor=classifier_cfg.get("dismir_flavor", "lstm"),
-    #         cancer_detector_prior_type=classifier_cfg.get(
-    #             "cancer_detector_prior_type", "uniform"
-    #         ),
-    #         soft_labels=classifier_cfg.get("soft_labels", False),
-    #         batch_size=batch_size,
-    #     )
-
-    #     self.logger.info(
-    #         f"Built ClassifierAdapter: type={classifier_type}, "
-    #         f"checkpoint={checkpoint_path}"
-    #     )
-    #     return adapter
-
     def _predict_classifier(self) -> pd.DataFrame:
         """
         Run the configured classifier on the prepared reads.
@@ -411,7 +363,6 @@ class InferencePipeline:
             The prepared_reads DataFrame augmented with ``prediction_*``
             columns (one per cell type).
         """
-        # adapter = self._build_classifier_adapter()
         classifier_cfg = self.config.get("classifier", self.config.get("model", {}))
         self.classifier_type = classifier_cfg.get("classifier_type")
         read_classifier = read_classifier_factory(
@@ -752,55 +703,13 @@ class InferencePipeline:
         self.logger.info(f"Loading {architecture} from {checkpoint_path}")
 
         if architecture == "Shallow_Wide_Network":
-            #     deconvolver  = nn.Sequential(
-            #     nn.Linear(78, 1024),
-            #     nn.GELU(),
-            #     nn.Dropout(0.2),
-            #     nn.Linear(1024, 39),
-            #     nn.Softmax(dim=-1)
-            # )
-            deconvolver = nn.Sequential(
-                nn.Linear(self.input_length, 1024),
-                nn.GELU(),
-                nn.Dropout(0.2),
-                nn.Linear(1024, 39),
-                nn.Softmax(dim=-1),
-            )
+            deconvolver = SWNDeconvolver.load(checkpoint_path)
         elif architecture == "3Layer_MLP":
-            # deconvolver = nn.Sequential(
-            #     nn.Linear(78, 128),
-            #     nn.GELU(),
-            #     nn.Dropout(0.2),
-            #     nn.Linear(128, 128),
-            #     nn.GELU(),
-            #     nn.Dropout(0.2),
-            #     nn.Linear(128, 64),
-            #     nn.GELU(),
-            #     nn.Dropout(0.2),
-            #     nn.Linear(64, 39),
-            #     nn.Softmax(dim=-1)
-            # )
-            deconvolver = nn.Sequential(
-                nn.Linear(self.input_length, 512),
-                nn.GELU(),
-                nn.Dropout(0.2),
-                nn.Linear(512, 256),
-                nn.GELU(),
-                nn.Dropout(0.2),
-                nn.Linear(256, self.input_length),
-                nn.GELU(),
-                nn.Dropout(0.1),
-                nn.Linear(self.input_length, 39),
-                nn.Softmax(dim=-1),
-            )
+            deconvolver = MLPDeconvolver.load(checkpoint_path)
         else:
             raise ValueError(
                 "Architecture for NN method should be either Shallow_Wide_Network or 3Layer_MLP"
             )
-        device = "cuda"
-        deconvolver.to(device)
-        deconvolver.load_state_dict(torch.load(checkpoint_path, weights_only=True))
-        deconvolver.eval()
         X = torch.FloatTensor(
             self._extract_features_by_mask(
                 np.array(
@@ -811,9 +720,8 @@ class InferencePipeline:
                 self.features_mask,
             )
         ).to("cuda")
-        # X = torch.unsqueeze(X,0)
-        # X = torch.concat([torch.diagonal(X[:, :, :39], dim1=1, dim2=2),X[:, :, -1]], dim=1)
-        deconv_preds = deconvolver(X)
+
+        deconv_preds = deconvolver.predict(X)
         proportions = np.round(deconv_preds.to("cpu").detach().numpy(), 4)
         self.logger.debug(f"{architecture} proportions: {proportions}")
 
