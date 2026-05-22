@@ -5,7 +5,6 @@ import pandas as pd
 
 # Valid substitution strategies for missing DMR labels.
 VALID_SUBSTITUTION_STRATEGIES = (
-    "zeroes",
     "prior_blending",
     "prior_imputation",
     "uniform_number",
@@ -16,7 +15,7 @@ def _fill_in_missing_labels(
     df: pd.DataFrame,
     group_cols: List[str],
     labels_dict: dict,
-    substitution_strategy: str = "zeroes",
+    substitution_strategy: str = "uniform_number",
     uniform_prior: Optional[pd.DataFrame] = None,
     prior_weight: float = 1.0,
 ) -> pd.DataFrame:
@@ -26,7 +25,6 @@ def _fill_in_missing_labels(
     that are absent from *df*, an optional post-processing step is applied
     depending on *substitution_strategy*:
 
-    * ``"zeroes"`` – leave synthetic rows as zeros (current default).
     * ``"prior_blending"`` – blend **every** row with the uniform prior
       using the per-row ``n_reads`` count:
       ``blended = (n / (n + w)) * observed + (w / (n + w)) * prior``
@@ -34,7 +32,7 @@ def _fill_in_missing_labels(
       entirely to the prior.
     * ``"prior_imputation"`` – replace only rows with ``n_reads == 0``
       with the corresponding prior row; all other rows are untouched.
-    * ``"uniform_number"`` - assigns each cell a probability of 1/n_classes
+    * ``"uniform_number"`` - assigns each cell a probability of 1/n_classes (default)
 
     Parameters
     ----------
@@ -45,7 +43,7 @@ def _fill_in_missing_labels(
     labels_dict : dict
         ``{int: str}`` mapping from label id to cell-type name.
     substitution_strategy : str
-        One of ``"zeroes"``, ``"prior_blending"``, ``"prior_imputation"``, ``"uniform_number"``.
+        One of ``"prior_blending"``, ``"prior_imputation"``, ``"uniform_number"``.
     uniform_prior : pd.DataFrame or None
         Pre-computed uniform prior matrix (required for ``prior_blending``
         and ``prior_imputation``).
@@ -57,10 +55,7 @@ def _fill_in_missing_labels(
             f"Unknown substitution_strategy '{substitution_strategy}'. "
             f"Must be one of {VALID_SUBSTITUTION_STRATEGIES}."
         )
-    if (
-        substitution_strategy not in ["zeroes", "uniform_number"]
-        and uniform_prior is None
-    ):
+    if substitution_strategy not in ["uniform_number"] and uniform_prior is None:
         raise ValueError(
             f"uniform_prior must be provided when substitution_strategy="
             f"'{substitution_strategy}'."
@@ -183,7 +178,7 @@ def aggregate_predictions_by_dmr(
     create_weight_from_cpgs: bool = True,
     fill_in_missing_labels: bool = False,
     labels_dict: dict = None,
-    substitution_strategy: str = "zeroes",
+    substitution_strategy: str = "uniform_number",
     uniform_prior: Optional[pd.DataFrame] = None,
     prior_weight: float = 1.0,
 ) -> pd.DataFrame:
@@ -208,11 +203,11 @@ def aggregate_predictions_by_dmr(
     labels_dict: dict
         Must be provided if fill_in_missing_labels is set to True
     substitution_strategy : str
-        Strategy for filling missing labels.  One of ``"zeroes"``,
-        ``"prior_blending"``, ``"prior_imputation"``.  Default ``"zeroes"``.
+        Strategy for filling missing labels.  One of ``"uniform_number"``,
+        ``"prior_blending"``, ``"prior_imputation"``.  Default ``"uniform_number"``.
     uniform_prior : pd.DataFrame or None
         Pre-computed uniform prior matrix.  Required when
-        *substitution_strategy* is not ``"zeroes"``.
+        *substitution_strategy* is not ``"uniform_number"``.
     prior_weight : float
         Weight of the prior in the blending formula.  Default ``1.0``.
 
