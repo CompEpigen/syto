@@ -214,8 +214,8 @@ def init_worker(
         Pre-defined proportions for target-proportion mode.
     dmr_sampling_variants : list[str], optional
         List of DMR sampling strategies to apply per IO example.
-        Each entry must be ``"uniform"`` or ``"random"``.
-        Default ``["uniform"]``.
+        Each entry must be ``"uniform_multinomial"``.
+        Default ``["uniform_multinomial"]``.
     """
 
     global _worker_data
@@ -223,7 +223,7 @@ def init_worker(
     if num_prediction_classes is None:
         num_prediction_classes = num_labels
     if dmr_sampling_variants is None:
-        dmr_sampling_variants = ["uniform"]
+        dmr_sampling_variants = ["uniform_multinomial"]
 
     # Set unique random seed per process
     seed = mp.current_process().pid
@@ -275,7 +275,9 @@ def worker_task(batch_args):
     results = []
     exceptions = []
 
-    dmr_sampling_variants = _worker_data.get("dmr_sampling_variants", ["uniform"])
+    dmr_sampling_variants = _worker_data.get(
+        "dmr_sampling_variants", ["uniform_multinomial"]
+    )
 
     for i, _ in enumerate(batch_indices):
         try:
@@ -313,26 +315,6 @@ def worker_task(batch_args):
             exceptions.append((labels, proportions, str(e)))
 
     return results, exceptions
-
-
-def _compute_samples_per_dmr_uniform(labels, n_samples_list, num_labels):
-    """Uniform DMR allocation: equal reads per DMR group.
-
-    Parameters
-    ----------
-    labels : list[int]
-        Cell-type labels in this mixture.
-    n_samples_list : list[int]
-        Total reads to sample for each label.
-    num_labels : int
-        Number of DMR groups.
-
-    Returns
-    -------
-    dict
-        ``{label: int}`` with reads per DMR group for each label.
-    """
-    return {label: int(n / num_labels) for label, n in zip(labels, n_samples_list)}
 
 
 def _compute_samples_per_dmr_multinomial(labels, n_samples_list, num_labels):
@@ -379,7 +361,7 @@ def generate_pseudo_bulk_optimized(
     num_labels=39,
     num_prediction_classes=None,
     generate_uxm_inputs=True,
-    dmr_sampling="uniform",
+    dmr_sampling="uniform_multinomial",
 ):
     """Optimized version using pre-computed groups.
 
@@ -403,31 +385,27 @@ def generate_pseudo_bulk_optimized(
     generate_uxm_inputs : bool
         If True, compute UXM sf/counts tables. Default True.
     dmr_sampling : str
-        DMR sampling strategy. ``"uniform"`` distributes reads equally
-        across DMR groups; ``"random"`` generates random weights per DMR,
-        normalizes them, and multiplies by the target count.  Default
-        ``"uniform"``.
+        DMR sampling strategy. ``"uniform_multinomial"`` generates random weights per DMR,
+        normalizes them, and multiplies by the target count. (only strategy available)
+        Default ``"uniform_multinomial"``.
     """
     if num_prediction_classes is None:
         num_prediction_classes = num_labels
     assert np.round(np.sum(proportions), 4) == 1, "Proportions must sum up to one"
     assert dmr_sampling in (
-        "uniform",
         "uniform_multinomial",
-    ), f"dmr_sampling must be 'uniform' or 'random', got '{dmr_sampling}'"
+    ), f"dmr_sampling must be 'uniform_multinomial', got '{dmr_sampling}'"
 
     n_samples_list = [int(total_samples * x) for x in proportions]
     sample_name = "pseudo_bulk_sample"
 
     # Compute per-DMR read counts based on the sampling strategy
-    if dmr_sampling == "uniform":
-        samples_per_dmr = _compute_samples_per_dmr_uniform(
-            labels, n_samples_list, num_labels
-        )
-    else:
+    if dmr_sampling == "uniform_multinomial":
         samples_per_dmr = _compute_samples_per_dmr_multinomial(
             labels, n_samples_list, num_labels
         )
+    else:
+        raise ValueError(f"Unsupported dmr_sampling strategy: {dmr_sampling}")
 
     subs = {}
     uxm_data = {}
@@ -438,10 +416,8 @@ def generate_pseudo_bulk_optimized(
         for label in labels:
             per_dmr = samples_per_dmr[label]
             for dmr_ctype_label in range(num_labels):
-                # per_dmr is an int for uniform, list[int] for random
-                n_per_dmr = (
-                    per_dmr if isinstance(per_dmr, int) else per_dmr[dmr_ctype_label]
-                )
+                # per_dmr is a list[int] for uniform_multinomial
+                n_per_dmr = per_dmr[dmr_ctype_label]
                 if n_per_dmr <= 0:
                     continue
                 try:
@@ -548,8 +524,8 @@ def run_ios_generation_parallel(
         Pre-defined proportion vectors, each of length ``num_labels``.
         When provided, overrides ``n_io_examples`` and random selection.
     dmr_sampling_variants : list[str], optional
-        List of DMR sampling strategies (``"uniform"`` and/or
-        ``"random"``).  Default ``["uniform"]``.
+        List of DMR sampling strategies (``"uniform_multinomial"``,).
+        Default ``["uniform_multinomial"]``.
     """
     if num_prediction_classes is None:
         num_prediction_classes = num_labels
@@ -560,7 +536,7 @@ def run_ios_generation_parallel(
     if n_read_per_split is None:
         n_read_per_split = int(4.75 * 1e5)
     if dmr_sampling_variants is None:
-        dmr_sampling_variants = ["uniform"]
+        dmr_sampling_variants = ["uniform_multinomial"]
 
     # Determine effective number of examples
     if target_proportions is not None:

@@ -9,6 +9,8 @@ import pickle
 
 from methyldl.data import pseudo_bulk_generation as pseudo_bulk_generation_module
 
+# pylint: disable=protected-access
+
 
 def build_prediction_columns():
     """Return the prediction columns expected by the pseudo-bulk helpers."""
@@ -369,7 +371,7 @@ class TestInitWorker(PseudoBulkGenerationTestBase):
 
         self.assertEqual(
             pseudo_bulk_generation_module._worker_data["dmr_sampling_variants"],
-            ["uniform"],
+            ["uniform_multinomial"],
         )
 
         for df in [train, valid, test]:
@@ -481,7 +483,6 @@ class TestGeneratePseudoBulkOptimized(PseudoBulkGenerationTestBase):
 
         for split_name, sub in subs.items():
             self.assertEqual(list(sub.columns), self.target_columns)
-            self.assertEqual(len(sub), 39)
 
         for split_name, (sf, counts) in uxm_data.items():
             self.assertEqual(
@@ -492,7 +493,6 @@ class TestGeneratePseudoBulkOptimized(PseudoBulkGenerationTestBase):
                 ["name", "direction", "pseudo_bulk_sample"],
             )
             self.assertTrue((sf["pseudo_bulk_sample"] == 0.5).all())
-            self.assertTrue((counts["pseudo_bulk_sample"] == 2).all())
 
     def test_generate_pseudo_bulk_optimized_skips_empty_grouped_split(self):
         """Skip a split entirely when all requested grouped lookups are missing."""
@@ -620,7 +620,9 @@ class TestRunIosGenerationParallel(PseudoBulkGenerationTestBase):
                 39,
                 True,
                 None,
-                ["uniform"],
+                [
+                    "uniform_multinomial",
+                ],
             ),
         )
         self.assertEqual(
@@ -809,32 +811,16 @@ class TestDMRSamplingStrategies(PseudoBulkGenerationTestBase):
             ),
         }
 
-    def test_uniform_dmr_sampling_distributes_equally(self):
-        """Uniform sampling gives equal reads per DMR group."""
-        labels, proportions_full, subs, uxm_data = (
-            pseudo_bulk_generation_module.generate_pseudo_bulk_optimized(
-                total_samples=39,
-                labels=[0],
-                proportions=[1.0],
-                grouped_splits=self._make_grouped_splits(),
-                target_columns=self.target_columns,
-                dmr_sampling="uniform",
-            )
-        )
-        self.assertEqual(labels, [0])
-        self.assertIn("train", subs)
-        self.assertEqual(len(subs["train"]), 39)
-
-    def test_random_dmr_sampling_produces_output(self):
-        """Random sampling produces valid output with non-uniform per-DMR counts."""
-        labels, proportions_full, subs, uxm_data = (
+    def test_uniform_multinomial_dmr_sampling_produces_output(self):
+        """Uniform multinomial sampling produces valid output with non-uniform per-DMR counts."""
+        labels, _, subs, _ = (
             pseudo_bulk_generation_module.generate_pseudo_bulk_optimized(
                 total_samples=390,
                 labels=[0],
                 proportions=[1.0],
                 grouped_splits=self._make_grouped_splits(),
                 target_columns=self.target_columns,
-                dmr_sampling="uniform",
+                dmr_sampling="uniform_multinomial",
             )
         )
         self.assertEqual(labels, [0])
@@ -856,16 +842,7 @@ class TestDMRSamplingStrategies(PseudoBulkGenerationTestBase):
 
 
 class TestComputeSamplesPerDmr(unittest.TestCase):
-    """Test the uniform and random DMR allocation helpers."""
-
-    def test_uniform_returns_dict_of_ints(self):
-        result = pseudo_bulk_generation_module._compute_samples_per_dmr_uniform(
-            labels=[0, 1],
-            n_samples_list=[390, 195],
-            num_labels=39,
-        )
-        self.assertEqual(result[0], 10)  # 390 / 39
-        self.assertEqual(result[1], 5)  # 195 / 39
+    """Test the uniform_multinomial DMR allocation helper."""
 
     def test_uniform_multinomial_returns_dict_of_lists(self):
         result = pseudo_bulk_generation_module._compute_samples_per_dmr_multinomial(
