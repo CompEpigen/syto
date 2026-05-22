@@ -38,7 +38,6 @@ def _build_target_columns(num_prediction_classes: int = 39) -> list:
     return cols
 
 
-# TODO: make sure that reference cells are matching labels --> probably need to be reordered
 def generate_pseudo_bulk(
     total_samples,
     labels,

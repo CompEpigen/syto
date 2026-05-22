@@ -54,7 +54,9 @@ def _safe_average_precision(labels: np.ndarray, predictions_proba: np.ndarray) -
         return sklearn.metrics.average_precision_score(labels, predictions_proba)
 
 
-def calculate_metric_with_sklearn(predictions_proba: np.ndarray, predictions: np.ndarray, labels: np.ndarray):
+def calculate_metric_with_sklearn(
+    predictions_proba: np.ndarray, predictions: np.ndarray, labels: np.ndarray
+):
     valid_mask = (
         labels != -100
     )  # Exclude padding tokens (assuming -100 is the padding token ID)
@@ -122,7 +124,6 @@ def keep_logits_only(raw_model_output, labels):
         raw_model_output = raw_model_output[0]  # grab logits
     # (if it is already a Tensor, we just fall through)
     return raw_model_output
-
 
 
 def compute_metrics(eval_pred):
@@ -197,4 +198,4 @@ def compute_metrics_soft_labels(eval_pred, threshold_func=lambda n: 0.5):
         # Fallback just in case hard labels were passed somehow
         hard_labels = soft_labels
 
-    return calculate_metric_with_sklearn(predictions_proba,predictions, hard_labels)
+    return calculate_metric_with_sklearn(predictions_proba, predictions, hard_labels)

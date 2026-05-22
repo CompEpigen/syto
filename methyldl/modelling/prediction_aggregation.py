@@ -10,6 +10,7 @@ VALID_SUBSTITUTION_STRATEGIES = (
     "uniform_number",
 )
 
+
 def _fill_in_missing_labels(
     df: pd.DataFrame,
     group_cols: List[str],
@@ -54,10 +55,7 @@ def _fill_in_missing_labels(
             f"Unknown substitution_strategy '{substitution_strategy}'. "
             f"Must be one of {VALID_SUBSTITUTION_STRATEGIES}."
         )
-    if (
-        substitution_strategy not in ["uniform_number"]
-        and uniform_prior is None
-    ):
+    if substitution_strategy not in ["uniform_number"] and uniform_prior is None:
         raise ValueError(
             f"uniform_prior must be provided when substitution_strategy="
             f"'{substitution_strategy}'."

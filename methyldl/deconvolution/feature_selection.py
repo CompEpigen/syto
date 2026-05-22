@@ -168,7 +168,6 @@ def compute_feature_mask(
         return mask
 
 
-
 def apply_feature_mask(
     matrix: np.ndarray,
     mask: np.ndarray,
@@ -197,9 +196,7 @@ def apply_feature_mask(
         n_samples = matrix.shape[0]
         results = []
         for i in range(n_samples):
-            compressed = np.ma.masked_array(
-                matrix[i], ~bool_mask
-            ).compressed()
+            compressed = np.ma.masked_array(matrix[i], ~bool_mask).compressed()
             results.append(compressed)
         return np.array(results)
     else:
