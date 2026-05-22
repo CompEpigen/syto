@@ -15,6 +15,7 @@ import unittest
 import numpy as np
 import sklearn.metrics
 
+
 class TestCalculateMetricWithSklearn(unittest.TestCase):
     """Test suite for calculate_metric_with_sklearn."""
 
@@ -24,9 +25,9 @@ class TestCalculateMetricWithSklearn(unittest.TestCase):
         labels = np.array([0, 1, 0, 0, 1, 1])
         predictions = np.array([0, 1, 0, 0, 1, 1])
         predictions_proba = np.array([0.1, 0.9, 0.2, 0.15, 0.85, 0.95])
-        
+
         metrics = calculate_metric_with_sklearn(predictions_proba, predictions, labels)
-        
+
         self.assertAlmostEqual(metrics["accuracy"], 1.0)
         self.assertAlmostEqual(metrics["f1"], 1.0)
         self.assertAlmostEqual(metrics["precision"], 1.0)
@@ -39,10 +40,10 @@ class TestCalculateMetricWithSklearn(unittest.TestCase):
         labels = np.array([0, 1, -100, 1])
         predictions = np.array([0, 1, 0, 1])  # prediction at index 2 should be ignored
         # The proba at index 2 (0.9) will be ignored by the valid_mask
-        predictions_proba = np.array([0.2, 0.8, 0.9, 0.85]) 
-        
+        predictions_proba = np.array([0.2, 0.8, 0.9, 0.85])
+
         metrics = calculate_metric_with_sklearn(predictions_proba, predictions, labels)
-        
+
         # Only indices 0, 1, 3 are used -> all correct
         self.assertAlmostEqual(metrics["accuracy"], 1.0)
         self.assertAlmostEqual(metrics["average_precision"], 1.0)
@@ -52,9 +53,9 @@ class TestCalculateMetricWithSklearn(unittest.TestCase):
         labels = np.array([0, 1, 1])
         predictions = np.array([0, 0, 1])  # 1 wrong
         predictions_proba = np.array([0.2, 0.4, 0.8])
-        
+
         metrics = calculate_metric_with_sklearn(predictions_proba, predictions, labels)
-        
+
         self.assertAlmostEqual(metrics["accuracy"], 2.0 / 3.0, places=5)
         self.assertTrue("average_precision" in metrics)
 
