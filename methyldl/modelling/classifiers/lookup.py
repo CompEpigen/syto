@@ -386,13 +386,13 @@ class LookupClassifier(AbstractReadClassifier):
                 )
                 return [1.0 / num_classes] * num_classes
             elif self.config.label_mode == "hard":
-                # Region completely unseen — return one hot of rejection class (last class)
+                # Region completely unseen — return one hot of background class (last class)
                 _module_logger.warning(
-                    "Region '%s' not in lookup; returning rejection class.", region
+                    "Region '%s' not in lookup; returning background class.", region
                 )
-                rejection_class = num_classes - 1
+                background_class = num_classes - 1
                 label_vec = np.zeros(num_classes)
-                label_vec[rejection_class] = 1.0
+                label_vec[background_class] = 1.0
                 return label_vec.tolist()
 
         # Find minimum distance
