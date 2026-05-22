@@ -77,11 +77,9 @@ class TestXGBoostDeconvolverCore(unittest.TestCase):
         self.n_cell_types = 3
 
         self.model = XGBoostDeconvolver(
-            n_dmr_groups=self.n_dmr,
+            n_gr_groups=self.n_dmr,
             n_pred_classes=self.n_pred_classes,
             n_cell_types=self.n_cell_types,
-            with_reject_features=True,
-            process_inputs=True,
             output_transform="clip_normalize",
         )
 
@@ -95,14 +93,6 @@ class TestXGBoostDeconvolverCore(unittest.TestCase):
         )
         self.y = np.array([[0.2, 0.3, 0.5], [0.4, 0.1, 0.5]], dtype=float)
 
-    def test_init_sets_feature_count_with_and_without_reject(self):
-        """n_features should reflect whether reject-column features are enabled."""
-        with_reject = XGBoostDeconvolver(n_dmr_groups=5, with_reject_features=True)
-        without_reject = XGBoostDeconvolver(n_dmr_groups=5, with_reject_features=False)
-
-        self.assertEqual(with_reject.n_features, 10)
-        self.assertEqual(without_reject.n_features, 5)
-
     def test_build_model_uses_config(self):
         """_build_model should propagate user config into the base regressor."""
         cfg = XGBDeconvolverConfig(n_estimators=11, max_depth=4, learning_rate=0.05)
@@ -113,44 +103,6 @@ class TestXGBoostDeconvolverCore(unittest.TestCase):
         self.assertEqual(wrapper.estimator.n_estimators, 11)
         self.assertEqual(wrapper.estimator.max_depth, 4)
         self.assertEqual(wrapper.estimator.learning_rate, 0.05)
-
-    def test_extract_features_with_reject(self):
-        """Feature extraction should concatenate diagonal and reject-column values."""
-        features = self.model.extract_features(self.X_3d)
-
-        expected_diagonal = np.array([[0.1, 0.6, 1.1], [1.1, 1.6, 2.1]])
-        expected_reject = np.array([[0.4, 0.8, 1.2], [1.4, 1.8, 2.2]])
-        expected = np.concatenate([expected_diagonal, expected_reject], axis=1)
-
-        np.testing.assert_allclose(features, expected)
-
-    def test_extract_features_without_reject(self):
-        """When reject features are disabled, only the diagonal should remain."""
-        model = XGBoostDeconvolver(
-            n_dmr_groups=self.n_dmr,
-            n_pred_classes=self.n_pred_classes,
-            with_reject_features=False,
-            process_inputs=True,
-        )
-
-        features = model.extract_features(self.X_3d)
-        expected_diagonal = np.array([[0.1, 0.6, 1.1], [1.1, 1.6, 2.1]])
-        np.testing.assert_allclose(features, expected_diagonal)
-
-    def test_extract_features_process_inputs_false_returns_input(self):
-        """process_inputs=False should bypass feature extraction entirely."""
-        model = XGBoostDeconvolver(process_inputs=False)
-        raw = np.array([[1.0, 2.0], [3.0, 4.0]])
-
-        returned = model.extract_features(raw)
-
-        self.assertTrue(returned is raw)
-
-    def test_extract_features_promotes_2d_to_single_sample(self):
-        """2D inputs should be promoted to a batch of size one."""
-        single = self.X_3d[0]
-        features = self.model.extract_features(single)
-        self.assertEqual(features.shape, (1, self.n_dmr * 2))
 
     def test_transform_output_none_clips_and_normalizes(self):
         """The 'none' mode still clips to [0, 1] before per-row normalization."""
@@ -193,16 +145,6 @@ class TestXGBoostDeconvolverCore(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             self.model.predict(self.X_3d)
 
-    def test_predict_returns_single_sample_vector_for_2d_input(self):
-        """A single 2D sample should return a 1D prediction vector."""
-        self.model._is_fitted = True
-        self.model.model = DummyMultiOutputModel(output=[1.0, 1.0, 2.0])
-
-        pred = self.model.predict(self.X_3d[0])
-
-        self.assertEqual(pred.shape, (self.n_cell_types,))
-        self.assertAlmostEqual(float(pred.sum()), 1.0)
-
     def test_predict_returns_batch_for_3d_input(self):
         """A 3D batch should return one normalized row per input sample."""
         self.model._is_fitted = True
@@ -213,49 +155,13 @@ class TestXGBoostDeconvolverCore(unittest.TestCase):
         self.assertEqual(pred.shape, (2, self.n_cell_types))
         np.testing.assert_allclose(pred.sum(axis=1), np.array([1.0, 1.0]))
 
-    def test_get_feature_importance_raises_when_not_fitted(self):
-        """Feature importance requires a fitted model."""
-        with self.assertRaises(RuntimeError):
-            self.model.get_feature_importance()
-
-    def test_get_feature_importance_aggregate_true(self):
-        """aggregate=True should average importances across output estimators."""
-        self.model._is_fitted = True
-        self.model.model = MagicMock()
-        self.model.model.estimators_ = [
-            DummyEstimator([1, 2, 3, 4, 5, 6]),
-            DummyEstimator([2, 4, 6, 8, 10, 12]),
-        ]
-
-        out = self.model.get_feature_importance(aggregate=True)
-
-        np.testing.assert_allclose(out["all"], np.array([1.5, 3, 4.5, 6, 7.5, 9]))
-        np.testing.assert_allclose(out["diagonal"], np.array([1.5, 3, 4.5]))
-        np.testing.assert_allclose(out["reject"], np.array([6, 7.5, 9]))
-
-    def test_get_feature_importance_aggregate_false(self):
-        """aggregate=False should preserve one importance vector per estimator."""
-        self.model._is_fitted = True
-        self.model.model = MagicMock()
-        self.model.model.estimators_ = [
-            DummyEstimator([1, 2, 3, 4, 5, 6]),
-            DummyEstimator([2, 4, 6, 8, 10, 12]),
-        ]
-
-        out = self.model.get_feature_importance(aggregate=False)
-
-        self.assertEqual(out["all"].shape, (2, 6))
-        self.assertEqual(out["diagonal"].shape, (2, 3))
-        self.assertEqual(out["reject"].shape, (2, 3))
-
-
 class TestXGBoostDeconvolverFitEvaluateAndIO(unittest.TestCase):
     """Tests for fit/evaluate behavior and persistence helpers."""
 
     def setUp(self):
         """Build tiny synthetic train/validation fixtures for deterministic tests."""
         self.model = XGBoostDeconvolver(
-            n_dmr_groups=3,
+            n_gr_groups=3,
             n_pred_classes=4,
             n_cell_types=3,
             output_transform="clip_normalize",

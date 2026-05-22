@@ -49,8 +49,8 @@ class XGBoostDeconvolver(AbstractDeconvolver):
 
     Parameters
     ----------
-    n_dmr_groups : int
-        Number of DMR groups (default: 39)
+    n_gr_groups : int
+        Number of GR groups (default: 39)
     n_pred_classes : int
         Number of prediction classes including rejection (default: 40)
     n_cell_types : int
@@ -66,7 +66,7 @@ class XGBoostDeconvolver(AbstractDeconvolver):
 
     def __init__(
         self,
-        n_dmr_groups: int = 39,
+        n_gr_groups: int = 39,
         n_pred_classes: int = 40,
         n_cell_types: int = 39,
         config: Optional[XGBDeconvolverConfig] = None,
@@ -76,7 +76,7 @@ class XGBoostDeconvolver(AbstractDeconvolver):
         logger=None,
     ):
         super().__init__()
-        self.n_dmr = n_dmr_groups
+        self.n_gr = n_gr_groups
         self.n_pred_classes = n_pred_classes
         self.n_cell_types = n_cell_types
         self.config = config or XGBDeconvolverConfig()
@@ -144,7 +144,7 @@ class XGBoostDeconvolver(AbstractDeconvolver):
         Parameters
         ----------
         X_train : np.ndarray
-            Training data of shape (n_samples, n_dmr_groups, n_pred_classes)
+            Training data of shape (n_samples, n_gr_groups, n_pred_classes)
         y_train : np.ndarray
             Training labels of shape (n_samples, n_cell_types)
         X_val : np.ndarray, optional
@@ -285,23 +285,6 @@ class XGBoostDeconvolver(AbstractDeconvolver):
 
         return proportions
 
-    def get_feature_importance(self, aggregate: bool = True) -> Dict[str, np.ndarray]:
-        """Get feature importance scores."""
-        if not self._is_fitted:
-            raise RuntimeError("Model must be fitted before getting importance")
-
-        importances = np.array(
-            [est.feature_importances_ for est in self.model.estimators_]
-        )
-
-        if aggregate:
-            importances = importances.mean(axis=0)
-
-        return {
-            "diagonal": importances[..., : self.n_dmr],
-            "reject": importances[..., self.n_dmr :],
-            "all": importances,
-        }
 
     def save(self, path: str, **kwargs) -> None:
         """
@@ -355,7 +338,7 @@ def train_xgb_deconvolver(
     X_val: np.ndarray,  # pylint: disable=invalid-name
     y_val: np.ndarray,
     config: Optional[XGBDeconvolverConfig] = None,
-    n_dmr_groups=39,
+    n_gr_groups=39,
     n_pred_classes=40,
     n_cell_types=39,
     output_transform: Literal["none", "clip_normalize", "softmax"] = "clip_normalize",
@@ -378,7 +361,7 @@ def train_xgb_deconvolver(
     model = XGBoostDeconvolver(
         config=config,
         output_transform=output_transform,
-        n_dmr_groups=n_dmr_groups,
+        n_gr_groups=n_gr_groups,
         n_pred_classes=n_pred_classes,
         n_cell_types=n_cell_types,
     )
