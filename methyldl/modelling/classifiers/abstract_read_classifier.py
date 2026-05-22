@@ -3,7 +3,6 @@ Provides a unified prediction interface for the classifiers of DNA Reads.
 """
 
 import logging
-from collections import OrderedDict
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Union

@@ -656,10 +656,7 @@ def consolidate_ios_pickles(
     """Load partial pickle checkpoints and consolidate into a single ``.npz``.
 
     Each pickle is expected to contain a list of tuples.  The tuples may
-    be in one of two formats:
-
-    **Legacy (3-element):**
-        ``(proportions, subs, uxm_data)``
+    be in one of this one format (format may be extended later):
 
     **Variant-tagged (4-element):**
         ``(proportions, subs, uxm_data, variant)``
@@ -667,15 +664,11 @@ def consolidate_ios_pickles(
     where ``subs`` is a dictionary of DataFrames (e.g. 'train', 'valid',
     'test'), ``uxm_data`` is the corresponding UXM data (or ``None``),
     and ``variant`` is a string like ``"uniform"`` or ``"random"``.
-
-    When variant tags are present, features are stored under
+    Features are stored under
     ``features_{split}_{variant}`` keys and proportions under
     ``proportions_{split}`` keys (deduplicated per split).  A top-level
     ``proportions`` key is additionally written **only** when all splits
     share the exact same proportions array.
-
-    When no variant tags are present (legacy mode), the output uses the
-    original key scheme: ``proportions``, ``features_{split}``.
 
     Parameters
     ----------
@@ -700,77 +693,10 @@ def consolidate_ios_pickles(
 
     pkl_files = sorted(f for f in os.listdir(ios_dir) if f.endswith(".pkl"))
 
-    # Detect whether any tuple has a variant tag
-    has_variants = False
-    for pkl_name in pkl_files:
-        pkl_path = os.path.join(ios_dir, pkl_name)
-        try:
-            with open(pkl_path, "rb") as f:
-                part_ios = pickle.load(f)
-        except Exception:
-            continue
-        for item in part_ios:
-            if len(item) == 4:
-                has_variants = True
-            break
-        if has_variants:
-            break
-
-    if not has_variants:
-        # ── Legacy consolidation (unchanged behaviour) ─────────────
-        return _consolidate_legacy(
-            ios_dir, output_path, num_labels, pred_cols, pkl_files
-        )
-
     # ── Variant-aware consolidation ────────────────────────────────
     return _consolidate_variant_aware(
         ios_dir, output_path, num_labels, pred_cols, pkl_files, labels_dict
     )
-
-
-def _consolidate_legacy(
-    ios_dir: str,
-    output_path: str,
-    num_labels: int,
-    pred_cols: list,
-    pkl_files: list,
-):
-    """Legacy consolidation: all IO tuples are ``(proportions, subs, uxm_data)``."""
-    proportions_list = []
-    features_lists = {}
-
-    for pkl_name in tqdm(pkl_files, desc="Consolidating pickles"):
-        pkl_path = os.path.join(ios_dir, pkl_name)
-        try:
-            with open(pkl_path, "rb") as f:
-                part_ios = pickle.load(f)
-        except Exception:
-            import warnings
-
-            warnings.warn(f"{pkl_name} is corrupted and cannot be opened")
-            continue
-
-        for item in part_ios:
-            gt = np.expand_dims(np.array(item[0]), 0)
-            proportions_list.append(gt)
-
-            subs = item[1]
-            for split_name, df in subs.items():
-                if split_name not in features_lists:
-                    features_lists[split_name] = []
-                features_lists[split_name].append(
-                    np.expand_dims(df[pred_cols].to_numpy(), 0)
-                )
-
-    result = {
-        "proportions": np.concatenate(proportions_list, axis=0),
-    }
-    for split_name, lst in features_lists.items():
-        if lst:
-            result[f"features_{split_name}"] = np.concatenate(lst, axis=0)
-
-    np.savez_compressed(output_path, **result)
-    return result
 
 
 def _consolidate_variant_aware(

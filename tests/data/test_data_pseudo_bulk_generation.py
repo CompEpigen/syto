@@ -1,8 +1,11 @@
 import unittest
 from unittest import mock
+import tempfile
+import os
 
 import numpy as np
 import pandas as pd
+import pickle
 
 from methyldl.data import pseudo_bulk_generation as pseudo_bulk_generation_module
 
@@ -936,11 +939,12 @@ class TestConsolidateVariantAware(PseudoBulkGenerationTestBase):
 
     def test_consolidate_variant_aware_separates_features_by_variant(self):
         """Variant-tagged tuples produce features_{split}_{variant} keys."""
-        import tempfile
-        import os
 
         pred_cols = [f"prediction_{i}_wavg" for i in range(39)]
         df = pd.DataFrame({c: [0.1] for c in pred_cols})
+        df["dmr_ctype_label"] = 0
+        df["dmr_ctype"] = "cell_0"
+        df["total_weight"] = 1.0
 
         ios = [
             ([1.0] + [0.0] * 38, {"train": df.copy()}, None, "uniform"),
@@ -951,7 +955,6 @@ class TestConsolidateVariantAware(PseudoBulkGenerationTestBase):
 
         with tempfile.TemporaryDirectory() as tmpdir:
             pkl_path = os.path.join(tmpdir, "ios_1.pkl")
-            import pickle
 
             with open(pkl_path, "wb") as f:
                 pickle.dump(ios, f)
@@ -973,36 +976,3 @@ class TestConsolidateVariantAware(PseudoBulkGenerationTestBase):
         # 2 feature matrices per variant
         self.assertEqual(result["features_train_uniform"].shape[0], 2)
         self.assertEqual(result["features_train_random"].shape[0], 2)
-
-    def test_consolidate_legacy_uses_original_key_scheme(self):
-        """Legacy 3-element tuples produce proportions + features_{split} keys."""
-        import tempfile
-        import os
-
-        pred_cols = [f"prediction_{i}_wavg" for i in range(39)]
-        df = pd.DataFrame({c: [0.1] for c in pred_cols})
-
-        ios = [
-            ([1.0] + [0.0] * 38, {"train": df.copy()}, None),
-            ([0.0, 1.0] + [0.0] * 37, {"train": df.copy()}, None),
-        ]
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            pkl_path = os.path.join(tmpdir, "ios_1.pkl")
-            import pickle
-
-            with open(pkl_path, "wb") as f:
-                pickle.dump(ios, f)
-
-            output_path = os.path.join(tmpdir, "result.npz")
-            result = pseudo_bulk_generation_module.consolidate_ios_pickles(
-                ios_dir=tmpdir,
-                output_path=output_path,
-                num_labels=39,
-            )
-
-        self.assertIn("proportions", result)
-        self.assertIn("features_train", result)
-        self.assertNotIn("proportions_train", result)
-        self.assertEqual(result["proportions"].shape[0], 2)
-        self.assertEqual(result["features_train"].shape[0], 2)
