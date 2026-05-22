@@ -13,10 +13,12 @@ Covers
 # pylint: disable=protected-access
 import json
 import os
+import sys
 import shutil
 import tempfile
 import unittest
 import warnings
+import logging
 
 import numpy as np
 import pandas as pd
@@ -29,6 +31,14 @@ from methyldl.modelling.classifiers.lookup import (
 from methyldl.data.soft_labeling import extract_cpg_signature
 
 warnings.filterwarnings("ignore")
+
+
+# Configure logging to display INFO and above messages in the console
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    stream=sys.stdout,
+)
 
 # ──────────────────────────────────────────────────────────────────────
 # Constants

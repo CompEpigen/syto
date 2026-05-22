@@ -9,6 +9,7 @@ the Jaccard signature distance.
 
 from __future__ import annotations
 import logging
+import time
 from typing import Dict, List, Optional, Tuple, Union
 from dataclasses import dataclass, asdict
 from pathlib import Path
@@ -19,6 +20,11 @@ import pickle
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
+
+from methyldl.modelling.evaluation import (
+    compute_metrics,
+    compute_metrics_soft_labels,
+)
 
 from methyldl.data.soft_labeling import (
     extract_cpg_signature,
@@ -92,6 +98,7 @@ class LookupClassifier(AbstractReadClassifier):
         # Per-region index for fast NN search
         self._region_index: Dict[str, List[Tuple[tuple, dict]]] = {}
         self._is_fitted: bool = False
+        self.history: List[dict] = []
 
     @property
     def n_keys(self) -> int:
@@ -99,7 +106,12 @@ class LookupClassifier(AbstractReadClassifier):
         return len(self._lookup)
 
     # ------------------------------------------------------------------ fit
-    def fit(self, df: pd.DataFrame) -> "LookupClassifier":
+    def fit(
+        self,
+        df: pd.DataFrame,
+        val_data: Optional[pd.DataFrame] = None,
+        compute_train_metrics: bool = True,
+    ) -> "LookupClassifier":
         """Build the soft-label lookup table from a single DataFrame.
 
         Parameters
@@ -109,11 +121,19 @@ class LookupClassifier(AbstractReadClassifier):
             ``trimmed_start``, ``pattern``, and ``<label_col>``.
             If you need to pool multiple splits, concatenate them
             before calling fit.
+        val_data : DataFrame, optional
+            Validation DataFrame with the same schema as ``df``. When provided,
+            validation metrics are computed and stored in :attr:`history`.
+        compute_train_metrics : bool, default True
+            Whether to run :meth:`predict` on the training data to compute
+            train-side sklearn metrics. Set to ``False`` for large datasets
+            where the row-by-row prediction pass is prohibitively slow.
 
         Returns
         -------
         self
         """
+        t_start = time.time()
         self._lookup = self._build_mapping(df)
 
         # Build per-region index for NN fallback
@@ -122,12 +142,85 @@ class LookupClassifier(AbstractReadClassifier):
             self._region_index.setdefault(region, []).append((sig, entry))
 
         self._is_fitted = True
+        elapsed = time.time() - t_start
+
+        fit_record: dict = {
+            "n_keys": self.n_keys,
+            "n_regions": len(self._region_index),
+            "label_mode": self.config.label_mode,
+            "elapsed_time": elapsed,
+        }
+
+        if compute_train_metrics:
+            train_preds_df = self.predict(df)
+            fit_record.update(self._compute_fit_metrics(df, train_preds_df, "train"))
+
+        if val_data is not None:
+            val_preds_df = self.predict(val_data)
+            fit_record.update(self._compute_fit_metrics(val_data, val_preds_df, "val"))
+
+        self.history.append(fit_record)
+
         _module_logger.info(
-            "Fitted with %d unique (region, signature) keys across %d regions.",
-            len(self._lookup),
+            "Fitted with %d unique (region, signature) keys across %d regions "
+            "in %.2fs.%s%s",
+            self.n_keys,
             len(self._region_index),
+            elapsed,
+            (
+                " Train: acc=%.4f f1=%.4f"
+                % (
+                    fit_record.get("train_accuracy", float("nan")),
+                    fit_record.get("train_f1", float("nan")),
+                )
+                if compute_train_metrics
+                else ""
+            ),
+            (
+                " Val: acc=%.4f f1=%.4f"
+                % (
+                    fit_record.get("val_accuracy", float("nan")),
+                    fit_record.get("val_f1", float("nan")),
+                )
+                if val_data is not None
+                else ""
+            ),
         )
         return self
+
+    # ------------------------------------------------------------------ metrics helper
+    def _compute_fit_metrics(
+        self, df: pd.DataFrame, predictions_df: pd.DataFrame, prefix: str
+    ) -> dict:
+        """Compute sklearn classification metrics from fit-time predictions.
+
+        Parameters
+        ----------
+        df : DataFrame
+            The ground-truth DataFrame (must contain ``config.label_col``).
+        predictions_df : DataFrame
+            Output of :meth:`predict` with ``prediction_0`` … columns.
+        prefix : str
+            Prefix prepended to each metric key (e.g. ``"train"`` or ``"val"``).
+
+        Returns
+        -------
+        dict
+            Keys like ``{prefix}_accuracy``, ``{prefix}_f1``, etc.
+        """
+        num_classes = self.config.num_classes
+        pred_cols = [f"prediction_{j}" for j in range(num_classes)]
+        predictions_proba = predictions_df[pred_cols].to_numpy()
+
+        labels = df[self.config.label_col].to_numpy()
+
+        if self.config.label_mode == "soft":
+            # Build soft label matrix from integer labels for compute_metrics_soft_labels
+            metrics = compute_metrics_soft_labels((predictions_proba, labels))
+        else:
+            metrics = compute_metrics((predictions_proba, labels))
+
+        return {f"{prefix}_{k}": v for k, v in metrics.items()}
 
     # ------------------------------------------------------------------ predict
     def predict(self, df: pd.DataFrame) -> pd.DataFrame:

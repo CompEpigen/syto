@@ -10,6 +10,7 @@ class priors via Bayes' theorem to produce posterior class probabilities.
 from typing import Union
 from pathlib import Path
 import logging
+import time
 
 import joblib
 import numpy as np
@@ -22,6 +23,7 @@ from tqdm import tqdm
 from methyldl.modelling.classifiers.abstract_read_classifier import (
     AbstractReadClassifier,
 )
+from methyldl.modelling.evaluation import compute_metrics
 
 _module_logger = logging.getLogger(__name__)
 
@@ -86,6 +88,7 @@ class CancerDetectorClassifier(AbstractReadClassifier):
         self.mask_bayesian_estimation_0 = None
         self.mask_bayesian_estimation_1 = None
         self.mask_insufficient_data = None
+        self.history: list = []
 
     @staticmethod
     def fit_single_beta_distribution(
@@ -153,6 +156,7 @@ class CancerDetectorClassifier(AbstractReadClassifier):
         col_marker_label: str = "dmr_ctype_label",
         eps_beta_fit: float = 1e-2,
         class_prior_type: str = "uniform",
+        val_data: pd.DataFrame = None,
     ) -> "CancerDetectorClassifier":
         """Fit Beta distributions for every (marker, class) pair and compute
         class priors.
@@ -169,6 +173,9 @@ class CancerDetectorClassifier(AbstractReadClassifier):
             class_prior_type: Strategy for computing class priors. Either
                 ``"uniform"`` (equal priors) or ``"train_freq"`` (proportional
                 to class frequency in the training data).
+            val_data: Optional validation DataFrame with the same schema as
+                ``train_data``. When provided, validation metrics are computed
+                and stored in :attr:`history`.
         """
         # argument checks
         assert (
@@ -184,6 +191,8 @@ class CancerDetectorClassifier(AbstractReadClassifier):
             col_marker_label in train_data.columns
         ), f"Column {col_marker_label} not found in train_data"
         assert class_prior_type in ["uniform", "train_freq"]
+
+        t_start = time.time()
 
         self.eps_beta_fit = eps_beta_fit
         self.class_prior_type = class_prior_type
@@ -245,7 +254,85 @@ class CancerDetectorClassifier(AbstractReadClassifier):
 
         self.is_fitted = True
 
+        elapsed = time.time() - t_start
+
+        fit_record: dict = {
+            "n_markers": self.n_markers,
+            "n_classes": self.n_classes,
+            "class_prior_type": self.class_prior_type,
+            "elapsed_time": elapsed,
+            "n_insufficient_data": int(self.mask_insufficient_data.sum()),
+            "n_bayesian_est_0": int(self.mask_bayesian_estimation_0.sum()),
+            "n_bayesian_est_1": int(self.mask_bayesian_estimation_1.sum()),
+        }
+
+        train_proba = self.predict_proba(
+            train_data,
+            col_n_meth_cpgs=col_n_meth_cpgs,
+            col_n_unmeth_cpgs=col_n_unmeth_cpgs,
+            col_marker_label=col_marker_label,
+        )
+        train_labels = train_data[col_label].to_numpy()
+        fit_record.update(self._compute_fit_metrics(train_labels, train_proba, "train"))
+
+        if val_data is not None:
+            val_proba = self.predict_proba(
+                val_data,
+                col_n_meth_cpgs=col_n_meth_cpgs,
+                col_n_unmeth_cpgs=col_n_unmeth_cpgs,
+                col_marker_label=col_marker_label,
+            )
+            val_labels = val_data[col_label].to_numpy()
+            fit_record.update(self._compute_fit_metrics(val_labels, val_proba, "val"))
+
+        self.history.append(fit_record)
+
+        _module_logger.info(
+            "Fitted CancerDetectorClassifier: %d markers, %d classes, "
+            "prior=%s, elapsed=%.2fs. "
+            "Train: acc=%.4f f1=%.4f%s",
+            self.n_markers,
+            self.n_classes,
+            self.class_prior_type,
+            elapsed,
+            fit_record.get("train_accuracy", float("nan")),
+            fit_record.get("train_f1", float("nan")),
+            (
+                " Val: acc=%.4f f1=%.4f"
+                % (
+                    fit_record.get("val_accuracy", float("nan")),
+                    fit_record.get("val_f1", float("nan")),
+                )
+                if val_data is not None
+                else ""
+            ),
+        )
+
         return self
+
+    def _compute_fit_metrics(
+        self,
+        labels: np.ndarray,
+        predictions_proba: np.ndarray,
+        prefix: str,
+    ) -> dict:
+        """Compute sklearn classification metrics from fit-time predictions.
+
+        Args:
+            labels: 1-D integer array of ground-truth class labels.
+            predictions_proba: Array of shape (n_reads, n_classes) with
+                posterior probabilities from :meth:`predict_proba`.
+            prefix: Prefix prepended to each metric key (e.g. ``"train"``
+                or ``"val"``).
+
+        Returns:
+            Dict with keys like ``{prefix}_accuracy``, ``{prefix}_f1``, etc.
+        """
+        # Map original class labels (which may be strings or non-contiguous ints)
+        # to the 0-based integer indices used by predict_proba column ordering.
+        integer_labels = np.array([self.class_to_idx[lbl] for lbl in labels])
+        metrics = compute_metrics((predictions_proba, integer_labels))
+        return {f"{prefix}_{k}": v for k, v in metrics.items()}
 
     def _compute_likelihood_single_read(
         self, n_meth: int, n_unmeth: int, marker_label: str

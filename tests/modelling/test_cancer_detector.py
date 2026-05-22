@@ -6,6 +6,8 @@ logical unit; edge-case branches (insufficient data, all-zero / all-one
 methylation rates, 1-D likelihood input, …) are exercised explicitly.
 """
 
+import logging
+import sys
 import os
 import tempfile
 import unittest
@@ -17,6 +19,13 @@ from scipy.special import beta as beta_func  # pylint: disable=no-name-in-module
 from methyldl.modelling.classifiers.cancer_detector import (
     CancerDetectorClassifier,
     _fit_beta_worker,
+)
+
+# Configure logging to display INFO and above messages in the console
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    stream=sys.stdout,
 )
 
 

@@ -155,6 +155,7 @@ class TestXGBoostDeconvolverCore(unittest.TestCase):
         self.assertEqual(pred.shape, (2, self.n_cell_types))
         np.testing.assert_allclose(pred.sum(axis=1), np.array([1.0, 1.0]))
 
+
 class TestXGBoostDeconvolverFitEvaluateAndIO(unittest.TestCase):
     """Tests for fit/evaluate behavior and persistence helpers."""
 

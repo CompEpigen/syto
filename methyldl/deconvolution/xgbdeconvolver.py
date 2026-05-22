@@ -285,7 +285,6 @@ class XGBoostDeconvolver(AbstractDeconvolver):
 
         return proportions
 
-
     def save(self, path: str, **kwargs) -> None:
         """
         Save the entire model object to disk using joblib.
