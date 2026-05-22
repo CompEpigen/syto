@@ -12,7 +12,7 @@ import unittest
 
 import numpy as np
 import pandas as pd
-from scipy.special import beta as beta_func
+from scipy.special import beta as beta_func  # pylint: disable=no-name-in-module
 
 from methyldl.modelling.classifiers.cancer_detector import (
     CancerDetectorClassifier,
@@ -37,7 +37,7 @@ def _make_train_df(
     column-name forwarding logic.
     """
     if rng is None:
-        rng = np.random.RandomState(42)
+        rng = np.random.RandomState(42)  # pylint: disable=no-member
     rows = []
     for marker in markers:
         for cls in classes:
@@ -94,10 +94,8 @@ class TestFitSingleBetaDistribution(unittest.TestCase):
 
     def test_insufficient_data_zero_reads(self):
         """Empty arrays (0 reads) should also trigger the insufficient-data path."""
-        eta, rho, be0, be1, insuf = (
-            CancerDetectorClassifier.fit_single_beta_distribution(
-                np.array([]), np.array([]), self.eps
-            )
+        eta, rho, _, _, insuf = CancerDetectorClassifier.fit_single_beta_distribution(
+            np.array([]), np.array([]), self.eps
         )
         self.assertTrue(insuf)
         self.assertEqual(eta, 1)
@@ -135,7 +133,7 @@ class TestFitSingleBetaDistribution(unittest.TestCase):
 
     def test_normal_mle_fitting(self):
         """Mixed rates should produce a standard MLE fit with no fallback flags."""
-        rng = np.random.RandomState(0)
+        rng = np.random.RandomState(0)  # pylint: disable=no-member
         n_meth = rng.randint(1, 10, size=50)
         n_unmeth = rng.randint(1, 10, size=50)
         eta, rho, be0, be1, insuf = (
@@ -264,6 +262,8 @@ class TestFit(unittest.TestCase):
 class TestComputeLikelihoodSingleRead(unittest.TestCase):
     """Tests for :meth:`CancerDetectorClassifier._compute_likelihood_single_read`."""
 
+    # pylint: disable=protected-access
+
     def setUp(self):
         """Fit a default classifier for reuse across tests."""
         self.clf, _ = _fitted_classifier()
@@ -329,6 +329,7 @@ class TestComputeLikelihoodBulk(unittest.TestCase):
         markers = np.array([marker, marker])
         bulk = self.clf.compute_likelihood_bulk(n_meth, n_unmeth, markers)
         for i in range(2):
+            # pylint: disable=protected-access
             single = self.clf._compute_likelihood_single_read(
                 n_meth[i], n_unmeth[i], markers[i]
             )
@@ -347,6 +348,8 @@ class TestComputeLikelihoodBulk(unittest.TestCase):
 # ---------------------------------------------------------------------------
 class TestPredictProbaFromLikelihoods(unittest.TestCase):
     """Tests for :meth:`CancerDetectorClassifier._predict_proba_from_likelihoods`."""
+
+    # pylint: disable=protected-access
 
     def setUp(self):
         """Fit a default classifier for reuse across tests."""
@@ -458,92 +461,175 @@ class TestPredictProba(unittest.TestCase):
 # ---------------------------------------------------------------------------
 class TestSaveLoad(unittest.TestCase):
     """Tests for :meth:`CancerDetectorClassifier.save` and
-    :meth:`CancerDetectorClassifier.load`."""
+    :meth:`CancerDetectorClassifier.load`.
+
+    Both serialisation formats (.pkl for backward compatibility and .joblib as
+    the preferred format) are exercised.  ``load`` is a classmethod and always
+    returns a fresh instance.
+    """
 
     def setUp(self):
-        """Fit a classifier and create a temp directory for pickle files."""
+        """Fit a classifier and create a temp directory for serialised files."""
         self.clf, self.train_df = _fitted_classifier()
         self.tmp_dir = tempfile.mkdtemp(prefix="cancer_det_test_")
         self.pkl_path = os.path.join(self.tmp_dir, "model.pkl")
+        self.joblib_path = os.path.join(self.tmp_dir, "model.joblib")
 
     def tearDown(self):
-        """Remove temp files created during the test."""
-        if os.path.exists(self.pkl_path):
-            os.remove(self.pkl_path)
+        """Remove any files created during the test, then the temp directory."""
+        for path in (self.pkl_path, self.joblib_path):
+            if os.path.exists(path):
+                os.remove(path)
         os.rmdir(self.tmp_dir)
 
-    def test_save_creates_file(self):
-        """``save()`` should create a non-empty .pkl file on disk."""
-        self.clf.save(self.pkl_path)
-        self.assertTrue(os.path.isfile(self.pkl_path))
-        self.assertGreater(os.path.getsize(self.pkl_path), 0)
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
 
-    def test_load_restores_all_attributes(self):
-        """Every attribute serialised by ``save()`` must be restored by ``load()``."""
-        self.clf.save(self.pkl_path)
-        loaded = CancerDetectorClassifier().load(self.pkl_path)
-
-        # Scalar / simple attributes
+    def _assert_attributes_equal(self, loaded, original):
+        """Check that all serialised attributes are restored correctly."""
         self.assertTrue(loaded.is_fitted)
-        self.assertEqual(loaded.n_markers, self.clf.n_markers)
-        self.assertEqual(loaded.n_classes, self.clf.n_classes)
-        self.assertEqual(loaded.eps_beta_fit, self.clf.eps_beta_fit)
-        self.assertEqual(loaded.class_prior_type, self.clf.class_prior_type)
+        self.assertEqual(loaded.n_markers, original.n_markers)
+        self.assertEqual(loaded.n_classes, original.n_classes)
+        self.assertEqual(loaded.eps_beta_fit, original.eps_beta_fit)
+        self.assertEqual(loaded.class_prior_type, original.class_prior_type)
 
-        # Array attributes — check values elementwise
         np.testing.assert_array_equal(
-            loaded.param_eta_matrix, self.clf.param_eta_matrix
+            loaded.param_eta_matrix, original.param_eta_matrix
         )
         np.testing.assert_array_equal(
-            loaded.param_rho_matrix, self.clf.param_rho_matrix
+            loaded.param_rho_matrix, original.param_rho_matrix
         )
-        np.testing.assert_array_equal(loaded.class_priors, self.clf.class_priors)
-        np.testing.assert_array_equal(loaded.markers, self.clf.markers)
-        np.testing.assert_array_equal(loaded.classes, self.clf.classes)
+        np.testing.assert_array_equal(loaded.class_priors, original.class_priors)
+        np.testing.assert_array_equal(loaded.markers, original.markers)
+        np.testing.assert_array_equal(loaded.classes, original.classes)
         np.testing.assert_array_equal(
-            loaded.mask_bayesian_estimation_0, self.clf.mask_bayesian_estimation_0
-        )
-        np.testing.assert_array_equal(
-            loaded.mask_bayesian_estimation_1, self.clf.mask_bayesian_estimation_1
+            loaded.mask_bayesian_estimation_0, original.mask_bayesian_estimation_0
         )
         np.testing.assert_array_equal(
-            loaded.mask_insufficient_data, self.clf.mask_insufficient_data
+            loaded.mask_bayesian_estimation_1, original.mask_bayesian_estimation_1
         )
+        np.testing.assert_array_equal(
+            loaded.mask_insufficient_data, original.mask_insufficient_data
+        )
+        self.assertEqual(loaded.marker_to_idx, original.marker_to_idx)
+        self.assertEqual(loaded.class_to_idx, original.class_to_idx)
 
-        # Dict attributes
-        self.assertEqual(loaded.marker_to_idx, self.clf.marker_to_idx)
-        self.assertEqual(loaded.class_to_idx, self.clf.class_to_idx)
-
-    def test_load_returns_self(self):
-        """``load()`` should return the classifier instance for chaining."""
-        self.clf.save(self.pkl_path)
-        new_clf = CancerDetectorClassifier()
-        result = new_clf.load(self.pkl_path)
-        self.assertIs(result, new_clf)
-
-    def test_loaded_model_predicts_identically(self):
-        """Predictions from a loaded model must match the original model exactly."""
-        self.clf.save(self.pkl_path)
-        loaded = CancerDetectorClassifier().load(self.pkl_path)
-
-        proba_orig = self.clf.predict_proba(self.train_df)
-        proba_loaded = loaded.predict_proba(self.train_df)
-        np.testing.assert_array_equal(proba_orig, proba_loaded)
-
-    def test_roundtrip_with_train_freq_priors(self):
-        """Save/load roundtrip should also work for ``train_freq`` priors."""
+    def _make_train_freq_clf(self):
+        """Return a ``(df, clf)`` pair fitted with ``train_freq`` priors."""
         df = _make_train_df()
-        # Make priors non-uniform so we can detect corrupted values
         extra = df[df["original_label"] == "A"]
         df = pd.concat([df, extra], ignore_index=True)
         clf = CancerDetectorClassifier()
         clf.fit(df, class_prior_type="train_freq")
+        return df, clf
 
+    # ------------------------------------------------------------------
+    # .pkl tests
+    # ------------------------------------------------------------------
+
+    def test_pkl_save_creates_file(self):
+        """``save()`` with a .pkl path should create a non-empty file on disk."""
+        self.clf.save(self.pkl_path)
+        self.assertTrue(os.path.isfile(self.pkl_path))
+        self.assertGreater(os.path.getsize(self.pkl_path), 0)
+
+    def test_pkl_load_returns_classifier_instance(self):
+        """``load()`` from .pkl should return a ``CancerDetectorClassifier``."""
+        self.clf.save(self.pkl_path)
+        loaded = CancerDetectorClassifier.load(self.pkl_path)
+        self.assertIsInstance(loaded, CancerDetectorClassifier)
+
+    def test_pkl_load_restores_all_attributes(self):
+        """Every attribute serialised via .pkl must be restored by ``load()``."""
+        self.clf.save(self.pkl_path)
+        loaded = CancerDetectorClassifier.load(self.pkl_path)
+        self._assert_attributes_equal(loaded, self.clf)
+
+    def test_pkl_loaded_model_predicts_identically(self):
+        """Predictions from a .pkl-loaded model must match the original exactly."""
+        self.clf.save(self.pkl_path)
+        loaded = CancerDetectorClassifier.load(self.pkl_path)
+        np.testing.assert_array_equal(
+            self.clf.predict_proba(self.train_df),
+            loaded.predict_proba(self.train_df),
+        )
+
+    def test_pkl_roundtrip_with_train_freq_priors(self):
+        """Save/load roundtrip via .pkl should preserve ``train_freq`` priors."""
+        _, clf = self._make_train_freq_clf()
         clf.save(self.pkl_path)
-        loaded = CancerDetectorClassifier().load(self.pkl_path)
-
+        loaded = CancerDetectorClassifier.load(self.pkl_path)
         np.testing.assert_array_equal(loaded.class_priors, clf.class_priors)
         self.assertEqual(loaded.class_prior_type, "train_freq")
+
+    # ------------------------------------------------------------------
+    # .joblib tests
+    # ------------------------------------------------------------------
+
+    def test_joblib_save_creates_file(self):
+        """``save()`` with a .joblib path should create a non-empty file on disk."""
+        self.clf.save(self.joblib_path)
+        self.assertTrue(os.path.isfile(self.joblib_path))
+        self.assertGreater(os.path.getsize(self.joblib_path), 0)
+
+    def test_joblib_load_returns_classifier_instance(self):
+        """``load()`` from .joblib should return a ``CancerDetectorClassifier``."""
+        self.clf.save(self.joblib_path)
+        loaded = CancerDetectorClassifier.load(self.joblib_path)
+        self.assertIsInstance(loaded, CancerDetectorClassifier)
+
+    def test_joblib_load_restores_all_attributes(self):
+        """Every attribute serialised via .joblib must be restored by ``load()``."""
+        self.clf.save(self.joblib_path)
+        loaded = CancerDetectorClassifier.load(self.joblib_path)
+        self._assert_attributes_equal(loaded, self.clf)
+
+    def test_joblib_loaded_model_predicts_identically(self):
+        """Predictions from a .joblib-loaded model must match the original exactly."""
+        self.clf.save(self.joblib_path)
+        loaded = CancerDetectorClassifier.load(self.joblib_path)
+        np.testing.assert_array_equal(
+            self.clf.predict_proba(self.train_df),
+            loaded.predict_proba(self.train_df),
+        )
+
+    def test_joblib_roundtrip_with_train_freq_priors(self):
+        """Save/load roundtrip via .joblib should preserve ``train_freq`` priors."""
+        _, clf = self._make_train_freq_clf()
+        clf.save(self.joblib_path)
+        loaded = CancerDetectorClassifier.load(self.joblib_path)
+        np.testing.assert_array_equal(loaded.class_priors, clf.class_priors)
+        self.assertEqual(loaded.class_prior_type, "train_freq")
+
+    # ------------------------------------------------------------------
+    # Cross-format consistency
+    # ------------------------------------------------------------------
+
+    def test_pkl_and_joblib_predict_identically(self):
+        """Models loaded from .pkl and .joblib should produce the same predictions."""
+        self.clf.save(self.pkl_path)
+        self.clf.save(self.joblib_path)
+        pkl_loaded = CancerDetectorClassifier.load(self.pkl_path)
+        joblib_loaded = CancerDetectorClassifier.load(self.joblib_path)
+        np.testing.assert_array_equal(
+            pkl_loaded.predict_proba(self.train_df),
+            joblib_loaded.predict_proba(self.train_df),
+        )
+
+    # ------------------------------------------------------------------
+    # Error handling
+    # ------------------------------------------------------------------
+
+    def test_unsupported_extension_raises_on_save(self):
+        """``save()`` with an unsupported extension should raise ``ValueError``."""
+        with self.assertRaises(ValueError):
+            self.clf.save(os.path.join(self.tmp_dir, "model.txt"))
+
+    def test_unsupported_extension_raises_on_load(self):
+        """``load()`` with an unsupported extension should raise ``ValueError``."""
+        with self.assertRaises(ValueError):
+            CancerDetectorClassifier.load(os.path.join(self.tmp_dir, "model.txt"))
 
 
 # ---------------------------------------------------------------------------

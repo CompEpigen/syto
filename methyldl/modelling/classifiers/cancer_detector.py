@@ -8,13 +8,22 @@ class priors via Bayes' theorem to produce posterior class probabilities.
 """
 
 from typing import Union
+from pathlib import Path
+import logging
 
+import joblib
 import numpy as np
 import pickle
 import pandas as pd
 from scipy import stats
 from scipy.special import beta as beta_func  # pylint: disable=no-name-in-module
 from tqdm import tqdm
+
+from methyldl.modelling.classifiers.abstract_read_classifier import (
+    AbstractReadClassifier,
+)
+
+_module_logger = logging.getLogger(__name__)
 
 
 def _fit_beta_worker(args):
@@ -38,7 +47,7 @@ def _fit_beta_worker(args):
     return (marker_idx, class_idx, *result)
 
 
-class CancerDetectorClassifier:
+class CancerDetectorClassifier(AbstractReadClassifier):
     """Bayesian classifier that models per-marker methylation rates as Beta
     distributions for each cell type.
 
@@ -383,28 +392,42 @@ class CancerDetectorClassifier:
         Args:
             path: Path to the .pkl file where the model parameters will be saved.
         """
-        with open(path, "wb") as f:
-            pickle.dump(
-                {
-                    "param_eta_matrix": self.param_eta_matrix,
-                    "param_rho_matrix": self.param_rho_matrix,
-                    "eps_beta_fit": self.eps_beta_fit,
-                    "markers": self.markers,
-                    "classes": self.classes,
-                    "marker_to_idx": self.marker_to_idx,
-                    "class_to_idx": self.class_to_idx,
-                    "class_priors": self.class_priors,
-                    "class_prior_type": self.class_prior_type,
-                    "n_classes": self.n_classes,
-                    "n_markers": self.n_markers,
-                    "mask_bayesian_estimation_0": self.mask_bayesian_estimation_0,
-                    "mask_bayesian_estimation_1": self.mask_bayesian_estimation_1,
-                    "mask_insufficient_data": self.mask_insufficient_data,
-                },
-                f,
+        file_extension = Path(path).suffix
+
+        if file_extension == ".pkl":
+            _module_logger.warning(
+                "Saving as .pkl is deprecated and is left only for backward compatibility. "
+                "Please switch to .joblib."
+            )
+            with open(path, "wb") as f:
+                pickle.dump(
+                    {
+                        "param_eta_matrix": self.param_eta_matrix,
+                        "param_rho_matrix": self.param_rho_matrix,
+                        "eps_beta_fit": self.eps_beta_fit,
+                        "markers": self.markers,
+                        "classes": self.classes,
+                        "marker_to_idx": self.marker_to_idx,
+                        "class_to_idx": self.class_to_idx,
+                        "class_priors": self.class_priors,
+                        "class_prior_type": self.class_prior_type,
+                        "n_classes": self.n_classes,
+                        "n_markers": self.n_markers,
+                        "mask_bayesian_estimation_0": self.mask_bayesian_estimation_0,
+                        "mask_bayesian_estimation_1": self.mask_bayesian_estimation_1,
+                        "mask_insufficient_data": self.mask_insufficient_data,
+                    },
+                    f,
+                )
+        elif file_extension == ".joblib":
+            joblib.dump(value=self, filename=path)
+        else:
+            raise ValueError(
+                f"Unsupported file extension: {file_extension}. Must be .pkl or .joblib."
             )
 
-    def load(self, path: str) -> "CancerDetectorClassifier":
+    @classmethod
+    def load(cls, path: str, **kwargs) -> "CancerDetectorClassifier":
         """Load model parameters from a .pkl file.
 
         Args:
@@ -413,24 +436,43 @@ class CancerDetectorClassifier:
         Returns:
             An instance of ``CancerDetectorClassifier`` with the loaded parameters.
         """
-        with open(path, "rb") as f:
-            data = pickle.load(f)
-        self.param_eta_matrix = data["param_eta_matrix"]
-        self.param_rho_matrix = data["param_rho_matrix"]
-        self.eps_beta_fit = data["eps_beta_fit"]
-        self.markers = data["markers"]
-        self.classes = data["classes"]
-        self.class_priors = data["class_priors"]
-        self.class_prior_type = data["class_prior_type"]
-        self.n_classes = data["n_classes"]
-        self.n_markers = data["n_markers"]
-        self.mask_bayesian_estimation_0 = data["mask_bayesian_estimation_0"]
-        self.mask_bayesian_estimation_1 = data["mask_bayesian_estimation_1"]
-        self.mask_insufficient_data = data["mask_insufficient_data"]
-        self.marker_to_idx = data["marker_to_idx"]
-        self.class_to_idx = data["class_to_idx"]
-        self.is_fitted = True
-        return self
+
+        file_extension = Path(path).suffix
+
+        if file_extension == ".pkl":
+            _module_logger.warning(
+                "Loading as .pkl is deprecated and is left only for backward compatibility. "
+                "Please switch to .joblib."
+            )
+            with open(path, "rb") as f:
+                data = pickle.load(f)
+            instance = cls()
+            instance.param_eta_matrix = data["param_eta_matrix"]
+            instance.param_rho_matrix = data["param_rho_matrix"]
+            instance.eps_beta_fit = data["eps_beta_fit"]
+            instance.markers = data["markers"]
+            instance.classes = data["classes"]
+            instance.class_priors = data["class_priors"]
+            instance.class_prior_type = data["class_prior_type"]
+            instance.n_classes = data["n_classes"]
+            instance.n_markers = data["n_markers"]
+            instance.mask_bayesian_estimation_0 = data["mask_bayesian_estimation_0"]
+            instance.mask_bayesian_estimation_1 = data["mask_bayesian_estimation_1"]
+            instance.mask_insufficient_data = data["mask_insufficient_data"]
+            instance.marker_to_idx = data["marker_to_idx"]
+            instance.class_to_idx = data["class_to_idx"]
+            instance.is_fitted = True
+        elif file_extension == ".joblib":
+            instance = joblib.load(path)
+            if not isinstance(instance, cls):
+                raise ValueError(f"Loaded object is not a {cls.__name__} instance")
+        else:
+            raise ValueError(
+                f"Unsupported file extension: {file_extension}. Must be .pkl or .joblib."
+            )
+        _module_logger.info("CancerDetector model loaded with checkpoint: %s", path)
+        _module_logger.info("CancerDetector model loaded: %s", path)
+        return instance
 
     def __str__(self) -> str:
         """String representation of the model, showing key attributes."""
@@ -440,3 +482,44 @@ class CancerDetectorClassifier:
             f"class_prior_type='{self.class_prior_type}', "
             f"is_fitted={self.is_fitted})"
         )
+
+    def predict_split(self, split_df: pd.DataFrame, **kwargs) -> np.ndarray:
+        """Predict class probabilities for a DataFrame split.
+
+        Args:
+            split_df: Input DataFrame with read-level data.
+            **kwargs: Additional keyword arguments. Can include:
+                - grg_label_column: Column name for the Genomic Region Group (GRG) label
+                - dmr_label_column: Alternative column name for the marker label (DMR)
+        """
+        if not self.is_fitted:
+            raise ValueError(
+                "CancerDetectorClassifier must be fitted before prediction."
+            )
+
+        if not "grg_label_column" in kwargs and not "dmr_label_column" in kwargs:
+            _module_logger.warning(
+                "grg_label_column nor dmr_label_column provided in kwargs. Defaulting to 'dmr_ctype_label'."
+            )
+            grg_label_column = "dmr_ctype_label"
+        else:
+            grg_label_column = (
+                kwargs["grg_label_column"]
+                if "grg_label_column" in kwargs
+                else kwargs["dmr_label_column"]
+            )
+
+        probabilities = self.predict_proba(
+            test_data=split_df,
+            col_n_meth_cpgs="M",
+            col_n_unmeth_cpgs="U",
+            col_marker_label=grg_label_column,
+            return_likelihoods=False,
+            verbose=False,
+        )
+        pred_cols = [f"prediction_{i}" for i in range(self.n_classes)]
+        pred_df = pd.DataFrame(probabilities, columns=pred_cols)
+        result = split_df.copy()
+        for col in pred_cols:
+            result[col] = pred_df[col].values
+        return result

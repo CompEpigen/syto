@@ -3,6 +3,9 @@ import os.path
 from datetime import datetime
 import time
 from collections import defaultdict
+from typing import Union
+from pathlib import Path
+import logging
 
 import numpy as np
 import pandas as pd
@@ -11,8 +14,6 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
-
-from methyldl.modelling.evaluation import compute_metrics, compute_metrics_soft_labels
 
 try:
     from transformers.utils.import_utils import is_in_notebook
@@ -24,11 +25,17 @@ except ImportError:
 
     NotebookTrainingTracker = None
 
+from methyldl.modelling.evaluation import compute_metrics, compute_metrics_soft_labels
 from methyldl.modelling.gr_group_attention_classification_head import (
     GRGAttentionClassificationHead,
 )
 from methyldl.modelling.loss import ConfidenceWeightedCrossEntropy
 from methyldl.modelling.classifiers.minirnns.minRNNs import BiMinGRU
+from methyldl.modelling.classifiers.abstract_read_classifier import (
+    AbstractReadClassifier,
+)
+
+_module_logger = logging.getLogger(__name__)
 
 
 class DISMIRConfig:
@@ -449,7 +456,7 @@ def variable_length_collate_fn(batch):
     return all_chunks, all_weights, all_labels, chunk_to_read_mapping
 
 
-class Dismir:
+class Dismir(AbstractReadClassifier):
     """
     Equivalent class to the Keras-based Dismir, but using PyTorch internally.
     Supports both vanilla and DMR attention-based classifiers.
@@ -1485,3 +1492,92 @@ class Dismir:
             return all_outputs, predicted_labels, all_attention_weights
 
         return all_outputs, predicted_labels
+
+    @classmethod
+    def load(cls, path: Union[str, Path], **kwargs) -> "Dismir":
+        """
+        Instantiate a DismirClassifier and load pre-trained weights
+        from the specified checkpoint path.
+
+        Args:
+            path: path to the checkpoint file containing the model weights (.pt file)
+            **kwargs: additional parameters required for instantiating the DismirClassifier:
+                - seq_length: maximum sequence length (default: 150)
+                - dismir_flavor: model architecture flavor (default: "lstm")
+                - num_labels: number of output labels (required)
+                - classifier_head_implementation: type of classifier head
+                    (default: "dmr_attention_based")
+                - num_dmr_labels: number of DMR labels (default: 39, only used if
+                    classifier_head_implementation is "dmr_attention_based")
+                - dmr_label_column: name of the DMR label column in the dataset
+                    (required if classifier_head_implementation is "dmr_attention_based")
+        """
+        classifier_head_implementation = kwargs.get(
+            "classifier_head_implementation", "dmr_attention_based"
+        )
+        dmr_label_column = (
+            kwargs["dmr_label_column"]
+            if classifier_head_implementation == "dmr_attention_based"
+            else None
+        )
+        instance = cls(
+            max_sequence_length=kwargs.get("seq_length", 150),
+            train_data_path="",
+            test_data_path="",
+            valid_data_path="",
+            flavour=kwargs.get("dismir_flavor", "lstm"),
+            num_labels=kwargs["num_labels"],
+            classifier_type=kwargs.get(
+                "classifier_head_implementation", "dmr_attention_based"
+            ),
+            num_dmr_labels=kwargs.get("num_dmr_labels", 39),
+            dmr_label_col=dmr_label_column,
+        )
+        # Load pre-trained weights
+        instance.model.load_state_dict(torch.load(path, weights_only=True))
+        _module_logger.info("Dismir model loaded from checkpoint: %s", path)
+        return instance
+
+    def predict_split(self, split_df: pd.DataFrame, **kwargs) -> pd.DataFrame:
+        """
+        Predict labels for a given DataFrame split.
+
+        Args:
+            split_df: DataFrame containing the data for the split.
+                      Must contain columns for DNA sequences, methylation patterns, and
+                      DMR labels (if using attention-based classifier).
+            **kwargs: additional parameters for prediction, such as:
+                - batch_size: batch size for prediction (default: 2200)
+        """
+        batch_size = kwargs.get("batch_size", 2200)
+
+        # Extract DNA and methylation sequences
+        dna_col = "seq" if "seq" in split_df.columns else "input_ids"
+        meth_col = "pattern" if "pattern" in split_df.columns else "methylation_ids"
+
+        dna_sequences = split_df[dna_col].tolist()
+        methylation_sequences = split_df[meth_col].tolist()
+
+        # DMR ids if using attention-based classifier
+        dmr_ids = None
+        if self.classifier_type == "dmr_attention_based":
+            dmr_ids = split_df[self.dmr_label_col].values
+
+        # Run prediction
+        probabilities, _ = self.predict(
+            dna_sequences=dna_sequences,
+            methylation_sequences=methylation_sequences,
+            dmr_ids=dmr_ids,
+            batch_size=batch_size,
+        )
+
+        # Build predictions DataFrame
+        pred_cols = [f"prediction_{i}" for i in range(self.num_labels)]
+        pred_df = pd.DataFrame(probabilities, columns=pred_cols)
+
+        # Merge with original DataFrame
+        result = split_df.copy()
+        for col in pred_cols:
+            result[col] = pred_df[col].values
+
+        return result

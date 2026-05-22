@@ -14,8 +14,8 @@ import pickle
 import logging
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
-import torch.nn as nn
 import torch
+from copy import deepcopy
 
 import numpy as np
 import pandas as pd
@@ -23,15 +23,15 @@ import pandas as pd
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from copy import deepcopy
 
 from methyldl.data import LOYFER_CELL_TYPE_MATCH_DICT
 from methyldl.data.sequencing.bam_processing import process_bam_with_chunking
 from methyldl.modelling.prediction_aggregation import (
     aggregate_predictions_by_dmr,
 )
-from methyldl.modelling.classifier_adapter import ClassifierAdapter
-
+from methyldl.modelling.classifiers.lazy_classifier_factory import (
+    read_classifier_factory,
+)
 from methyldl.deconvolution.uxm import (
     prepare_reads_for_uxm,
     uxm_deconvolution,
@@ -42,11 +42,11 @@ from methyldl.deconvolution.least_squares_deconvolvers import (
     PSLSDeconvolver,
     NNLSDeconvolver,
 )
-
+from methyldl.deconvolution.deep_deconvolvers.mlp import MLPDeconvolver
+from methyldl.deconvolution.deep_deconvolvers.swn import SWNDeconvolver
 from methyldl.deconvolution.xgbdeconvolver import (
     XGBoostDeconvolver,
 )
-
 from methyldl.calibration.linear_calibrator import LinearCalibrator
 from methyldl.cross_validation_engine import CrossValidationEngine
 
@@ -59,7 +59,7 @@ class InferencePipeline:
 
     Stages:
         1. BAM → processed reads (or load pre-processed)
-        2. Reads × atlas → region-overlapped, annotated reads
+        2. Reads x atlas → region-overlapped, annotated reads
         3. Annotated reads → classifier predictions
            (MethylBERT / Dismir / CancerDetector / LookupClassifier)
         4. Read-level predictions → DMR-level aggregation
@@ -322,7 +322,7 @@ class InferencePipeline:
         pd.DataFrame
             Prepared reads with atlas-region annotations.  Column names
             are kept as-is (``seq``, ``pattern``, …) so that the
-            :class:`ClassifierAdapter` can handle any downstream
+            :class:`AbstractReadClassifier` can handle any downstream
             transformations internally.
         """
         df = self.processed_reads.copy()
@@ -353,34 +353,24 @@ class InferencePipeline:
 
         return prepared_uxm
 
-    # ═══════════════════════════════════════════════════════════════════
-    #  Stage 3: classifier predictions
-    # ═══════════════════════════════════════════════════════════════════
-
-    def _build_classifier_adapter(self) -> ClassifierAdapter:
-        """Build a :class:`ClassifierAdapter` from the pipeline config.
-
-        Reads the ``classifier`` (or legacy ``model``) section of the
-        configuration to determine which classifier backend to use and
-        how to initialise it.
+    def _predict_classifier(self) -> pd.DataFrame:
+        """
+        Run the configured classifier on the prepared reads.
 
         Returns
         -------
-        ClassifierAdapter
+        pd.DataFrame
+            The prepared_reads DataFrame augmented with ``prediction_*``
+            columns (one per cell type).
         """
         classifier_cfg = self.config.get("classifier", self.config.get("model", {}))
-        classifier_type = classifier_cfg.get("classifier_type", "methylbert")
-        self.classifier_type = classifier_type
-        checkpoint_path = self.config["checkpoint_path"]
-        seq_len = self.config.get("max_sequence_length", 150)
-        batch_size = self.config.get("prediction_batch_size", 2200)
-
-        adapter = ClassifierAdapter(
-            classifier_type=classifier_type,
-            checkpoint_path=checkpoint_path,
+        self.classifier_type = classifier_cfg.get("classifier_type")
+        read_classifier = read_classifier_factory(
+            name=self.classifier_type,
+            path=self.config["checkpoint_path"],
             labels_dict=self.labels_dict,
             num_labels=self.num_labels,
-            seq_length=seq_len,
+            seq_length=self.config.get("max_sequence_length", 150),
             foundation_model_path=classifier_cfg.get(
                 "foundation_model", "hanyangii/methylbert_hg19_12l"
             ),
@@ -393,33 +383,11 @@ class InferencePipeline:
                 "cancer_detector_prior_type", "uniform"
             ),
             soft_labels=classifier_cfg.get("soft_labels", False),
-            batch_size=batch_size,
+            batch_size=self.config.get("prediction_batch_size", 2200),
         )
-
-        self.logger.info(
-            f"Built ClassifierAdapter: type={classifier_type}, "
-            f"checkpoint={checkpoint_path}"
-        )
-        return adapter
-
-    def _predict_classifier(self) -> pd.DataFrame:
-        """
-        Run the configured classifier on the prepared reads.
-
-        Delegates to :class:`ClassifierAdapter` which supports
-        MethylBERT, Dismir, CancerDetector, and LookupClassifier
-        through a unified ``predict_split`` interface.
-
-        Returns
-        -------
-        pd.DataFrame
-            The prepared_reads DataFrame augmented with ``prediction_*``
-            columns (one per cell type).
-        """
-        adapter = self._build_classifier_adapter()
 
         self.logger.info("Running classifier predictions ...")
-        result_df = adapter.predict_split(self.prepared_reads)
+        result_df = read_classifier.predict_split(self.prepared_reads, **classifier_cfg)
 
         result_df = result_df.dropna(
             subset=result_df.columns.difference(["soft_label"])
@@ -735,55 +703,13 @@ class InferencePipeline:
         self.logger.info(f"Loading {architecture} from {checkpoint_path}")
 
         if architecture == "Shallow_Wide_Network":
-            #     deconvolver  = nn.Sequential(
-            #     nn.Linear(78, 1024),
-            #     nn.GELU(),
-            #     nn.Dropout(0.2),
-            #     nn.Linear(1024, 39),
-            #     nn.Softmax(dim=-1)
-            # )
-            deconvolver = nn.Sequential(
-                nn.Linear(self.input_length, 1024),
-                nn.GELU(),
-                nn.Dropout(0.2),
-                nn.Linear(1024, 39),
-                nn.Softmax(dim=-1),
-            )
+            deconvolver = SWNDeconvolver.load(checkpoint_path)
         elif architecture == "3Layer_MLP":
-            # deconvolver = nn.Sequential(
-            #     nn.Linear(78, 128),
-            #     nn.GELU(),
-            #     nn.Dropout(0.2),
-            #     nn.Linear(128, 128),
-            #     nn.GELU(),
-            #     nn.Dropout(0.2),
-            #     nn.Linear(128, 64),
-            #     nn.GELU(),
-            #     nn.Dropout(0.2),
-            #     nn.Linear(64, 39),
-            #     nn.Softmax(dim=-1)
-            # )
-            deconvolver = nn.Sequential(
-                nn.Linear(self.input_length, 512),
-                nn.GELU(),
-                nn.Dropout(0.2),
-                nn.Linear(512, 256),
-                nn.GELU(),
-                nn.Dropout(0.2),
-                nn.Linear(256, self.input_length),
-                nn.GELU(),
-                nn.Dropout(0.1),
-                nn.Linear(self.input_length, 39),
-                nn.Softmax(dim=-1),
-            )
+            deconvolver = MLPDeconvolver.load(checkpoint_path)
         else:
             raise ValueError(
                 "Architecture for NN method should be either Shallow_Wide_Network or 3Layer_MLP"
             )
-        device = "cuda"
-        deconvolver.to(device)
-        deconvolver.load_state_dict(torch.load(checkpoint_path, weights_only=True))
-        deconvolver.eval()
         X = torch.FloatTensor(
             self._extract_features_by_mask(
                 np.array(
@@ -794,9 +720,8 @@ class InferencePipeline:
                 self.features_mask,
             )
         ).to("cuda")
-        # X = torch.unsqueeze(X,0)
-        # X = torch.concat([torch.diagonal(X[:, :, :39], dim1=1, dim2=2),X[:, :, -1]], dim=1)
-        deconv_preds = deconvolver(X)
+
+        deconv_preds = deconvolver.predict(X)
         proportions = np.round(deconv_preds.to("cpu").detach().numpy(), 4)
         self.logger.debug(f"{architecture} proportions: {proportions}")
 

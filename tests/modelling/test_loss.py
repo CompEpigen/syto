@@ -25,8 +25,6 @@ class TestConfidenceWeightedCrossEntropy(unittest.TestCase):
 
     def test_sharp_target_gets_higher_weight(self):
         """A one-hot target should receive weight ~1.0, a flat target ~0.01."""
-        logits = torch.randn(2, self.num_classes)
-
         # Sharp (one-hot) target
         sharp_target = torch.zeros(1, self.num_classes)
         sharp_target[0, 0] = 1.0
