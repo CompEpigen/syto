@@ -1,6 +1,8 @@
 """ """
 
-from typing import Literal, Dict, Tuple, Any
+from typing import Literal, Dict, Tuple, Any, Union
+from pathlib import Path
+import logging
 
 import pandas as pd
 from pandas.api.typing import DataFrameGroupBy
@@ -9,6 +11,8 @@ import numpy as np
 from syto.modelling.prediction_aggregation import (
     aggregate_predictions_by_grg_optimized,
 )
+
+_module_logger = logging.getLogger(__name__)
 
 
 def _sample_reads_per_grg_uniform_multinomial(
@@ -85,6 +89,57 @@ class PseudobulkGenerator:
     Class for generating pseudobulk from dataframe of predictions per read.
     """
 
+    def __init__(
+        self,
+        splits_df: Dict[str, pd.DataFrame],
+        output_directory: Union[str, Path],
+        target_proportions: np.ndarray,
+        batch_size: int,
+        n_workers: int,
+        logger: logging.Logger = _module_logger,
+    ):
+        assert target_proportions.ndim == 2, "target_proportions must be a 2D array"
+        assert np.allclose(
+            target_proportions.sum(axis=1), 1.0
+        ), "Each row of target_proportions must sum to 1"
+
+        self.splits_df = splits_df
+        self.output_directory = Path(output_directory)
+        self.target_proportions = target_proportions
+        self.batch_size = batch_size
+        self.logger = logger
+        self.n_workers = n_workers
+
+        self.output_directory.mkdir(parents=True, exist_ok=True)
+
+    def run(
+        self,
+    ):
+        """
+        For each split: generate pseudobulk samples according to the specified parameters
+        and save the consolidated hdf5 file at the end.
+        """
+
+        # Generate pseudobulk for each split
+        for split_name, split_df in self.splits_df.items():
+            self.logger.info(f"Generating pseudobulk for split: {split_name}")
+            split_working_dir = self.output_directory / split_name
+            split_working_dir.mkdir(parents=True, exist_ok=True)
+            # TODO
+        # Aggregate results into a single hdf5 file
+        # TODO
+
+    def _generate_single_split(
+        self,
+        split_name: str,
+        split_df: pd.DataFrame,
+    ):
+        """"""
+        # TODO
+
+    def _aggregate_hdf5_and_cleanup(self):
+        pass
+
     @classmethod
     def generate_single_pseudobulk(
         cls,
@@ -116,7 +171,6 @@ class PseudobulkGenerator:
             "uniform_multinomial"
         ], f"Unsupported grg_sampling_type: {grg_sampling_type}"
         target_proportions = np.asarray(target_proportions, dtype=np.float64)
-        n_classes = len(target_proportions)
 
         # Compute the number of reads to sample from each class
         n_samples_per_class = np.array(
@@ -143,7 +197,8 @@ class PseudobulkGenerator:
 
         # Aggregate the reads by GR group into a feature matrix
         aggregated_features = aggregate_predictions_by_grg_optimized(
-            read_df.iloc[read_ids], grg_grouping_columns,
+            read_df.iloc[read_ids],
+            grg_grouping_columns,
             weight_col="NCPGS",
         )
         if columns_to_keep is not None:
