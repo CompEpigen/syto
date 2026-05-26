@@ -143,15 +143,16 @@ class PseudobulkGenerator:
 
         # Aggregate the reads by GR group into a feature matrix
         aggregated_features = aggregate_predictions_by_grg_optimized(
-            read_df, []
+            read_df.iloc[read_ids], grg_grouping_columns,
+            weight_col="NCPGS",
         )
         if columns_to_keep is not None:
             aggregated_features = aggregated_features[columns_to_keep]
 
-        return (
-            actual_proportions,
-            actual_n_reads_sampled,
-            n_samples_per_class_per_grg,
-            read_ids,
-            aggregated_features,
-        )
+        return {
+            "actual_proportions": actual_proportions,
+            "actual_n_reads_sampled": actual_n_reads_sampled,
+            "n_samples_per_class_per_grg": n_samples_per_class_per_grg,
+            "read_ids": read_ids,
+            "aggregated_features": aggregated_features,
+        }

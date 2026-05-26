@@ -298,7 +298,11 @@ def aggregate_predictions_by_grg(
     return result
 
 
-def aggregate_predictions_by_grg_optimized(df, group_cols):
+def aggregate_predictions_by_grg_optimized(
+    df: pd.DataFrame,
+    group_cols: list[str],
+    weight_col: str = "total_marked_cpgs",
+):
     """Optimized aggregation using vectorized operations."""
 
     prediction_cols = [
@@ -307,9 +311,9 @@ def aggregate_predictions_by_grg_optimized(df, group_cols):
         if col.startswith("prediction_") and col[11:].isdigit()
     ]
     prediction_cols = sorted(prediction_cols, key=lambda x: int(x.split("_")[1]))
-    prediction_cols.append("methylation_level")
+    if "methylation_level" in df.columns:
+        prediction_cols.append("methylation_level")
 
-    weight_col = "NCPGS"
     df = df.copy()
     if weight_col not in df.columns:
         if "methylated_CpGs" in df.columns and "unmethylated_CpGs" in df.columns:
