@@ -309,7 +309,7 @@ def aggregate_predictions_by_grg_optimized(df, group_cols):
     prediction_cols = sorted(prediction_cols, key=lambda x: int(x.split("_")[1]))
     prediction_cols.append("methylation_level")
 
-    weight_col = "total_marked_cpgs"
+    weight_col = "NCPGS"
     df = df.copy()
     if weight_col not in df.columns:
         if "methylated_CpGs" in df.columns and "unmethylated_CpGs" in df.columns:
@@ -324,8 +324,8 @@ def aggregate_predictions_by_grg_optimized(df, group_cols):
     # Pre-compute weighted values for each prediction column
     for col in prediction_cols:
         df[f"_weighted_{col}"] = df[col] * df["_weight"]
-    # Build aggregation dictionary
 
+    # Build aggregation dictionary
     agg_dict = {}
     # Sum of weighted values and weights
     for col in prediction_cols:
