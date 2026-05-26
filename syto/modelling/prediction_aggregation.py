@@ -37,7 +37,7 @@ def _fill_in_missing_labels(
     Parameters
     ----------
     df : pd.DataFrame
-        DMR-aggregated predictions (output of ``aggregate_predictions_by_dmr``).
+        DMR-aggregated predictions (output of ``aggregate_predictions_by_grg``).
     group_cols : list[str]
         Columns used for grouping during aggregation.
     labels_dict : dict
@@ -170,7 +170,7 @@ def _apply_prior_substitution(
     return df
 
 
-def aggregate_predictions_by_dmr(
+def aggregate_predictions_by_grg(
     df: pd.DataFrame,
     group_cols: Optional[List[str]] = None,
     prediction_cols: Optional[List[str]] = None,
@@ -298,7 +298,7 @@ def aggregate_predictions_by_dmr(
     return result
 
 
-def aggregate_predictions_by_dmr_optimized(df, group_cols):
+def aggregate_predictions_by_grg_optimized(df, group_cols):
     """Optimized aggregation using vectorized operations."""
 
     prediction_cols = [
@@ -403,7 +403,7 @@ def get_final_prediction(
     Parameters
     ----------
     aggregated_df : pd.DataFrame
-        Output from aggregate_predictions_by_dmr()
+        Output from aggregate_predictions_by_grg()
     method : str
         'avg' for simple average or 'wavg' for weighted average
     prediction_prefix : str

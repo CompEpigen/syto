@@ -27,7 +27,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from syto.data import LOYFER_CELL_TYPE_MATCH_DICT
 from syto.data.sequencing.bam_processing import process_bam_with_chunking
 from syto.modelling.prediction_aggregation import (
-    aggregate_predictions_by_dmr,
+    aggregate_predictions_by_grg,
 )
 from syto.modelling.classifiers.lazy_classifier_factory import (
     read_classifier_factory,
@@ -458,11 +458,11 @@ class InferencePipeline:
     def _aggregate_to_dmr(self) -> pd.DataFrame:
         """
         Aggregate read-level predictions to DMR level using
-        ``aggregate_predictions_by_dmr`` from edautils.
+        ``aggregate_predictions_by_grg`` from edautils.
         """
         self.logger.info("Aggregating predictions by DMR ...")
 
-        aggregated = aggregate_predictions_by_dmr(
+        aggregated = aggregate_predictions_by_grg(
             df=self.predictions_df,
             group_cols=["dmr_ctype_label", "dmr_ctype"],
             weight_col="NCPGS",
