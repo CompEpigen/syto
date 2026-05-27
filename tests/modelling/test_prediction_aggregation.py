@@ -988,4 +988,3 @@ class TestFillInMissingGrGroups(unittest.TestCase):
             )
 
         self.assertIn("invalid_strategy", str(context.exception))
-
