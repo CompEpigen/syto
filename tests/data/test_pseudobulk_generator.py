@@ -267,7 +267,7 @@ class TestPseudobulkGeneratorColumnArguments(unittest.TestCase):
         )
         parameters = GenerationParameters(
             cell_types_mapping={"class_0": 0, "class_1": 1},
-            gr_groups={"gr1": 0, "gr2": 1, "gr3": 2},
+            gr_groups_mapping={"0": 0, "1": 1, "2": 2},
             substitution_method="uniform_number",
             gr_sampling_method="uniform_multinomial",
         )
@@ -297,7 +297,6 @@ class TestPseudobulkGeneratorColumnArguments(unittest.TestCase):
         self.assertEqual(generator.grg_label_column, "dmr_ctype_label")
         # Check that indices were precomputed correctly
         self.assertIn("train", generator._indices_per_split)
-        self.assertEqual(generator._n_gr_groups_per_split["train"], 3)
 
     def test_custom_class_label_column(self):
         """Test that a custom class_label_column is used correctly."""
@@ -328,8 +327,6 @@ class TestPseudobulkGeneratorColumnArguments(unittest.TestCase):
         )
 
         self.assertEqual(generator.grg_label_column, "my_grg_label")
-        # Check that GRG groups were counted correctly
-        self.assertEqual(generator._n_gr_groups_per_split["train"], 3)
 
     def test_custom_both_columns(self):
         """Test using both custom class_label_column and grg_label_column."""
@@ -588,7 +585,7 @@ class TestPureProfileGeneration(unittest.TestCase):
         )
         parameters = GenerationParameters(
             cell_types_mapping=cell_types,
-            gr_groups={f"gr{i}": i for i in range(n_gr_groups)},
+            gr_groups_mapping={str(i): i for i in range(n_gr_groups)},
             substitution_method="uniform_number",
             gr_sampling_method="uniform_multinomial",
         )
@@ -679,7 +676,7 @@ class TestGenerateSingleSplit(unittest.TestCase):
         )
         parameters = GenerationParameters(
             cell_types_mapping={"class_0": 0, "class_1": 1},
-            gr_groups={"gr0": 0, "gr1": 1, "gr2": 2},
+            gr_groups_mapping={"0": 0, "1": 1, "2": 2},
             substitution_method="uniform_number",
             gr_sampling_method="uniform_multinomial",
         )
@@ -738,7 +735,7 @@ class TestGenerateSingleSplit(unittest.TestCase):
         )
         parameters = GenerationParameters(
             cell_types_mapping={"class_0": 0, "class_1": 1},
-            gr_groups={"gr0": 0, "gr1": 1, "gr2": 2},
+            gr_groups_mapping={"0": 0, "1": 1, "2": 2},
             substitution_method="uniform_number",
             gr_sampling_method="uniform_multinomial",
         )

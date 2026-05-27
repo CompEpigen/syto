@@ -82,7 +82,7 @@ def _sample_reads_per_grg_uniform_multinomial(
 
 def _sample_read_ids_from_grouped_dataframe(
     n_samples_per_class_per_grg: np.ndarray,
-    indices_per_class_and_grg: Dict[Tuple[Any, Any], np.ndarray],
+    indices_per_class_and_grg: Dict[Tuple[int, int], np.ndarray],
     seed: int,
 ) -> np.ndarray:
     """
@@ -91,19 +91,22 @@ def _sample_read_ids_from_grouped_dataframe(
 
     Args:
         n_samples_per_class_per_grg: A 2D array of shape (n_classes, n_gr_groups)
-            specifying the number of reads to sample for each (class, GRG) combination.
-        indices_per_class_and_grg: A dictionary mapping (class_label, grg_label) tuples
-            to arrays of read IDs corresponding to that group in the original dataframe.
+            specifying the number of reads to sample for each (class_index, grg_index)
+            combination.
+        indices_per_class_and_grg: A dictionary mapping (class_index, grg_index) tuples
+            to arrays of row indices corresponding to that group in the original dataframe.
+            Keys must be integer indices (0-based), not raw label values.
         seed: An integer seed for the random number generator to ensure reproducibility.
     """
     n_reads_to_sample = n_samples_per_class_per_grg.sum()
-    read_ids = np.empty(n_reads_to_sample, dtype=np.int64)
+    read_ids = np.full(n_reads_to_sample, -1, dtype=np.int64)
     current_index = 0
     # Create a fixed random generator for reproducibility
     rng = np.random.Generator(np.random.PCG64(seed=seed))
     # sort index for reproducibility
     for (class_label, grg_label), indices in sorted(indices_per_class_and_grg.items()):
         n_reads_to_sample = n_samples_per_class_per_grg[class_label, grg_label]
+
         if len(indices) == 0:
             if n_reads_to_sample > 0:
                 raise ValueError(
@@ -197,9 +200,10 @@ class PseudobulkGenerator:
             "dmr_ctype_label",
             "dmr_ctype",
         ]
+        self.n_classes = len(parameters.cell_types_mapping)
+        self.n_gr_groups = len(parameters.gr_groups_mapping)
         # Default to legacy target columns if not specified
-        num_classes = len(parameters.cell_types_mapping)
-        self.columns_to_keep = columns_to_keep or build_target_columns(num_classes)
+        self.columns_to_keep = columns_to_keep or build_target_columns(self.n_classes)
         self.logger = logger
 
         # Validate that grg_label_column is in grg_grouping_columns
@@ -217,31 +221,53 @@ class PseudobulkGenerator:
         self.output_directory.mkdir(parents=True, exist_ok=True)
 
     def _precompute_group_indices(self) -> None:
-        """Pre-compute group indices for each split for efficient sampling."""
-        self._indices_per_split: Dict[str, Dict[Tuple[Any, Any], np.ndarray]] = {}
-        self._n_gr_groups_per_split: Dict[str, int] = {}
+        """Pre-compute group indices for each split for efficient sampling.
+
+        Converts (class_label_value, grg_label_value) from the data to
+        (class_index, grg_index) using the cell_types_mapping and gr_groups_mapping.
+        This ensures the indices dict keys match the array indices used in
+        n_samples_per_class_per_grg.
+        """
+        self._indices_per_split: Dict[str, Dict[Tuple[int, int], np.ndarray]] = {}
+
+        # Build reverse mappings: label_value -> index
+        # cell_types_mapping is {name: index}, we need to map from class_label_column values
+        # For Loyfer data, class labels are typically integers matching the index
+        # gr_groups_mapping is {grg_label: index}
+        grg_to_index = self.parameters.gr_groups_mapping
 
         for split_name, df in self.splits_df.items():
             # Group by (class_label, grg_label) and get indices directly
             grouped = df.groupby(
                 [self.class_label_column, self.grg_label_column], sort=False
             )
-            # .indices returns a dict mapping group keys to numpy arrays of indices
-            indices_dict = grouped.indices
+            # .indices returns a dict mapping group keys to numpy arrays of row indices
+            raw_indices_dict = grouped.indices
+
+            # Convert (class_label_value, grg_label_value) -> (class_index, grg_index)
+            indices_dict: Dict[Tuple[int, int], np.ndarray] = {}
+            for (class_label, grg_label), row_indices in raw_indices_dict.items():
+                # class_label is already an integer index (original_label column)
+                class_index = int(class_label)
+                # grg_label needs to be converted using the mapping
+                # Handle both string and numeric grg labels
+                grg_key = (
+                    str(grg_label) if str(grg_label) in grg_to_index else grg_label
+                )
+                if grg_key in grg_to_index:
+                    grg_index = grg_to_index[grg_key]
+                else:
+                    # If grg_label is already an integer index, use it directly
+                    grg_index = int(grg_label)
+                indices_dict[(class_index, grg_index)] = row_indices
 
             self._indices_per_split[split_name] = indices_dict
 
-            # Count unique GRG labels
-            n_gr_groups = df[self.grg_label_column].nunique()
-            self._n_gr_groups_per_split[split_name] = n_gr_groups
-
             self.logger.debug(
-                "Split %s: %d groups of (%s, %s), %d unique %s",
+                "Split %s: %d groups of (%s, %s)",
                 split_name,
                 len(indices_dict),
                 self.class_label_column,
-                self.grg_label_column,
-                n_gr_groups,
                 self.grg_label_column,
             )
 
@@ -369,7 +395,6 @@ class PseudobulkGenerator:
 
         # Get pre-computed indices for this split
         indices_dict = self._indices_per_split[split_name]
-        n_gr_groups = self._n_gr_groups_per_split[split_name]
 
         # Process batches using Dask
         for batch_idx in missing_batches:
@@ -388,14 +413,13 @@ class PseudobulkGenerator:
             for idx in range(start_idx, end_idx):
                 result = delayed(self.generate_single_pseudobulk)(
                     n_reads_to_sample=self.n_reads_to_sample,
-                    n_gr_groups=n_gr_groups,
+                    n_gr_groups=self.n_gr_groups,
                     indices_per_class_and_grg=indices_dict,
                     read_df=split_df,
                     target_proportions=target_proportions[idx],
                     grg_grouping_columns=self.grg_grouping_columns,
                     columns_to_keep=self.columns_to_keep,
                     grg_sampling_type=self.parameters.gr_sampling_method,
-                    seed=None,  # Will be generated inside the function
                     index=idx,
                 )
                 delayed_results.append(result)
@@ -434,14 +458,13 @@ class PseudobulkGenerator:
 
         split_df = self.splits_df[split_name]
         indices_dict = self._indices_per_split[split_name]
-        n_gr_groups = self._n_gr_groups_per_split[split_name]
         n_classes = len(self.parameters.cell_types_mapping)
 
         # Generate one pure profile per class
         pure_results: List[PseudobulkResult] = []
 
         # Get expected GR group IDs from parameters (values of the dict)
-        expected_gr_ids = sorted(self.parameters.gr_groups.values())
+        expected_gr_ids = sorted(self.parameters.gr_groups_mapping.values())
 
         for class_idx in range(n_classes):
             # Create one-hot proportions (100% of reads from this cell type)
@@ -450,7 +473,7 @@ class PseudobulkGenerator:
 
             result = self.generate_single_pseudobulk(
                 n_reads_to_sample=self.n_reads_to_sample,
-                n_gr_groups=n_gr_groups,
+                n_gr_groups=self.n_gr_groups,
                 indices_per_class_and_grg=indices_dict,
                 read_df=split_df,
                 target_proportions=proportions,
@@ -529,13 +552,12 @@ class PseudobulkGenerator:
         cls,
         n_reads_to_sample: int,
         n_gr_groups: int,
-        indices_per_class_and_grg: Dict[Tuple[Any, Any], np.ndarray],
+        indices_per_class_and_grg: Dict[Tuple[int, int], np.ndarray],
         read_df: pd.DataFrame,
         target_proportions: np.ndarray,
         grg_grouping_columns: list[str],
         columns_to_keep: list[str] = None,
         grg_sampling_type: Literal["uniform_multinomial"] = "uniform_multinomial",
-        seed: int = None,
         index: int = 0,
     ) -> PseudobulkResult:
         """Generate a single pseudobulk sample by sampling and aggregating reads.
@@ -547,15 +569,15 @@ class PseudobulkGenerator:
         Args:
             n_reads_to_sample: The total number of reads to sample for the pseudobulk.
             n_gr_groups: The number of GR groups to distribute reads across.
-            indices_per_class_and_grg: A dictionary mapping (class_label, grg_label) tuples
-                to arrays of read IDs corresponding to that group in the original dataframe.
+            indices_per_class_and_grg: A dictionary mapping (class_index, grg_index) tuples
+                to arrays of row indices corresponding to that group in the original dataframe.
+                Keys must be integer indices (0-based), not raw label values.
             read_df: The original dataframe containing read-level predictions.
             target_proportions: An array of proportions summing to 1, shape (n_classes,).
             grg_grouping_columns: Columns to group by for GRG aggregation.
             columns_to_keep: Columns to keep in aggregated output. If None, keeps all.
             grg_sampling_type: The method to use for sampling reads across GR groups.
                 Currently only supports "uniform_multinomial".
-            seed: Random seed for reproducibility. If None, a random seed is generated.
             index: Index to assign to this pseudobulk result.
 
         Returns:
@@ -573,8 +595,6 @@ class PseudobulkGenerator:
         n_samples_per_class = np.array(
             [int(n_reads_to_sample * p) for p in target_proportions]
         )
-        actual_n_reads_sampled = n_samples_per_class.sum()
-        actual_proportions = n_samples_per_class / actual_n_reads_sampled
 
         # For each class, compute the number of reads to sample from each GR group
         if grg_sampling_type == "uniform_multinomial":
@@ -584,9 +604,32 @@ class PseudobulkGenerator:
         else:
             raise ValueError(f"Unsupported grg_sampling_type: {grg_sampling_type}")
 
-        # Use provided seed or generate one
-        if seed is None:
-            seed = np.random.randint(0, 2**31 - 1)
+        # post processing step: if there are some (class, grg) groups with 0 reads available in
+        # the dataset, we cannot sample from them.
+        # We redistribute the reads that were supposed to come from those groups
+        # uniformly across the other groups of the same class
+        mask_has_reads = np.zeros_like(n_samples_per_class_per_grg, dtype=bool)
+        for (class_idx, grg_idx), indices in indices_per_class_and_grg.items():
+            if len(indices) > 0:
+                mask_has_reads[class_idx, grg_idx] = True
+        for class_idx in range(n_samples_per_class_per_grg.shape[0]):
+            # Identify groups with and without reads for this class
+            has_reads = mask_has_reads[class_idx]
+            quota_to_distribute = n_samples_per_class_per_grg[
+                class_idx, ~has_reads
+            ].sum()
+            if quota_to_distribute > 0:
+                n_samples_per_class_per_grg[class_idx, has_reads] += int(
+                    quota_to_distribute / has_reads.sum()
+                )
+
+        # compute actual proportions after adjustment
+        actual_n_reads_sampled = n_samples_per_class_per_grg.sum()
+        actual_proportions = (
+            n_samples_per_class_per_grg.sum(axis=1) / actual_n_reads_sampled
+        )
+
+        seed = np.random.randint(0, 2**31 - 1)
 
         # Sample the read IDS for each class and GR group, and concatenate them into a single array
         read_ids = _sample_read_ids_from_grouped_dataframe(

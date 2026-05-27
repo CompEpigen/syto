@@ -7,9 +7,9 @@ End-to-end pipeline using the new PseudobulkGenerator class with:
     - Full reproducibility metadata storage
 
 This module orchestrates:
-    1. Loading / rebalancing train/valid/test splits
-    2. Read preparation (derived columns, optional UXM alignment)
-    3. Classifier prediction (MethylBERT / Dismir / CancerDetector)
+    1. Loading train/valid/test splits
+    2. Read preparation (renaming and deriving columns)
+    3. Classifier prediction (if needed)
     4. Pseudobulk generation with the new HDF5-based generator
 """
 
@@ -18,14 +18,13 @@ import logging
 import os
 import pickle
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 import numpy as np
 import pandas as pd
 
 from syto.data import LOYFER_CELL_TYPE_MATCH_DICT
 from syto.data.read_preparation import prepare_splits_for_pseudobulk
-from syto.data.split_rebalancing import rebalance_splits
 from syto.data.pseudobulk_generator import PseudobulkGenerator
 from syto.data.hdf5_utils import (
     GenerationMetadata,
@@ -121,7 +120,7 @@ class PseudoBulkPipelineV2:
         self._filter_split_columns(splits_data)
 
         # Load target proportions
-        target_proportions_per_split = self._load_target_proportions(splits_data)
+        target_proportions_per_split = self._load_target_proportions()
 
         # Build metadata and parameters
         metadata = self._build_metadata(splits_data)
@@ -233,72 +232,16 @@ class PseudoBulkPipelineV2:
             "dmr_ctype",
             "NCPGS",
             "total_marked_cpgs",
-            "M_rate",
-            "methylation_level",
+            # "M_rate",
+            # "methylation_level",
             "chr",
             "chromosome",
             "label",
         ]
 
-        # Optional UXM columns
-        if self.config.get("generate_uxm_inputs_in_ios", False):
-            base_cols.extend(["name", "record_M", "record_U", "record_X"])
-
         for split_name, df in splits_data.items():
             keep_cols = [c for c in base_cols + pred_cols if c in df.columns]
             splits_data[split_name] = df[keep_cols]
-
-    def _load_target_proportions(
-        self, splits_data: Dict[str, pd.DataFrame]
-    ) -> Dict[str, np.ndarray]:
-        """Load target proportions for each split."""
-        target_proportions_per_split = {}
-
-        # Check for per-split configuration
-        split_generation = self.config.get("split_generation")
-
-        if split_generation is not None:
-            # Per-split target proportions
-            for split_name, split_cfg in split_generation.items():
-                if split_name not in splits_data:
-                    continue
-
-                tp_path = split_cfg.get("target_proportions_path")
-                if tp_path is not None:
-                    tp_data = np.load(tp_path)
-                    proportions = tp_data["proportions"]
-                    self.logger.info(
-                        f"  Loaded {len(proportions)} proportions for {split_name}"
-                    )
-                else:
-                    # Generate random proportions if not specified
-                    n_examples = split_cfg.get(
-                        "n_io_examples", self.config.get("n_io_examples", 10000)
-                    )
-                    proportions = self._generate_random_proportions(n_examples)
-                    self.logger.info(
-                        f"  Generated {n_examples} random proportions for {split_name}"
-                    )
-                target_proportions_per_split[split_name] = proportions
-        else:
-            # Shared target proportions for all splits
-            generation_mode = self.config.get("generation_mode", "target_proportions")
-
-            if generation_mode == "target_proportions":
-                tp_path = self.config["target_proportions_path"]
-                tp_data = np.load(tp_path)
-                proportions = tp_data["proportions"]
-                self.logger.info(f"  Loaded {len(proportions)} shared proportions")
-            else:
-                # Random mode
-                n_examples = self.config.get("n_io_examples", 10000)
-                proportions = self._generate_random_proportions(n_examples)
-                self.logger.info(f"  Generated {n_examples} random proportions")
-
-            for split_name in splits_data:
-                target_proportions_per_split[split_name] = proportions.copy()
-
-        return target_proportions_per_split
 
     def _generate_random_proportions(self, n_examples: int) -> np.ndarray:
         """Generate random proportion vectors using Dirichlet sampling."""
@@ -365,11 +308,10 @@ class PseudoBulkPipelineV2:
         # Build cell types mapping from labels_dict
         cell_types_mapping = {v: k for k, v in self.labels_dict.items()}
 
-        # Build GR groups mapping from data
-        sample_df = next(iter(splits_data.values()))
-        grg_label_column = self.config.get("grg_label_column", "dmr_ctype_label")
-        unique_grgs = sample_df[grg_label_column].unique()
-        gr_groups = {str(grg): i for i, grg in enumerate(sorted(unique_grgs))}
+        # Specific to Loyfer dataset: we build one GR group per ctype
+        gr_groups_mapping = {
+            f"{ctype}_grg": i for i, ctype in enumerate(cell_types_mapping.keys())
+        }
 
         # Get substitution method
         substitution_method = self.config.get("substitution_method", "uniform_number")
@@ -381,7 +323,7 @@ class PseudoBulkPipelineV2:
 
         return GenerationParameters(
             cell_types_mapping=cell_types_mapping,
-            gr_groups=gr_groups,
+            gr_groups_mapping=gr_groups_mapping,
             substitution_method=substitution_method,
             gr_sampling_method=gr_sampling_method,
         )
@@ -392,32 +334,50 @@ class PseudoBulkPipelineV2:
 
     def _load_splits(self) -> Dict[str, pd.DataFrame]:
         """Load configured splits from parquet or pickle."""
-        input_type = self.config["input_type"]
-        splits_cfg = self.config.get("splits", ["train", "valid", "test"])
+        splits_configs = self.config["split_information"]
         splits_data = {}
 
-        if input_type == "raw_splits":
-            data_path = self.config["data_path"]
-            for split_name in splits_cfg:
-                path = os.path.join(data_path, f"{split_name}.parquet")
+        for split_name, split_cfg in splits_configs.items():
+            path = Path(split_cfg["data_path"])
+            file_extension = path.suffix.lower()
+            if file_extension == ".parquet":
                 splits_data[split_name] = pd.read_parquet(path)
-                self.logger.debug(f"  Loaded {split_name} from {path}")
+            elif file_extension in [".pkl", ".pickle"]:
+                with open(path, "rb") as f:
+                    splits_data[split_name] = pickle.load(f)
+            else:
+                raise ValueError(
+                    f"Unsupported file extension '{file_extension}' for split '{split_name}'. "
+                    "Expected .parquet or .pkl/.pickle."
+                )
+            self.logger.debug("  Loaded %s from %s", split_name, path)
 
-        elif input_type == "pre_predicted":
-            pickle_paths = self.config["pickle_paths"]
-            for split_name in splits_cfg:
-                if split_name in pickle_paths:
-                    with open(pickle_paths[split_name], "rb") as f:
-                        splits_data[split_name] = pickle.load(f)
-                else:
-                    self.logger.warning(
-                        f"  Split '{split_name}' not found in pickle_paths"
-                    )
-
-        else:
-            raise ValueError(
-                f"Unknown input_type: '{input_type}'. "
-                "Must be 'raw_splits', 'uxm_prepared', or 'pre_predicted'."
-            )
+            # TODO: remove the next line after debugging
+            print(len(splits_data[split_name]))
+            splits_data[split_name] = splits_data[split_name].sample(n=100000)
 
         return splits_data
+
+    def _load_target_proportions(self) -> Dict[str, np.ndarray]:
+        """Load target proportions for each split."""
+        target_proportions_per_split = {}
+
+        splits_configs = self.config["split_information"]
+
+        # Per-split target proportions
+        for split_name, split_cfg in splits_configs.items():
+
+            tp_path = split_cfg["target_proportions_path"]
+            tp_data = np.load(tp_path)
+            proportions = tp_data["proportions"]
+
+            # TODO: remove the next line after debugging
+            proportions = proportions[:100]
+
+            self.logger.info(
+                "  Loaded %d proportions for %s", len(proportions), split_name
+            )
+
+            target_proportions_per_split[split_name] = proportions
+
+        return target_proportions_per_split

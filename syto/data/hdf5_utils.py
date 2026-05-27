@@ -52,7 +52,7 @@ class HDF5Schema:
 
     # Parameters datasets/attributes
     PARAMS_CELL_TYPES_MAPPING = f"{PARAMETERS}/cell_types_mapping"
-    PARAMS_GR_GROUPS = f"{PARAMETERS}/gr_groups"
+    PARAMS_GR_GROUPS_MAPPING = f"{PARAMETERS}/gr_groups_mapping"
     ATTR_SUBSTITUTION_METHOD = "substitution_method"
     ATTR_GR_SAMPLING_METHOD = "gr_sampling_method"
 
@@ -164,8 +164,8 @@ class GenerationMetadata:
 class GenerationParameters:
     """Parameters for pseudobulk generation."""
 
-    cell_types_mapping: Dict[str, int]
-    gr_groups: Dict[str, int]  # Mapping from GR group name to GR group ID
+    cell_types_mapping: Dict[str, int]  # Mapping from cell type name to class index
+    gr_groups_mapping: Dict[str, int]  # Mapping from GR group label to GR group index
     substitution_method: Literal["uniform_number", "prior_blending", "prior_imputation"]
     gr_sampling_method: Literal["uniform_multinomial"]
 
@@ -174,7 +174,7 @@ class GenerationParameters:
         param_str = json.dumps(
             {
                 "cell_types_mapping": self.cell_types_mapping,
-                "gr_groups": self.gr_groups,
+                "gr_groups_mapping": self.gr_groups_mapping,
                 "substitution_method": self.substitution_method,
                 "gr_sampling_method": self.gr_sampling_method,
             },
@@ -735,11 +735,11 @@ class HDF5ConsolidationWriter:
         params_grp.create_dataset("cell_types_mapping", data=cell_types_arr)
 
         # GR groups mapping as structured dataset
-        gr_groups = list(parameters.gr_groups.items())
+        gr_groups = list(parameters.gr_groups_mapping.items())
         gr_groups_arr = np.array(
             [(name.encode(), id_) for name, id_ in gr_groups], dtype=dt
         )
-        params_grp.create_dataset("gr_groups", data=gr_groups_arr)
+        params_grp.create_dataset("gr_groups_mapping", data=gr_groups_arr)
 
         # Attributes
         params_grp.attrs[HDF5Schema.ATTR_SUBSTITUTION_METHOD] = (

@@ -165,13 +165,13 @@ class TestGenerationParameters(unittest.TestCase):
         """Verify identical parameters produce the same hash."""
         params1 = GenerationParameters(
             cell_types_mapping={"A": 0, "B": 1},
-            gr_groups={"gr1": 0, "gr2": 1},
+            gr_groups_mapping={"gr1": 0, "gr2": 1},
             substitution_method="uniform_number",
             gr_sampling_method="uniform_multinomial",
         )
         params2 = GenerationParameters(
             cell_types_mapping={"A": 0, "B": 1},
-            gr_groups={"gr1": 0, "gr2": 1},
+            gr_groups_mapping={"gr1": 0, "gr2": 1},
             substitution_method="uniform_number",
             gr_sampling_method="uniform_multinomial",
         )
@@ -181,13 +181,13 @@ class TestGenerationParameters(unittest.TestCase):
         """Verify different parameters produce different hashes."""
         params1 = GenerationParameters(
             cell_types_mapping={"A": 0, "B": 1},
-            gr_groups={"gr1": 0, "gr2": 1},
+            gr_groups_mapping={"gr1": 0, "gr2": 1},
             substitution_method="uniform_number",
             gr_sampling_method="uniform_multinomial",
         )
         params2 = GenerationParameters(
             cell_types_mapping={"A": 0, "C": 2},  # Different
-            gr_groups={"gr1": 0, "gr2": 1},
+            gr_groups_mapping={"gr1": 0, "gr2": 1},
             substitution_method="uniform_number",
             gr_sampling_method="uniform_multinomial",
         )
