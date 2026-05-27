@@ -25,7 +25,7 @@ _worker_data = {}
 
 
 def _build_target_columns(num_prediction_classes: int = 39) -> list:
-    """Build the default list of target columns for DMR-aggregated output.
+    """Build the default list of target columns for GR-aggregated output.
 
     Parameters
     ----------

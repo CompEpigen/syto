@@ -668,14 +668,14 @@ class InferencePipeline:
         Run XGBoost-based deconvolution.
 
         Loads a pre-trained ``XGBoostDeconvolver`` from checkpoint and
-        runs prediction on the DMR-aggregated matrix.
+        runs prediction on the GR-aggregated matrix.
         """
         checkpoint_path = method_cfg["checkpoint_path"]
         self.logger.info(f"Loading XGBoostDeconvolver from {checkpoint_path}")
 
         deconvolver = XGBoostDeconvolver.load(checkpoint_path)
 
-        # Build the prediction matrix from DMR-aggregated data
+        # Build the prediction matrix from GR-aggregated data
         X = apply_feature_mask(
             np.array(
                 self.dmr_aggregated[
@@ -695,7 +695,7 @@ class InferencePipeline:
         Run torch-nn-based deconvolution.
 
         Loads a pre-trained model of specified architectur from checkpoint and
-        runs prediction on the DMR-aggregated matrix.
+        runs prediction on the GR-aggregated matrix.
         """
         checkpoint_path = method_cfg["checkpoint_path"]
         architecture = method_cfg["name"]
@@ -848,7 +848,7 @@ class InferencePipeline:
                 f"method/calibrator combinations) to {path}"
             )
 
-        # ── DMR-aggregated predictions (pickle) ────────────────────────
+        # ── GR-aggregated predictions (pickle) ────────────────────────
         if self.dmr_aggregated is not None:
             path = os.path.join(output_dir, "dmr_aggregated.pkl")
             with open(path, "wb") as f:

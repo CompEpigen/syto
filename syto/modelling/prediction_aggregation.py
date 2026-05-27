@@ -37,7 +37,7 @@ def _fill_in_missing_labels(
     Parameters
     ----------
     df : pd.DataFrame
-        DMR-aggregated predictions (output of ``aggregate_predictions_by_grg``).
+        GR-aggregated predictions (output of ``aggregate_predictions_by_grg``).
     group_cols : list[str]
         Columns used for grouping during aggregation.
     labels_dict : dict
@@ -99,6 +99,120 @@ def _fill_in_missing_labels(
     return df
 
 
+def fill_in_missing_gr_groups(
+    df: pd.DataFrame,
+    expected_gr_ids: List[int],
+    gr_label_column: str = "dmr_ctype_label",
+    n_classes: int = 39,
+    substitution_strategy: str = "uniform_number",
+    uniform_prior: Optional[pd.DataFrame] = None,
+    prior_weight: float = 1.0,
+) -> pd.DataFrame:
+    """Fill in missing GR groups and optionally substitute predictions.
+
+    This is a simplified v2 of ``_fill_in_missing_labels`` that takes a list
+    of expected GR group IDs instead of a labels dict.
+
+    After inserting synthetic zero rows for any GR IDs in *expected_gr_ids*
+    that are absent from *df*, a post-processing step is applied depending
+    on *substitution_strategy*:
+
+    * ``"prior_blending"`` – blend **every** row with the uniform prior
+      using the per-row ``n_reads`` count:
+      ``blended = (n / (n + w)) * observed + (w / (n + w)) * prior``
+      where *w* = *prior_weight*.  Rows with ``n_reads == 0`` collapse
+      entirely to the prior.
+    * ``"prior_imputation"`` – replace only rows with ``n_reads == 0``
+      with the corresponding prior row; all other rows are untouched.
+    * ``"uniform_number"`` – assigns each cell a probability of 1/n_classes.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        GR-aggregated predictions (output of ``aggregate_predictions_by_grg``).
+    expected_gr_ids : List[int]
+        List of GR group IDs that should be present in the output.
+    gr_label_column : str
+        Column name containing the GR group labels. Default: "dmr_ctype_label".
+    n_classes : int
+        Number of classes for uniform_number substitution. Default: 39.
+    substitution_strategy : str
+        One of ``"prior_blending"``, ``"prior_imputation"``, ``"uniform_number"``.
+    uniform_prior : pd.DataFrame or None
+        Pre-computed uniform prior matrix (required for ``prior_blending``
+        and ``prior_imputation``).
+    prior_weight : float
+        Weight of the prior in the blending formula. Default: 1.0.
+
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame with all expected GR groups present.
+    """
+    if substitution_strategy not in VALID_SUBSTITUTION_STRATEGIES:
+        raise ValueError(
+            f"Unknown substitution_strategy '{substitution_strategy}'. "
+            f"Must be one of {VALID_SUBSTITUTION_STRATEGIES}."
+        )
+    if substitution_strategy not in ["uniform_number"] and uniform_prior is None:
+        raise ValueError(
+            f"uniform_prior must be provided when substitution_strategy="
+            f"'{substitution_strategy}'."
+        )
+
+    df = df.copy()
+
+    # Find missing GR IDs
+    present_gr_ids = set(df[gr_label_column].unique())
+    expected_gr_ids_set = set(expected_gr_ids)
+    missing_gr_ids = expected_gr_ids_set - present_gr_ids
+
+    if missing_gr_ids:
+        # Create synthetic rows for missing GR IDs
+        # Identify columns to fill
+        non_group_cols = [col for col in df.columns if col != gr_label_column]
+        prediction_cols = [col for col in non_group_cols if "prediction" in col]
+        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+        string_cols = df.select_dtypes(include=[object]).columns.tolist()
+
+        synthetic_rows = []
+        for gr_id in missing_gr_ids:
+            row = {gr_label_column: gr_id}
+            # Fill numeric columns with appropriate defaults
+            for col in numeric_cols:
+                if col == gr_label_column:
+                    continue
+                if col in prediction_cols:
+                    if substitution_strategy == "uniform_number":
+                        row[col] = 1.0 / n_classes
+                    else:
+                        row[col] = 0.0
+                elif col == "total_weight":
+                    row[col] = 1  # Avoid division by zero
+                elif col == "label":
+                    row[col] = -1  # Synthetic label
+                else:
+                    row[col] = 0
+            # Fill string columns with empty string
+            for col in string_cols:
+                row[col] = ""
+            synthetic_rows.append(row)
+
+        synthetic_df = pd.DataFrame(synthetic_rows)
+        df = pd.concat([df, synthetic_df], ignore_index=True)
+
+    # Sort by GR label for consistent ordering
+    df = df.sort_values(gr_label_column).reset_index(drop=True)
+
+    # ── Apply substitution strategy ─────────────────────────────────────
+    if substitution_strategy in ("prior_blending", "prior_imputation"):
+        df = _apply_prior_substitution(
+            df, uniform_prior, substitution_strategy, prior_weight
+        )
+
+    return df
+
+
 def _apply_prior_substitution(
     df: pd.DataFrame,
     uniform_prior: pd.DataFrame,
@@ -110,7 +224,7 @@ def _apply_prior_substitution(
     Parameters
     ----------
     df : pd.DataFrame
-        DMR-aggregated DataFrame (with synthetic rows already inserted).
+        GR-aggregated DataFrame (with synthetic rows already inserted).
     uniform_prior : pd.DataFrame
         Uniform prior matrix keyed by ``dmr_ctype_label``.
     strategy : str
