@@ -37,7 +37,7 @@ def _fill_in_missing_labels(
     Parameters
     ----------
     df : pd.DataFrame
-        DMR-aggregated predictions (output of ``aggregate_predictions_by_dmr``).
+        GR-aggregated predictions (output of ``aggregate_predictions_by_grg``).
     group_cols : list[str]
         Columns used for grouping during aggregation.
     labels_dict : dict
@@ -99,6 +99,120 @@ def _fill_in_missing_labels(
     return df
 
 
+def fill_in_missing_gr_groups(
+    df: pd.DataFrame,
+    expected_gr_ids: List[int],
+    gr_label_column: str = "dmr_ctype_label",
+    n_classes: int = 39,
+    substitution_strategy: str = "uniform_number",
+    uniform_prior: Optional[pd.DataFrame] = None,
+    prior_weight: float = 1.0,
+) -> pd.DataFrame:
+    """Fill in missing GR groups and optionally substitute predictions.
+
+    This is a simplified v2 of ``_fill_in_missing_labels`` that takes a list
+    of expected GR group IDs instead of a labels dict.
+
+    After inserting synthetic zero rows for any GR IDs in *expected_gr_ids*
+    that are absent from *df*, a post-processing step is applied depending
+    on *substitution_strategy*:
+
+    * ``"prior_blending"`` – blend **every** row with the uniform prior
+      using the per-row ``n_reads`` count:
+      ``blended = (n / (n + w)) * observed + (w / (n + w)) * prior``
+      where *w* = *prior_weight*.  Rows with ``n_reads == 0`` collapse
+      entirely to the prior.
+    * ``"prior_imputation"`` – replace only rows with ``n_reads == 0``
+      with the corresponding prior row; all other rows are untouched.
+    * ``"uniform_number"`` – assigns each cell a probability of 1/n_classes.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        GR-aggregated predictions (output of ``aggregate_predictions_by_grg``).
+    expected_gr_ids : List[int]
+        List of GR group IDs that should be present in the output.
+    gr_label_column : str
+        Column name containing the GR group labels. Default: "dmr_ctype_label".
+    n_classes : int
+        Number of classes for uniform_number substitution. Default: 39.
+    substitution_strategy : str
+        One of ``"prior_blending"``, ``"prior_imputation"``, ``"uniform_number"``.
+    uniform_prior : pd.DataFrame or None
+        Pre-computed uniform prior matrix (required for ``prior_blending``
+        and ``prior_imputation``).
+    prior_weight : float
+        Weight of the prior in the blending formula. Default: 1.0.
+
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame with all expected GR groups present.
+    """
+    if substitution_strategy not in VALID_SUBSTITUTION_STRATEGIES:
+        raise ValueError(
+            f"Unknown substitution_strategy '{substitution_strategy}'. "
+            f"Must be one of {VALID_SUBSTITUTION_STRATEGIES}."
+        )
+    if substitution_strategy not in ["uniform_number"] and uniform_prior is None:
+        raise ValueError(
+            f"uniform_prior must be provided when substitution_strategy="
+            f"'{substitution_strategy}'."
+        )
+
+    df = df.copy()
+
+    # Find missing GR IDs
+    present_gr_ids = set(df[gr_label_column].unique())
+    expected_gr_ids_set = set(expected_gr_ids)
+    missing_gr_ids = expected_gr_ids_set - present_gr_ids
+
+    if missing_gr_ids:
+        # Create synthetic rows for missing GR IDs
+        # Identify columns to fill
+        non_group_cols = [col for col in df.columns if col != gr_label_column]
+        prediction_cols = [col for col in non_group_cols if "prediction" in col]
+        numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+        string_cols = df.select_dtypes(include=[object]).columns.tolist()
+
+        synthetic_rows = []
+        for gr_id in missing_gr_ids:
+            row = {gr_label_column: gr_id}
+            # Fill numeric columns with appropriate defaults
+            for col in numeric_cols:
+                if col == gr_label_column:
+                    continue
+                if col in prediction_cols:
+                    if substitution_strategy == "uniform_number":
+                        row[col] = 1.0 / n_classes
+                    else:
+                        row[col] = 0.0
+                elif col == "total_weight":
+                    row[col] = 1  # Avoid division by zero
+                elif col == "label":
+                    row[col] = -1  # Synthetic label
+                else:
+                    row[col] = 0
+            # Fill string columns with empty string
+            for col in string_cols:
+                row[col] = ""
+            synthetic_rows.append(row)
+
+        synthetic_df = pd.DataFrame(synthetic_rows)
+        df = pd.concat([df, synthetic_df], ignore_index=True)
+
+    # Sort by GR label for consistent ordering
+    df = df.sort_values(gr_label_column).reset_index(drop=True)
+
+    # ── Apply substitution strategy ─────────────────────────────────────
+    if substitution_strategy in ("prior_blending", "prior_imputation"):
+        df = _apply_prior_substitution(
+            df, uniform_prior, substitution_strategy, prior_weight
+        )
+
+    return df
+
+
 def _apply_prior_substitution(
     df: pd.DataFrame,
     uniform_prior: pd.DataFrame,
@@ -110,7 +224,7 @@ def _apply_prior_substitution(
     Parameters
     ----------
     df : pd.DataFrame
-        DMR-aggregated DataFrame (with synthetic rows already inserted).
+        GR-aggregated DataFrame (with synthetic rows already inserted).
     uniform_prior : pd.DataFrame
         Uniform prior matrix keyed by ``dmr_ctype_label``.
     strategy : str
@@ -170,7 +284,7 @@ def _apply_prior_substitution(
     return df
 
 
-def aggregate_predictions_by_dmr(
+def aggregate_predictions_by_grg(
     df: pd.DataFrame,
     group_cols: Optional[List[str]] = None,
     prediction_cols: Optional[List[str]] = None,
@@ -298,7 +412,11 @@ def aggregate_predictions_by_dmr(
     return result
 
 
-def aggregate_predictions_by_dmr_optimized(df, group_cols):
+def aggregate_predictions_by_grg_optimized(
+    df: pd.DataFrame,
+    group_cols: list[str],
+    weight_col: str = "total_marked_cpgs",
+):
     """Optimized aggregation using vectorized operations."""
 
     prediction_cols = [
@@ -307,9 +425,9 @@ def aggregate_predictions_by_dmr_optimized(df, group_cols):
         if col.startswith("prediction_") and col[11:].isdigit()
     ]
     prediction_cols = sorted(prediction_cols, key=lambda x: int(x.split("_")[1]))
-    prediction_cols.append("methylation_level")
+    if "methylation_level" in df.columns:
+        prediction_cols.append("methylation_level")
 
-    weight_col = "total_marked_cpgs"
     df = df.copy()
     if weight_col not in df.columns:
         if "methylated_CpGs" in df.columns and "unmethylated_CpGs" in df.columns:
@@ -324,8 +442,8 @@ def aggregate_predictions_by_dmr_optimized(df, group_cols):
     # Pre-compute weighted values for each prediction column
     for col in prediction_cols:
         df[f"_weighted_{col}"] = df[col] * df["_weight"]
-    # Build aggregation dictionary
 
+    # Build aggregation dictionary
     agg_dict = {}
     # Sum of weighted values and weights
     for col in prediction_cols:
@@ -350,6 +468,72 @@ def aggregate_predictions_by_dmr_optimized(df, group_cols):
 
     result.drop(columns=["_weight_sum"], inplace=True)
     return result
+
+
+def aggregate_by_grg_from_np_arrays(
+    read_ids: np.ndarray,
+    gr_group_idx_array: np.ndarray,
+    weight_array: np.ndarray,
+    pred_matrix: np.ndarray,
+    n_gr_groups: int,
+    n_pred_cols: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Ultra-fast aggregation working directly on numpy arrays.
+
+    This function avoids DataFrame creation entirely by operating on pre-extracted
+    numpy arrays. It's designed to be called from pseudobulk generation where the
+    source arrays are pre-computed once.
+
+    Parameters
+    ----------
+    read_ids : np.ndarray
+        Array of row indices to sample (shape: n_samples,).
+    gr_group_idx_array : np.ndarray
+        Full GR group indices array from source DataFrame (shape: n_rows,).
+    weight_array : np.ndarray
+        Full weights array from source DataFrame (shape: n_rows,).
+    pred_matrix : np.ndarray
+        Full prediction matrix from source DataFrame (shape: n_rows, n_pred_cols).
+        Should be Fortran-order (column-major) for faster column access.
+    n_gr_groups : int
+        Number of unique GR groups (max GR group index + 1).
+    n_pred_cols : int
+        Number of prediction columns.
+
+    Returns
+    -------
+    tuple[np.ndarray, np.ndarray, np.ndarray]
+        - weighted_avgs: shape (n_gr_groups, n_pred_cols)
+        - counts: shape (n_gr_groups,)
+        - total_weights: shape (n_gr_groups,)
+    """
+    # Slice 1D arrays (fast)
+    sampled_groups = gr_group_idx_array[read_ids]
+    raw_weights = weight_array[read_ids]
+    sampled_weights = np.maximum(raw_weights.astype(np.float64), 1e-10)
+
+    # Pre-compute aggregations for counts/weights
+    weight_sums = np.bincount(
+        sampled_groups, weights=sampled_weights, minlength=n_gr_groups
+    )
+    counts = np.bincount(sampled_groups, minlength=n_gr_groups)
+    total_weights = np.bincount(
+        sampled_groups, weights=raw_weights.astype(np.float64), minlength=n_gr_groups
+    )
+
+    # Pre-compute inverse for faster division
+    inv_weight_sums = 1.0 / np.where(weight_sums > 0, weight_sums, 1.0)
+
+    # For predictions, use indirect indexing per column to avoid full 2D slice
+    weighted_avgs = np.empty((n_gr_groups, n_pred_cols), dtype=np.float64)
+    for i in range(n_pred_cols):
+        pred_col = pred_matrix[read_ids, i]  # Slice one column at a time
+        weighted_sum = np.bincount(
+            sampled_groups, weights=pred_col * sampled_weights, minlength=n_gr_groups
+        )
+        weighted_avgs[:, i] = weighted_sum * inv_weight_sums
+
+    return weighted_avgs, counts, total_weights
 
 
 def aggregate_chuncked_predictions_weighted(
@@ -403,7 +587,7 @@ def get_final_prediction(
     Parameters
     ----------
     aggregated_df : pd.DataFrame
-        Output from aggregate_predictions_by_dmr()
+        Output from aggregate_predictions_by_grg()
     method : str
         'avg' for simple average or 'wavg' for weighted average
     prediction_prefix : str

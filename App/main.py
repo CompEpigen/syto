@@ -9,9 +9,13 @@ import argparse
 import sys
 import os
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 
 import yaml
+from syto.modelling.experiment_wrappers import (
+    AbstractMLFlowExperiment,
+    TransformersMLFLowExperiment,
+)
 
 # Add parent directory to path for imports
 sys.path.append(str(Path(__file__).parent.parent))
@@ -69,6 +73,10 @@ def validate_config(config: Dict[str, Any], task: str) -> None:
             "output_dir",
             "labels_dict_path",
         ],
+        "generate_pseudobulk_v2": [
+            "output_dir",
+            "labels_dict_path",
+        ],
         "fit_deconvolution": [
             "predicted_splits",
             "ios_full_matrices_path",
@@ -97,6 +105,7 @@ def validate_config(config: Dict[str, Any], task: str) -> None:
     # Validate model-specific configuration (not needed for generate_pseudobulk or fit_deconvolution)
     if task not in (
         "generate_pseudobulk",
+        "generate_pseudobulk_v2",
         "fit_deconvolution",
         "fit_calibration",
         "confidence_intervals",
@@ -106,7 +115,9 @@ def validate_config(config: Dict[str, Any], task: str) -> None:
             raise ValueError(f"Unknown model architecture: {model}")
 
 
-def create_experiment(config: Dict[str, Any], logger: logging.Logger) -> Any:
+def create_experiment(
+    config: Dict[str, Any], logger: logging.Logger
+) -> AbstractMLFlowExperiment:
     """Create the appropriate experiment based on configuration."""
     model_arch = config["model"]["architecture"].lower()
     data_path = config["data_path"]
@@ -210,9 +221,13 @@ def run_fine_tuning(config: Dict[str, Any], logger: logging.Logger) -> None:
                 experiment.train_dataset(dataset_name, **training_config)
             else:
                 # For transformer models
+                assert isinstance(
+                    experiment, TransformersMLFLowExperiment
+                ), "Expected a transformer experiment instance"
                 if "training_arguments" in training_config:
                     args_dict = training_config["training_arguments"]
                     training_args = TrainingArguments(**args_dict)
+                    # pylint: disable-next:unexpected-keyword-arg
                     experiment.train_dataset(dataset_name, training_args=training_args)
                 else:
                     experiment.train_dataset(dataset_name, **training_config)
@@ -277,6 +292,24 @@ def run_pseudobulk_generation(config: Dict[str, Any], logger: logging.Logger) ->
     logger.info("=" * 60)
 
 
+def run_pseudobulk_generation_v2(
+    config: Dict[str, Any], logger: logging.Logger
+) -> None:
+    """Run pseudo-bulk generation using the new HDF5-based PseudobulkGenerator."""
+    from pseudobulk_pipeline_v2 import PseudoBulkPipelineV2
+
+    logger.info("Starting pseudo-bulk generation pipeline V2 (HDF5-based)")
+    pipeline = PseudoBulkPipelineV2(config=config, logger=logger)
+    output_path = pipeline.run()
+
+    # Log summary
+    logger.info("=" * 60)
+    logger.info("PSEUDO-BULK GENERATION V2 SUMMARY")
+    logger.info("=" * 60)
+    logger.info(f"  Output HDF5: {output_path}")
+    logger.info("=" * 60)
+
+
 def run_deconvolution_fitting(config: Dict[str, Any], logger: logging.Logger) -> None:
     """Run deconvolution model fitting based on configuration."""
     from deconvolution_pipeline import DeconvolutionFittingPipeline
@@ -331,6 +364,7 @@ Examples:
             "fine_tune",
             "inference",
             "generate_pseudobulk",
+            "generate_pseudobulk_v2",
             "fit_deconvolution",
             "fit_calibration",
             "confidence_intervals",
@@ -478,6 +512,8 @@ Examples:
             run_pretraining(config, logger)
         elif args.task == "generate_pseudobulk":
             run_pseudobulk_generation(config, logger)
+        elif args.task == "generate_pseudobulk_v2":
+            run_pseudobulk_generation_v2(config, logger)
         elif args.task == "fit_deconvolution":
             run_deconvolution_fitting(config, logger)
         elif args.task == "fit_calibration":

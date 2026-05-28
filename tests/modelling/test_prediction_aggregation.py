@@ -5,11 +5,10 @@ import pandas as pd
 
 from syto.modelling.prediction_aggregation import (
     aggregate_chuncked_predictions_weighted,
-    aggregate_predictions_by_dmr,
-    aggregate_predictions_by_dmr_optimized,
+    aggregate_predictions_by_grg,
+    aggregate_predictions_by_grg_optimized,
     get_final_prediction,
-    _fill_in_missing_labels,
-    VALID_SUBSTITUTION_STRATEGIES,
+    fill_in_missing_gr_groups,
 )
 
 
@@ -154,9 +153,9 @@ class PredictionAggregationDataFrameTestBase(unittest.TestCase):
 class TestAggregatePredictionsByDmr(PredictionAggregationDataFrameTestBase):
     """Exercise all branches of the DMR-level aggregation helper."""
 
-    def test_aggregate_predictions_by_dmr_with_defaults(self):
+    def test_aggregate_predictions_by_grg_with_defaults(self):
         """Aggregate with inferred prediction columns and weights created from CpG counts."""
-        result = aggregate_predictions_by_dmr(self.read_level_prediction_df)
+        result = aggregate_predictions_by_grg(self.read_level_prediction_df)
 
         self.assertNotIn("index", result.columns)
         self.assertEqual(len(result), 2)
@@ -184,11 +183,11 @@ class TestAggregatePredictionsByDmr(PredictionAggregationDataFrameTestBase):
         self.assertAlmostEqual(dmr_b["total_weight"], 3.0)
         self.assertEqual(dmr_b["n_reads"], 2)
 
-    def test_aggregate_predictions_by_dmr_handles_zero_sum_weights_after_float_cast(
+    def test_aggregate_predictions_by_grg_handles_zero_sum_weights_after_float_cast(
         self,
     ):
         """Use clipped float weights so all-zero CpG counts still produce valid averages."""
-        result = aggregate_predictions_by_dmr(self.zero_weight_prediction_df)
+        result = aggregate_predictions_by_grg(self.zero_weight_prediction_df)
 
         row = result.iloc[0]
         # After casting to float before clipping, both reads receive the same tiny
@@ -202,11 +201,11 @@ class TestAggregatePredictionsByDmr(PredictionAggregationDataFrameTestBase):
         self.assertAlmostEqual(row["total_weight"], 2e-10)
         self.assertEqual(row["n_reads"], 2)
 
-    def test_aggregate_predictions_by_dmr_uses_explicit_weights_and_prediction_columns(
+    def test_aggregate_predictions_by_grg_uses_explicit_weights_and_prediction_columns(
         self,
     ):
         """Use caller-provided grouping, prediction columns, and weight column unchanged."""
-        result = aggregate_predictions_by_dmr(
+        result = aggregate_predictions_by_grg(
             self.explicit_weight_df,
             group_cols=["group"],
             prediction_cols=["prediction_0", "prediction_1"],
@@ -224,19 +223,19 @@ class TestAggregatePredictionsByDmr(PredictionAggregationDataFrameTestBase):
         self.assertEqual(row["n_reads"], 2)
         self.assertNotIn("methylation_level_avg", result.columns)
 
-    def test_aggregate_predictions_by_dmr_requires_labels_dict_when_filling_missing_labels(
+    def test_aggregate_predictions_by_grg_requires_labels_dict_when_filling_missing_labels(
         self,
     ):
         """Reject missing label metadata when the caller requests synthetic rows."""
         with self.assertRaises(ValueError) as context:
-            aggregate_predictions_by_dmr(
+            aggregate_predictions_by_grg(
                 self.read_level_prediction_df,
                 fill_in_missing_labels=True,
             )
 
         self.assertIn("labels_dict must be provided", str(context.exception))
 
-    def test_aggregate_predictions_by_dmr_raises_when_weight_cannot_be_created(self):
+    def test_aggregate_predictions_by_grg_raises_when_weight_cannot_be_created(self):
         """Fail when neither the requested weight column nor CpG count columns are available."""
         df = pd.DataFrame(
             [
@@ -250,7 +249,7 @@ class TestAggregatePredictionsByDmr(PredictionAggregationDataFrameTestBase):
         )
 
         with self.assertRaises(ValueError) as context:
-            aggregate_predictions_by_dmr(
+            aggregate_predictions_by_grg(
                 df,
                 group_cols=["group"],
                 weight_col="missing_weight",
@@ -259,7 +258,7 @@ class TestAggregatePredictionsByDmr(PredictionAggregationDataFrameTestBase):
 
         self.assertIn("cannot create from CpG columns", str(context.exception))
 
-    def test_aggregate_predictions_by_dmr_fills_missing_labels(self):
+    def test_aggregate_predictions_by_grg_fills_missing_labels(self):
         """Add zeroed rows for label ids that are absent from the aggregated data."""
         df = self.read_level_prediction_df.loc[
             lambda frame: frame["dmr_ctype_label"] == 0,
@@ -276,7 +275,7 @@ class TestAggregatePredictionsByDmr(PredictionAggregationDataFrameTestBase):
             ],
         ]
 
-        result = aggregate_predictions_by_dmr(
+        result = aggregate_predictions_by_grg(
             df,
             group_cols=["dmr_ctype_label", "dmr_ctype"],
             fill_in_missing_labels=True,
@@ -309,7 +308,7 @@ class TestAggregatePredictionsByDmr(PredictionAggregationDataFrameTestBase):
         self.assertEqual(missing_row["chromosome"], 0)
         # self.assertEqual(missing_row["total_weight"], ???)
 
-    def test_aggregate_predictions_by_dmr_keeps_original_rows_when_no_labels_are_missing(
+    def test_aggregate_predictions_by_grg_keeps_original_rows_when_no_labels_are_missing(
         self,
     ):
         """Leave the aggregated frame unchanged when every label in labels_dict is present."""
@@ -326,7 +325,7 @@ class TestAggregatePredictionsByDmr(PredictionAggregationDataFrameTestBase):
             ],
         ]
 
-        result = aggregate_predictions_by_dmr(
+        result = aggregate_predictions_by_grg(
             df,
             group_cols=["dmr_ctype_label", "dmr_ctype"],
             fill_in_missing_labels=True,
@@ -341,11 +340,11 @@ class TestAggregatePredictionsByDmr(PredictionAggregationDataFrameTestBase):
 class TestAggregatePredictionsByDmrOptimized(PredictionAggregationDataFrameTestBase):
     """Validate the vectorized aggregation implementation and its error path."""
 
-    def test_aggregate_predictions_by_dmr_optimized_matches_expected_weighted_outputs(
+    def test_aggregate_predictions_by_grg_optimized_matches_expected_weighted_outputs(
         self,
     ):
         """Compute weighted averages, counts, and metadata with the optimized code path."""
-        result = aggregate_predictions_by_dmr_optimized(
+        result = aggregate_predictions_by_grg_optimized(
             self.read_level_prediction_df,
             group_cols=["dmr_label", "file", "original_label"],
         )
@@ -366,11 +365,11 @@ class TestAggregatePredictionsByDmrOptimized(PredictionAggregationDataFrameTestB
         self.assertEqual(dmr_b["total_weight"], 3)
         self.assertEqual(dmr_b["n_reads"], 2)
 
-    def test_aggregate_predictions_by_dmr_optimized_handles_zero_sum_weights_after_float_cast(
+    def test_aggregate_predictions_by_grg_optimized_handles_zero_sum_weights_after_float_cast(
         self,
     ):
         """Use clipped float weights so the optimized path also returns valid averages."""
-        result = aggregate_predictions_by_dmr_optimized(
+        result = aggregate_predictions_by_grg_optimized(
             self.zero_weight_prediction_df,
             group_cols=["dmr_label", "file", "original_label"],
         )
@@ -384,7 +383,7 @@ class TestAggregatePredictionsByDmrOptimized(PredictionAggregationDataFrameTestB
         self.assertEqual(row["total_weight"], 0)
         self.assertEqual(row["n_reads"], 2)
 
-    def test_aggregate_predictions_by_dmr_optimized_raises_when_weight_is_missing(self):
+    def test_aggregate_predictions_by_grg_optimized_raises_when_weight_is_missing(self):
         """Raise a clear error when no usable weight information exists."""
         df = pd.DataFrame(
             [
@@ -398,7 +397,7 @@ class TestAggregatePredictionsByDmrOptimized(PredictionAggregationDataFrameTestB
         )
 
         with self.assertRaises(ValueError) as context:
-            aggregate_predictions_by_dmr_optimized(df, group_cols=["group"])
+            aggregate_predictions_by_grg_optimized(df, group_cols=["group"])
 
         self.assertIn(
             "Weight column 'total_marked_cpgs' not found", str(context.exception)
@@ -605,7 +604,7 @@ class TestSubstitutionStrategyZeroes(unittest.TestCase):
 
     def test_zeroes_strategy_fills_missing_with_zeros(self):
         df, labels_dict, _ = _build_aggregated_with_missing_label()
-        result = aggregate_predictions_by_dmr(
+        result = aggregate_predictions_by_grg(
             df,
             group_cols=["dmr_ctype_label", "dmr_ctype"],
             prediction_cols=["prediction_0", "prediction_1", "methylation_level"],
@@ -627,7 +626,7 @@ class TestSubstitutionStrategyPriorBlending(unittest.TestCase):
     def test_blending_zero_reads_collapses_to_prior(self):
         """Rows with n_reads=0 should be entirely replaced by the prior."""
         df, labels_dict, prior = _build_aggregated_with_missing_label()
-        result = aggregate_predictions_by_dmr(
+        result = aggregate_predictions_by_grg(
             df,
             group_cols=["dmr_ctype_label", "dmr_ctype"],
             prediction_cols=["prediction_0", "prediction_1", "methylation_level"],
@@ -648,7 +647,7 @@ class TestSubstitutionStrategyPriorBlending(unittest.TestCase):
     def test_blending_nonzero_reads_mixed(self):
         """Rows with n_reads>0 should be blended: alpha = n/(n+w)."""
         df, labels_dict, prior = _build_aggregated_with_missing_label()
-        result = aggregate_predictions_by_dmr(
+        result = aggregate_predictions_by_grg(
             df,
             group_cols=["dmr_ctype_label", "dmr_ctype"],
             prediction_cols=["prediction_0", "prediction_1", "methylation_level"],
@@ -671,7 +670,7 @@ class TestSubstitutionStrategyPriorBlending(unittest.TestCase):
     def test_blending_custom_prior_weight(self):
         """A higher prior_weight shifts blending toward the prior."""
         df, labels_dict, prior = _build_aggregated_with_missing_label()
-        result = aggregate_predictions_by_dmr(
+        result = aggregate_predictions_by_grg(
             df,
             group_cols=["dmr_ctype_label", "dmr_ctype"],
             prediction_cols=["prediction_0", "prediction_1", "methylation_level"],
@@ -695,7 +694,7 @@ class TestSubstitutionStrategyPriorImputation(unittest.TestCase):
 
     def test_imputation_replaces_zero_read_rows(self):
         df, labels_dict, prior = _build_aggregated_with_missing_label()
-        result = aggregate_predictions_by_dmr(
+        result = aggregate_predictions_by_grg(
             df,
             group_cols=["dmr_ctype_label", "dmr_ctype"],
             prediction_cols=["prediction_0", "prediction_1", "methylation_level"],
@@ -712,7 +711,7 @@ class TestSubstitutionStrategyPriorImputation(unittest.TestCase):
 
     def test_imputation_leaves_nonzero_read_rows_intact(self):
         df, labels_dict, prior = _build_aggregated_with_missing_label()
-        result = aggregate_predictions_by_dmr(
+        result = aggregate_predictions_by_grg(
             df,
             group_cols=["dmr_ctype_label", "dmr_ctype"],
             prediction_cols=["prediction_0", "prediction_1", "methylation_level"],
@@ -735,7 +734,7 @@ class TestSubstitutionStrategyValidation(unittest.TestCase):
     def test_invalid_strategy_raises(self):
         df, labels_dict, _ = _build_aggregated_with_missing_label()
         with self.assertRaises(ValueError) as ctx:
-            aggregate_predictions_by_dmr(
+            aggregate_predictions_by_grg(
                 df,
                 group_cols=["dmr_ctype_label", "dmr_ctype"],
                 prediction_cols=["prediction_0", "prediction_1", "methylation_level"],
@@ -750,7 +749,7 @@ class TestSubstitutionStrategyValidation(unittest.TestCase):
     def test_prior_strategy_without_prior_raises(self):
         df, labels_dict, _ = _build_aggregated_with_missing_label()
         with self.assertRaises(ValueError) as ctx:
-            aggregate_predictions_by_dmr(
+            aggregate_predictions_by_grg(
                 df,
                 group_cols=["dmr_ctype_label", "dmr_ctype"],
                 prediction_cols=["prediction_0", "prediction_1", "methylation_level"],
@@ -875,3 +874,117 @@ class TestComputeUniformPriorMatrix(unittest.TestCase):
             compute_uniform_prior_matrix(
                 [None, None], split_key="train", num_input_labels=2
             )
+
+
+class TestFillInMissingGrGroups(unittest.TestCase):
+    """Tests for fill_in_missing_gr_groups function."""
+
+    def _create_aggregated_df(self, present_gr_ids: list, n_classes: int = 2):
+        """Create a sample aggregated DataFrame with specified GR IDs."""
+        rows = []
+        for gr_id in present_gr_ids:
+            row = {
+                "dmr_ctype_label": gr_id,
+                "dmr_ctype": f"ctype_{gr_id}",
+                "n_reads": 100,
+                "total_weight": 500,
+                "label": 0,
+                "chromosome": "chr1",
+            }
+            for i in range(n_classes):
+                row[f"prediction_{i}_wavg"] = 0.5
+            rows.append(row)
+        return pd.DataFrame(rows)
+
+    def test_no_missing_gr_ids_returns_unchanged(self):
+        """Test that if all GR IDs are present, the DataFrame is unchanged."""
+        df = self._create_aggregated_df(present_gr_ids=[0, 1, 2])
+        expected_gr_ids = [0, 1, 2]
+
+        result = fill_in_missing_gr_groups(
+            df=df,
+            expected_gr_ids=expected_gr_ids,
+            n_classes=2,
+        )
+
+        self.assertEqual(len(result), 3)
+        self.assertEqual(set(result["dmr_ctype_label"]), {0, 1, 2})
+
+    def test_fills_missing_gr_ids(self):
+        """Test that missing GR IDs are filled in."""
+        df = self._create_aggregated_df(present_gr_ids=[0, 2])  # Missing 1
+        expected_gr_ids = [0, 1, 2]
+
+        result = fill_in_missing_gr_groups(
+            df=df,
+            expected_gr_ids=expected_gr_ids,
+            n_classes=2,
+        )
+
+        self.assertEqual(len(result), 3)
+        self.assertEqual(set(result["dmr_ctype_label"]), {0, 1, 2})
+        # Check synthetic row has n_reads = 0
+        synthetic_row = result[result["dmr_ctype_label"] == 1].iloc[0]
+        self.assertEqual(synthetic_row["n_reads"], 0)
+
+    def test_uniform_number_substitution(self):
+        """Test that uniform_number substitution fills predictions with 1/n_classes."""
+        df = self._create_aggregated_df(present_gr_ids=[0])  # Missing 1, 2
+        expected_gr_ids = [0, 1, 2]
+        n_classes = 3
+
+        result = fill_in_missing_gr_groups(
+            df=df,
+            expected_gr_ids=expected_gr_ids,
+            n_classes=n_classes,
+            substitution_strategy="uniform_number",
+        )
+
+        # Check synthetic rows have uniform predictions
+        for gr_id in [1, 2]:
+            row = result[result["dmr_ctype_label"] == gr_id].iloc[0]
+            for i in range(n_classes):
+                col = f"prediction_{i}_wavg"
+                if col in result.columns:
+                    self.assertAlmostEqual(row[col], 1.0 / n_classes)
+
+    def test_sorts_by_gr_label(self):
+        """Test that output is sorted by GR label."""
+        df = self._create_aggregated_df(present_gr_ids=[2, 0])  # Out of order
+        expected_gr_ids = [0, 1, 2]
+
+        result = fill_in_missing_gr_groups(
+            df=df,
+            expected_gr_ids=expected_gr_ids,
+            n_classes=2,
+        )
+
+        # Check sorted order
+        self.assertEqual(list(result["dmr_ctype_label"]), [0, 1, 2])
+
+    def test_synthetic_row_has_label_minus_one(self):
+        """Test that synthetic rows have label = -1."""
+        df = self._create_aggregated_df(present_gr_ids=[0])
+        expected_gr_ids = [0, 1]
+
+        result = fill_in_missing_gr_groups(
+            df=df,
+            expected_gr_ids=expected_gr_ids,
+            n_classes=2,
+        )
+
+        synthetic_row = result[result["dmr_ctype_label"] == 1].iloc[0]
+        self.assertEqual(synthetic_row["label"], -1)
+
+    def test_invalid_strategy_raises(self):
+        """Test that invalid substitution strategy raises ValueError."""
+        df = self._create_aggregated_df(present_gr_ids=[0, 1, 2])
+
+        with self.assertRaises(ValueError) as context:
+            fill_in_missing_gr_groups(
+                df=df,
+                expected_gr_ids=[0, 1, 2],
+                substitution_strategy="invalid_strategy",
+            )
+
+        self.assertIn("invalid_strategy", str(context.exception))

@@ -68,8 +68,6 @@ def prepare_splits_for_pseudobulk(
     if target_columns is None:
         target_columns = [f"prediction_{i}" for i in range(num_labels)]
 
-    labels_dict_reversed = {v: int(k) for k, v in labels_dict.items()}
-
     splits_copy = {name: df.copy() for name, df in splits.items()}
 
     for split_name, df in splits_copy.items():

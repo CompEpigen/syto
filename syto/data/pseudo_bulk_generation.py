@@ -15,8 +15,8 @@ from syto.deconvolution.uxm import (
     uxm_deconvolution,
 )
 from syto.modelling.prediction_aggregation import (
-    aggregate_predictions_by_dmr,
-    aggregate_predictions_by_dmr_optimized,
+    aggregate_predictions_by_grg,
+    aggregate_predictions_by_grg_optimized,
     _fill_in_missing_labels,
 )
 
@@ -25,7 +25,7 @@ _worker_data = {}
 
 
 def _build_target_columns(num_prediction_classes: int = 39) -> list:
-    """Build the default list of target columns for DMR-aggregated output.
+    """Build the default list of target columns for GR-aggregated output.
 
     Parameters
     ----------
@@ -128,7 +128,7 @@ def generate_pseudo_bulk(
         sub = pd.concat(sub)
 
         # aggregate predictions by DMR type and chromosome
-        sub_aggregated = aggregate_predictions_by_dmr(
+        sub_aggregated = aggregate_predictions_by_grg(
             sub, group_cols=["dmr_ctype_label", "dmr_ctype"]
         )
         sub_aggregated = sub_aggregated[target_columns]
@@ -457,7 +457,7 @@ def generate_pseudo_bulk_optimized(
                 uxm_data[split_name] = None
 
             # Aggregate predictions
-            sub = aggregate_predictions_by_dmr_optimized(
+            sub = aggregate_predictions_by_grg_optimized(
                 sub, group_cols=["dmr_ctype_label", "dmr_ctype"]
             )
             sub = sub[target_columns]
