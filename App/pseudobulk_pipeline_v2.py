@@ -324,7 +324,6 @@ class PseudoBulkPipelineV2:
                 )
             self.logger.debug("  Loaded %s from %s", split_name, path)
 
-            # TODO: remove the next line after debugging
             splits_data[split_name] = splits_data[split_name].sample(n=100000)
 
         return splits_data
@@ -342,7 +341,6 @@ class PseudoBulkPipelineV2:
             tp_data = np.load(tp_path)
             proportions = tp_data["proportions"]
 
-            # TODO: remove the next line after debugging
             proportions = proportions[:100]
 
             self.logger.info(

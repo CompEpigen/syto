@@ -1,0 +1,133 @@
+# ══════════════════════════════════════════════════════════════════════════════
+# Pseudo-Bulk Generation Pipeline V2 Configuration Template
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# This configuration file is for the new HDF5-based pseudobulk generation
+# pipeline (PseudoBulkPipelineV2) which provides:
+#   - Crash-resilient checkpointing at the batch level
+#   - Full reproducibility metadata (seeds, samples per GRG, etc.)
+#   - Dask-based parallel generation
+#   - Pure profile generation and uniform prior computation
+#
+# Usage:
+#   python App/main.py --task generate_pseudobulk_v2 \
+#       --config App/config/pseudobulk/pseudobulk_v2_template.yaml
+
+# ══════════════════════════════════════════════════════════════════════════════
+# INPUT CONFIGURATION
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── Input type ────────────────────────────────────────────────────────────────
+# Which stage of preprocessing the input data is at:
+#   - "raw_splits"    : Raw parquet splits that need read preparation and
+#                       classifier prediction (runs stages 1-3)
+#   - "pre_predicted" : Pre-predicted splits with classifier predictions
+#                       (skips directly to stage 4)
+input_type: pre_predicted
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PER SPLIT INFORMATION
+# ══════════════════════════════════════════════════════════════════════════════
+split_information:
+  train:
+    # path to the parquet file with pre-predicted reads for this split (if input_type == "pre_predicted")
+    # data_path: Data/training_data/SoftLabelsTrainingData_205files_pooled_Jaccard_hg38_mincpg_4_minlen_10_no_data_leak_d041/train.parquet
+    data_path: Data/extended_proportions/pseudobulk_v2/cancer_detector_soft_labels_uniform/train_predicted.pkl
+    # path to the target proportions npz file for this split
+    target_proportions_path: Data/extended_proportions/proportions/target_proportions_train.npz
+  valid:
+    # data_path: Data/training_data/SoftLabelsTrainingData_205files_pooled_Jaccard_hg38_mincpg_4_minlen_10_no_data_leak_d041/valid.parquet
+    data_path: Data/extended_proportions/pseudobulk_v2/cancer_detector_soft_labels_uniform/valid_predicted.pkl
+    target_proportions_path: Data/extended_proportions/proportions/target_proportions_valid.npz
+  test:
+    # data_path: Data/training_data/SoftLabelsTrainingData_205files_pooled_Jaccard_hg38_mincpg_4_minlen_10_no_data_leak_d041/test.parquet
+    data_path: Data/extended_proportions/pseudobulk_v2/cancer_detector_soft_labels_uniform/test_predicted.pkl
+    target_proportions_path: Data/extended_proportions/proportions/target_proportions_test.npz
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CLASSIFIER CONFIGURATION (for input_type == "raw_splits" or "uxm_prepared")
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Supported classifiers: methylbert | dismir | cancer_detector
+classifier_type: cancer_detector
+
+# Path to the trained classifier checkpoint
+classifier_checkpoint: output/cancer_detector/CD_trainlen=2910114_epsbetafit=0.01_prior=uniform.pkl
+
+classifier_config:
+  seq_length: 150
+  soft_labels: true
+  batch_size: 2200
+  # MethylBERT-specific:
+  # foundation_model: hanyangii/methylbert_hg19_12l
+  # classifier_head_implementation: dmr_attention_based
+  # Dismir-specific:
+  # dismir_flavor: lstm
+
+# ══════════════════════════════════════════════════════════════════════════════
+# LABELS & REFERENCE DATA
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Path to the labels dictionary JSON (maps label_id -> cell_type_name)
+labels_dict_path: App/labels_dict.json
+
+# Number of cell types/labels
+num_labels: 39
+
+# Path to UXM atlas (for read preparation)
+# atlas_path: /path/to/Atlas.U25.l4.hg38.full.tsv
+
+# Labeling scheme used (soft_labels, hard_labels, etc.) (for metadata purposes)
+labeling_scheme: soft_labels
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PSEUDOBULK GENERATION PARAMETERS
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── Sampling parameters ───────────────────────────────────────────────────────
+# Total number of reads to sample per pseudobulk
+n_reads_to_sample: 475000
+
+# Column containing the class/cell-type label for each read
+class_label_column: original_label
+
+# Column containing the genomic region (GRG) label for grouping reads
+grg_label_column: dmr_ctype_label
+
+# Method for distributing reads across GR groups:
+#   - "uniform_multinomial": Equal probability distribution using multinomial
+grg_sampling_method: uniform_multinomial
+
+# Method for filling in missing GR groups in pure profiles:
+#   - "uniform_number": Fill with uniform (1/n_classes) for each class
+#   - "prior_blending": Blend with uniform prior
+#   - "prior_imputation": Impute from uniform prior
+substitution_method: uniform_number
+
+# Columns to keep in the aggregated output (null → use default from
+# build_target_columns(num_labels))
+# columns_to_keep: null
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PARALLELIZATION & CHECKPOINTING
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Number of Dask workers for parallel pseudobulk generation
+n_workers: 8
+
+# Number of pseudobulks to generate per batch (checkpoint granularity)
+batch_size: 100
+
+# ══════════════════════════════════════════════════════════════════════════════
+# OUTPUT CONFIGURATION
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Directory for all output files:
+#   - {split}_predicted.pkl (if classifier runs)
+#   - pseudobulk_generation/
+#       - checkpoints/
+#       - batches/
+#       - pseudobulk.h5 (final consolidated HDF5)
+output_dir: Data/extended_proportions/pseudobulk_v2/cancer_detector_soft_labels_uniform
