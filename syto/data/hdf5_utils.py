@@ -428,6 +428,12 @@ class CheckpointManager:
             checkpoint_path.unlink()
             self.logger.info("Removed checkpoint: %s", checkpoint_path)
 
+        # Remove the split directory itself if empty
+        split_dir = self.get_split_dir(split_name)
+        if split_dir.exists() and not any(split_dir.iterdir()):
+            split_dir.rmdir()
+            self.logger.info("Removed split directory: %s", split_dir)
+
     def cleanup_all(self) -> None:
         """Remove all checkpoints and batch files after successful consolidation."""
         config = self.load_config()
