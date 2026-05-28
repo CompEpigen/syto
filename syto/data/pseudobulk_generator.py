@@ -17,7 +17,7 @@ import pandas as pd
 import numpy as np
 
 from syto.modelling.prediction_aggregation import (
-    aggregate_predictions_by_grg_optimized,
+    aggregate_by_grg_from_np_arrays,
     fill_in_missing_gr_groups,
 )
 from syto.data.hdf5_utils import (
@@ -215,8 +215,9 @@ class PseudobulkGenerator:
         # Initialize checkpoint manager
         self.checkpoint_manager = CheckpointManager(self.output_directory, self.logger)
 
-        # Pre-compute indices for each split
+        # Pre-compute indices and numpy arrays for each split
         self._precompute_group_indices()
+        self._preextract_numpy_arrays()
 
         self.output_directory.mkdir(parents=True, exist_ok=True)
 
@@ -269,6 +270,36 @@ class PseudobulkGenerator:
                 len(indices_dict),
                 self.class_label_column,
                 self.grg_label_column,
+            )
+
+    def _preextract_numpy_arrays(self) -> None:
+        """Pre-extract numpy arrays from DataFrames for faster aggregation.
+
+        Extracts GR group indices, weights, and prediction columns as numpy arrays
+        for each split. This avoids DataFrame operations during pseudobulk generation.
+        """
+        self._numpy_arrays_per_split: Dict[str, Dict[str, np.ndarray]] = {}
+
+        # Build list of prediction columns
+        pred_cols = [f"prediction_{i}" for i in range(self.n_classes)]
+
+        for split_name, df in self.splits_df.items():
+            arrays = {
+                "gr_group_idx_array": df[self.grg_label_column].values.astype(np.int64),
+                "weight_array": df["NCPGS"].values.astype(np.float64),
+                # Store as Fortran-order for faster column access
+                "pred_matrix": np.asfortranarray(
+                    df[pred_cols].values.astype(np.float64)
+                ),
+            }
+            self._numpy_arrays_per_split[split_name] = arrays
+
+            self.logger.debug(
+                "Split %s: pre-extracted arrays (gr_group_idx: %s, weight: %s, pred: %s)",
+                split_name,
+                arrays["gr_group_idx_array"].shape,
+                arrays["weight_array"].shape,
+                arrays["pred_matrix"].shape,
             )
 
     def run(self) -> Path:
@@ -410,14 +441,16 @@ class PseudobulkGenerator:
 
             # Create delayed tasks for each pseudobulk in the batch
             delayed_results = []
+            numpy_arrays = self._numpy_arrays_per_split[split_name]
             for idx in range(start_idx, end_idx):
                 result = delayed(self.generate_single_pseudobulk)(
                     n_reads_to_sample=self.n_reads_to_sample,
                     n_gr_groups=self.n_gr_groups,
+                    n_classes=self.n_classes,
                     indices_per_class_and_grg=indices_dict,
-                    read_df=split_df,
+                    numpy_arrays=numpy_arrays,
                     target_proportions=target_proportions[idx],
-                    grg_grouping_columns=self.grg_grouping_columns,
+                    grg_grouping_column=self.grg_label_column,
                     columns_to_keep=self.columns_to_keep,
                     grg_sampling_type=self.parameters.gr_sampling_method,
                     index=idx,
@@ -474,10 +507,11 @@ class PseudobulkGenerator:
             result = self.generate_single_pseudobulk(
                 n_reads_to_sample=self.n_reads_to_sample,
                 n_gr_groups=self.n_gr_groups,
+                n_classes=self.n_classes,
                 indices_per_class_and_grg=indices_dict,
-                read_df=split_df,
+                numpy_arrays=self._numpy_arrays_per_split[split_name],
                 target_proportions=proportions,
-                grg_grouping_columns=self.grg_grouping_columns,
+                grg_grouping_column=self.grg_label_column,
                 columns_to_keep=self.columns_to_keep,
                 grg_sampling_type=self.parameters.gr_sampling_method,
                 index=class_idx,
@@ -552,10 +586,11 @@ class PseudobulkGenerator:
         cls,
         n_reads_to_sample: int,
         n_gr_groups: int,
+        n_classes: int,
         indices_per_class_and_grg: Dict[Tuple[int, int], np.ndarray],
-        read_df: pd.DataFrame,
+        numpy_arrays: Dict[str, np.ndarray],
         target_proportions: np.ndarray,
-        grg_grouping_columns: list[str],
+        grg_grouping_column: str,
         columns_to_keep: list[str] = None,
         grg_sampling_type: Literal["uniform_multinomial"] = "uniform_multinomial",
         index: int = 0,
@@ -569,12 +604,16 @@ class PseudobulkGenerator:
         Args:
             n_reads_to_sample: The total number of reads to sample for the pseudobulk.
             n_gr_groups: The number of GR groups to distribute reads across.
+            n_classes: Number of prediction classes.
             indices_per_class_and_grg: A dictionary mapping (class_index, grg_index) tuples
                 to arrays of row indices corresponding to that group in the original dataframe.
                 Keys must be integer indices (0-based), not raw label values.
-            read_df: The original dataframe containing read-level predictions.
+            numpy_arrays: Pre-extracted numpy arrays dict with keys:
+                - 'gr_group_idx_array': GR group indices (n_rows,)
+                - 'weight_array': weights (n_rows,)
+                - 'pred_matrix': prediction matrix (n_rows, n_classes), Fortran-order
             target_proportions: An array of proportions summing to 1, shape (n_classes,).
-            grg_grouping_columns: Columns to group by for GRG aggregation.
+            grg_grouping_column: Column name for the GR group column (used for output DataFrame).
             columns_to_keep: Columns to keep in aggregated output. If None, keeps all.
             grg_sampling_type: The method to use for sampling reads across GR groups.
                 Currently only supports "uniform_multinomial".
@@ -624,11 +663,10 @@ class PseudobulkGenerator:
                 )
 
         # compute actual proportions after adjustment
-        actual_n_reads_sampled = n_samples_per_class_per_grg.sum()
+        n_reads_really_sampled = n_samples_per_class_per_grg.sum()
         actual_proportions = (
-            n_samples_per_class_per_grg.sum(axis=1) / actual_n_reads_sampled
-        )
-
+            n_samples_per_class_per_grg.sum(axis=1) / n_reads_really_sampled
+        )  # shape (n_classes,)
         seed = np.random.randint(0, 2**31 - 1)
 
         # Sample the read IDS for each class and GR group, and concatenate them into a single array
@@ -636,14 +674,30 @@ class PseudobulkGenerator:
             n_samples_per_class_per_grg,
             indices_per_class_and_grg,
             seed=seed,
-        )  # shape (actual_n_reads_sampled,)
+        )  # shape (n_reads_really_sampled,)
 
-        # Aggregate the reads by GR group into a feature matrix
-        aggregated_features = aggregate_predictions_by_grg_optimized(
-            read_df.iloc[read_ids],
-            grg_grouping_columns,
-            weight_col="NCPGS",
+        # Aggregate directly from pre-extracted numpy arrays (no DataFrame slicing)
+        weighted_avgs, counts, total_weights = aggregate_by_grg_from_np_arrays(
+            read_ids=read_ids,
+            gr_group_idx_array=numpy_arrays["gr_group_idx_array"],
+            weight_array=numpy_arrays["weight_array"],
+            pred_matrix=numpy_arrays["pred_matrix"],
+            n_gr_groups=n_gr_groups,
+            n_pred_cols=n_classes,
         )
+
+        # Build result DataFrame from numpy arrays
+        result_data = {grg_grouping_column: np.arange(n_gr_groups, dtype=np.int64)}
+        for i in range(n_classes):
+            result_data[f"prediction_{i}_wavg"] = weighted_avgs[:, i]
+        result_data["n_reads"] = counts
+        result_data["total_weight"] = total_weights
+        aggregated_features = pd.DataFrame(result_data)
+
+        # Filter to only groups that have data
+        if not counts.all():
+            aggregated_features = aggregated_features[counts > 0].reset_index(drop=True)
+
         if columns_to_keep is not None:
             columns_to_keep = [
                 col for col in columns_to_keep if col in aggregated_features.columns
@@ -654,7 +708,7 @@ class PseudobulkGenerator:
             index=index,
             target_proportions=target_proportions,
             actual_proportions=actual_proportions,
-            actual_n_reads_sampled=actual_n_reads_sampled,
+            n_reads_really_sampled=n_reads_really_sampled,
             n_samples_per_class_per_grg=n_samples_per_class_per_grg,
             seed=seed,
             aggregated_features=aggregated_features,

@@ -470,6 +470,72 @@ def aggregate_predictions_by_grg_optimized(
     return result
 
 
+def aggregate_by_grg_from_np_arrays(
+    read_ids: np.ndarray,
+    gr_group_idx_array: np.ndarray,
+    weight_array: np.ndarray,
+    pred_matrix: np.ndarray,
+    n_gr_groups: int,
+    n_pred_cols: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Ultra-fast aggregation working directly on numpy arrays.
+
+    This function avoids DataFrame creation entirely by operating on pre-extracted
+    numpy arrays. It's designed to be called from pseudobulk generation where the
+    source arrays are pre-computed once.
+
+    Parameters
+    ----------
+    read_ids : np.ndarray
+        Array of row indices to sample (shape: n_samples,).
+    gr_group_idx_array : np.ndarray
+        Full GR group indices array from source DataFrame (shape: n_rows,).
+    weight_array : np.ndarray
+        Full weights array from source DataFrame (shape: n_rows,).
+    pred_matrix : np.ndarray
+        Full prediction matrix from source DataFrame (shape: n_rows, n_pred_cols).
+        Should be Fortran-order (column-major) for faster column access.
+    n_gr_groups : int
+        Number of unique GR groups (max GR group index + 1).
+    n_pred_cols : int
+        Number of prediction columns.
+
+    Returns
+    -------
+    tuple[np.ndarray, np.ndarray, np.ndarray]
+        - weighted_avgs: shape (n_gr_groups, n_pred_cols)
+        - counts: shape (n_gr_groups,)
+        - total_weights: shape (n_gr_groups,)
+    """
+    # Slice 1D arrays (fast)
+    sampled_groups = gr_group_idx_array[read_ids]
+    raw_weights = weight_array[read_ids]
+    sampled_weights = np.maximum(raw_weights.astype(np.float64), 1e-10)
+
+    # Pre-compute aggregations for counts/weights
+    weight_sums = np.bincount(
+        sampled_groups, weights=sampled_weights, minlength=n_gr_groups
+    )
+    counts = np.bincount(sampled_groups, minlength=n_gr_groups)
+    total_weights = np.bincount(
+        sampled_groups, weights=raw_weights.astype(np.float64), minlength=n_gr_groups
+    )
+
+    # Pre-compute inverse for faster division
+    inv_weight_sums = 1.0 / np.where(weight_sums > 0, weight_sums, 1.0)
+
+    # For predictions, use indirect indexing per column to avoid full 2D slice
+    weighted_avgs = np.empty((n_gr_groups, n_pred_cols), dtype=np.float64)
+    for i in range(n_pred_cols):
+        pred_col = pred_matrix[read_ids, i]  # Slice one column at a time
+        weighted_sum = np.bincount(
+            sampled_groups, weights=pred_col * sampled_weights, minlength=n_gr_groups
+        )
+        weighted_avgs[:, i] = weighted_sum * inv_weight_sums
+
+    return weighted_avgs, counts, total_weights
+
+
 def aggregate_chuncked_predictions_weighted(
     pred_df, weight_col="ncpgs_marked", group_col="read_name"
 ):

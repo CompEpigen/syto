@@ -107,7 +107,7 @@ class PseudobulkResult:
     index: int
     target_proportions: np.ndarray
     actual_proportions: np.ndarray
-    actual_n_reads_sampled: int
+    n_reads_really_sampled: int
     n_samples_per_class_per_grg: np.ndarray
     seed: int
     aggregated_features: pd.DataFrame
@@ -118,7 +118,7 @@ class PseudobulkResult:
             "index": self.index,
             "target_proportions": self.target_proportions,
             "actual_proportions": self.actual_proportions,
-            "actual_n_reads_sampled": self.actual_n_reads_sampled,
+            "n_reads_really_sampled": self.n_reads_really_sampled,
             "n_samples_per_class_per_grg": self.n_samples_per_class_per_grg,
             "seed": self.seed,
             "aggregated_features": self.aggregated_features,
@@ -486,7 +486,7 @@ class HDF5BatchWriter:
                     grp = f.create_group(f"pseudobulk_{result.index}")
                     grp.attrs["index"] = result.index
                     grp.attrs["seed"] = result.seed
-                    grp.attrs["actual_n_reads_sampled"] = result.actual_n_reads_sampled
+                    grp.attrs["n_reads_really_sampled"] = result.n_reads_really_sampled
                     grp.attrs["sampling_function"] = (
                         "_sample_read_ids_from_grouped_dataframe"
                     )
@@ -595,7 +595,7 @@ class HDF5BatchWriter:
                     index=grp.attrs["index"],
                     target_proportions=grp["target_proportions"][...],
                     actual_proportions=grp["actual_proportions"][...],
-                    actual_n_reads_sampled=grp.attrs["actual_n_reads_sampled"],
+                    n_reads_really_sampled=grp.attrs["n_reads_really_sampled"],
                     n_samples_per_class_per_grg=grp["n_reads_per_gr"][...],
                     seed=grp.attrs["seed"],
                     aggregated_features=aggregated_features,
@@ -773,7 +773,7 @@ class HDF5ConsolidationWriter:
                 pb_grp.attrs[HDF5Schema.ATTR_SAMPLING_FUNCTION] = (
                     "_sample_read_ids_from_grouped_dataframe"
                 )
-                pb_grp.attrs["actual_n_reads_sampled"] = result.actual_n_reads_sampled
+                pb_grp.attrs["n_reads_really_sampled"] = result.n_reads_really_sampled
 
                 pb_grp.create_dataset(
                     HDF5Schema.DATASET_TARGET_PROPORTIONS,
