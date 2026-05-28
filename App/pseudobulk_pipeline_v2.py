@@ -63,7 +63,7 @@ class PseudoBulkPipelineV2:
         with open(labels_dict_path, "r", encoding="utf-8") as f:
             raw = json.load(f)
             self.labels_dict: Dict[int, str] = {int(k): v for k, v in raw.items()}
-        self.num_labels = config.get("num_labels", len(self.labels_dict))
+        self.num_labels = config["num_labels"]
 
         # Cell-type matching dict
         self.cell_type_match_dict = config.get(
@@ -75,9 +75,14 @@ class PseudoBulkPipelineV2:
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
         # Generator parameters
-        self.batch_size = config.get("batch_size", 100)
-        self.n_workers = config.get("n_workers", 4)
-        self.n_reads_to_sample = config.get("n_reads_to_sample", 475_000)
+        self.batch_size = config["batch_size"]
+        self.n_workers = config["n_workers"]
+        self.n_reads_to_sample = config["n_reads_to_sample"]
+
+        # columns
+        self.class_label_column = config["class_label_column"]
+        self.grg_label_column = config["grg_label_column"]
+        self.columns_to_keep = config.get("columns_to_keep")
 
     # ═══════════════════════════════════════════════════════════════
     #  Public API
@@ -124,7 +129,7 @@ class PseudoBulkPipelineV2:
 
         # Build metadata and parameters
         metadata = self._build_metadata(splits_data)
-        parameters = self._build_parameters(splits_data)
+        parameters = self._build_parameters()
 
         # Create and run generator
         generator = PseudobulkGenerator(
@@ -136,12 +141,9 @@ class PseudoBulkPipelineV2:
             metadata=metadata,
             parameters=parameters,
             n_reads_to_sample=self.n_reads_to_sample,
-            class_label_column=self.config.get("class_label_column", "original_label"),
-            grg_label_column=self.config.get("grg_label_column", "dmr_ctype_label"),
-            grg_grouping_columns=self.config.get(
-                "grg_grouping_columns", ["dmr_ctype_label", "dmr_ctype"]
-            ),
-            columns_to_keep=self.config.get("columns_to_keep"),
+            class_label_column=self.class_label_column,
+            grg_label_column=self.grg_label_column,
+            columns_to_keep=self.columns_to_keep,
             logger=self.logger,
         )
 
@@ -158,7 +160,7 @@ class PseudoBulkPipelineV2:
         self, splits_data: Dict[str, pd.DataFrame]
     ) -> Dict[str, pd.DataFrame]:
         """Prepare reads for pseudobulk generation."""
-        atlas_path = self.config.get("atlas_path")
+        atlas_path = self.config["atlas_path"]
 
         splits_data = prepare_splits_for_pseudobulk(
             splits_data,
@@ -177,26 +179,22 @@ class PseudoBulkPipelineV2:
     ) -> Dict[str, pd.DataFrame]:
         """Run classifier predictions on all splits."""
         self.logger.info("Stage 3: Running classifier predictions ...")
-        classifier_config = self.config.get("classifier_config", {})
+        classifier_config = self.config["classifier_config"]
 
         read_level_classifier = read_classifier_factory(
             name=self.config["classifier_type"],
             path=self.config["classifier_checkpoint"],
             labels_dict=self.labels_dict,
             num_labels=self.num_labels,
-            seq_length=classifier_config.get("seq_length", 150),
-            foundation_model_path=classifier_config.get(
-                "foundation_model", "hanyangii/methylbert_hg19_12l"
-            ),
+            seq_length=classifier_config.get("seq_length"),
+            foundation_model_path=classifier_config.get("foundation_model"),
             classifier_head_implementation=classifier_config.get(
-                "classifier_head_implementation", "dmr_attention_based"
+                "classifier_head_implementation"
             ),
-            dmr_label_column=classifier_config.get(
-                "dmr_label_column", "dmr_ctype_label"
-            ),
+            dmr_label_column=classifier_config.get("dmr_label_column"),
             soft_labels=classifier_config.get("soft_labels", True),
             dismir_flavor=classifier_config.get("dismir_flavor", "lstm"),
-            batch_size=classifier_config.get("batch_size", 2200),
+            batch_size=classifier_config.get("batch_size"),
         )
 
         for name, df in splits_data.items():
@@ -243,28 +241,6 @@ class PseudoBulkPipelineV2:
             keep_cols = [c for c in base_cols + pred_cols if c in df.columns]
             splits_data[split_name] = df[keep_cols]
 
-    def _generate_random_proportions(self, n_examples: int) -> np.ndarray:
-        """Generate random proportion vectors using Dirichlet sampling."""
-        allowed_labels = self.config.get("allowed_labels")
-        if allowed_labels is None:
-            allowed_labels = list(range(self.num_labels))
-
-        n_cells_max = self.config.get("n_cells_max", 10)
-        proportions = np.zeros((n_examples, self.num_labels))
-
-        for i in range(n_examples):
-            # Randomly select number of active cell types (1 to n_cells_max)
-            n_active = np.random.randint(1, min(n_cells_max, len(allowed_labels)) + 1)
-            active_labels = np.random.choice(allowed_labels, n_active, replace=False)
-
-            # Sample proportions from Dirichlet distribution
-            alpha = np.ones(n_active)
-            props = np.random.dirichlet(alpha)
-
-            proportions[i, active_labels] = props
-
-        return proportions
-
     def _build_metadata(
         self, splits_data: Dict[str, pd.DataFrame]
     ) -> GenerationMetadata:
@@ -294,16 +270,14 @@ class PseudoBulkPipelineV2:
             }
 
         return GenerationMetadata(
-            gr_id_column=self.config.get("grg_label_column", "dmr_ctype_label"),
-            labeling_scheme=self.config.get("labeling_scheme", "soft_labels"),
-            classifier=self.config.get("classifier_type", "unknown"),
+            gr_id_column=self.grg_label_column,
+            labeling_scheme=self.config["labeling_scheme"],
+            classifier=self.config["classifier_type"],
             data_watermark=data_watermark,
             data_stats=data_stats,
         )
 
-    def _build_parameters(
-        self, splits_data: Dict[str, pd.DataFrame]
-    ) -> GenerationParameters:
+    def _build_parameters(self) -> GenerationParameters:
         """Build generation parameters from configuration and data."""
         # Build cell types mapping from labels_dict
         cell_types_mapping = {v: k for k, v in self.labels_dict.items()}
@@ -314,18 +288,16 @@ class PseudoBulkPipelineV2:
         }
 
         # Get substitution method
-        substitution_method = self.config.get("substitution_method", "uniform_number")
+        substitution_method = self.config["substitution_method"]
 
         # Get GR sampling method
-        gr_sampling_method = self.config.get(
-            "gr_sampling_method", "uniform_multinomial"
-        )
+        grg_sampling_method = self.config["grg_sampling_method"]
 
         return GenerationParameters(
             cell_types_mapping=cell_types_mapping,
             gr_groups_mapping=gr_groups_mapping,
             substitution_method=substitution_method,
-            gr_sampling_method=gr_sampling_method,
+            grg_sampling_method=grg_sampling_method,
         )
 
     # ═══════════════════════════════════════════════════════════════

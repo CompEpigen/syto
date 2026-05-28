@@ -54,7 +54,7 @@ class HDF5Schema:
     PARAMS_CELL_TYPES_MAPPING = f"{PARAMETERS}/cell_types_mapping"
     PARAMS_GR_GROUPS_MAPPING = f"{PARAMETERS}/gr_groups_mapping"
     ATTR_SUBSTITUTION_METHOD = "substitution_method"
-    ATTR_GR_SAMPLING_METHOD = "gr_sampling_method"
+    ATTR_GR_SAMPLING_METHOD = "grg_sampling_method"
 
     # Outputs structure (per split)
     @staticmethod
@@ -167,7 +167,7 @@ class GenerationParameters:
     cell_types_mapping: Dict[str, int]  # Mapping from cell type name to class index
     gr_groups_mapping: Dict[str, int]  # Mapping from GR group label to GR group index
     substitution_method: Literal["uniform_number", "prior_blending", "prior_imputation"]
-    gr_sampling_method: Literal["uniform_multinomial"]
+    grg_sampling_method: Literal["uniform_multinomial"]
 
     def to_hash(self) -> str:
         """Compute a hash of the parameters for change detection."""
@@ -176,7 +176,7 @@ class GenerationParameters:
                 "cell_types_mapping": self.cell_types_mapping,
                 "gr_groups_mapping": self.gr_groups_mapping,
                 "substitution_method": self.substitution_method,
-                "gr_sampling_method": self.gr_sampling_method,
+                "grg_sampling_method": self.grg_sampling_method,
             },
             sort_keys=True,
         )
@@ -746,7 +746,7 @@ class HDF5ConsolidationWriter:
             parameters.substitution_method
         )
         params_grp.attrs[HDF5Schema.ATTR_GR_SAMPLING_METHOD] = (
-            parameters.gr_sampling_method
+            parameters.grg_sampling_method
         )
 
     def _write_split_outputs(

@@ -172,7 +172,7 @@ class TestGenerateSinglePseudobulk(unittest.TestCase):
             indices_per_class_and_grg=indices_dict,
             numpy_arrays=numpy_arrays,
             target_proportions=np.array([0.5, 0.5]),
-            grg_grouping_column="dmr_ctype_label",
+            grg_label_column="dmr_ctype_label",
             index=0,
         )
 
@@ -199,7 +199,7 @@ class TestGenerateSinglePseudobulk(unittest.TestCase):
             indices_per_class_and_grg=indices_dict,
             numpy_arrays=numpy_arrays,
             target_proportions=np.array([0.5, 0.5]),
-            grg_grouping_column="dmr_ctype_label",
+            grg_label_column="dmr_ctype_label",
             index=0,
         )
         result2 = PseudobulkGenerator.generate_single_pseudobulk(
@@ -209,7 +209,7 @@ class TestGenerateSinglePseudobulk(unittest.TestCase):
             indices_per_class_and_grg=indices_dict,
             numpy_arrays=numpy_arrays,
             target_proportions=np.array([0.5, 0.5]),
-            grg_grouping_column="dmr_ctype_label",
+            grg_label_column="dmr_ctype_label",
             index=0,
         )
 
@@ -263,11 +263,8 @@ class TestPseudobulkGeneratorColumnArguments(unittest.TestCase):
         splits_df: dict,
         class_label_column: str = "original_label",
         grg_label_column: str = "dmr_ctype_label",
-        grg_grouping_columns: list = None,
     ) -> PseudobulkGenerator:
         """Create a PseudobulkGenerator instance for testing."""
-        if grg_grouping_columns is None:
-            grg_grouping_columns = [grg_label_column, "dmr_ctype"]
 
         metadata = GenerationMetadata(
             gr_id_column="name",
@@ -279,7 +276,7 @@ class TestPseudobulkGeneratorColumnArguments(unittest.TestCase):
             cell_types_mapping={"class_0": 0, "class_1": 1},
             gr_groups_mapping={"0": 0, "1": 1, "2": 2},
             substitution_method="uniform_number",
-            gr_sampling_method="uniform_multinomial",
+            grg_sampling_method="uniform_multinomial",
         )
         target_proportions = np.array([[0.5, 0.5], [0.3, 0.7]])
 
@@ -293,7 +290,6 @@ class TestPseudobulkGeneratorColumnArguments(unittest.TestCase):
             parameters=parameters,
             class_label_column=class_label_column,
             grg_label_column=grg_label_column,
-            grg_grouping_columns=grg_grouping_columns,
         )
 
     def test_default_column_arguments(self):
@@ -333,7 +329,6 @@ class TestPseudobulkGeneratorColumnArguments(unittest.TestCase):
         generator = self._create_generator(
             splits_df,
             grg_label_column="my_grg_label",
-            grg_grouping_columns=["my_grg_label", "dmr_ctype"],
         )
 
         self.assertEqual(generator.grg_label_column, "my_grg_label")
@@ -350,28 +345,12 @@ class TestPseudobulkGeneratorColumnArguments(unittest.TestCase):
             splits_df,
             class_label_column="cell_type",
             grg_label_column="region_group",
-            grg_grouping_columns=["region_group", "dmr_ctype"],
         )
 
         self.assertEqual(generator.class_label_column, "cell_type")
         self.assertEqual(generator.grg_label_column, "region_group")
         indices = generator._indices_per_split["train"]
         self.assertEqual(len(indices), 6)
-
-    def test_grg_label_not_in_grouping_columns_raises(self):
-        """Test that AssertionError is raised when grg_label_column is not in grg_grouping_columns."""
-        df = self._create_dataframe_with_custom_columns()
-        splits_df = {"train": df}
-
-        with self.assertRaises(AssertionError) as context:
-            self._create_generator(
-                splits_df,
-                grg_label_column="dmr_ctype_label",
-                grg_grouping_columns=["other_column", "dmr_ctype"],  # Missing grg_label
-            )
-
-        self.assertIn("dmr_ctype_label", str(context.exception))
-        self.assertIn("must be in", str(context.exception))
 
 
 class TestBuildTargetColumns(unittest.TestCase):
@@ -456,7 +435,7 @@ class TestReproducibilityFromStoredData(unittest.TestCase):
             indices_per_class_and_grg=indices_dict,
             numpy_arrays=numpy_arrays,
             target_proportions=np.array([0.4, 0.6]),
-            grg_grouping_column="dmr_ctype_label",
+            grg_label_column="dmr_ctype_label",
             columns_to_keep=columns_to_keep,
             index=0,
         )
@@ -491,7 +470,7 @@ class TestReproducibilityFromStoredData(unittest.TestCase):
                 indices_per_class_and_grg=indices_dict,
                 numpy_arrays=numpy_arrays,
                 target_proportions=np.array([0.5, 0.5]),
-                grg_grouping_column="dmr_ctype_label",
+                grg_label_column="dmr_ctype_label",
                 index=0,
             )
 
@@ -572,7 +551,7 @@ class TestPureProfileGeneration(unittest.TestCase):
             cell_types_mapping=cell_types,
             gr_groups_mapping={str(i): i for i in range(n_gr_groups)},
             substitution_method="uniform_number",
-            gr_sampling_method="uniform_multinomial",
+            grg_sampling_method="uniform_multinomial",
         )
         target_proportions = np.array([[1.0 / n_classes] * n_classes])
 
@@ -663,7 +642,7 @@ class TestGenerateSingleSplit(unittest.TestCase):
             cell_types_mapping={"class_0": 0, "class_1": 1},
             gr_groups_mapping={"0": 0, "1": 1, "2": 2},
             substitution_method="uniform_number",
-            gr_sampling_method="uniform_multinomial",
+            grg_sampling_method="uniform_multinomial",
         )
         # 5 pseudobulks, batch_size=2 -> 3 batches
         target_proportions = np.array(
@@ -722,7 +701,7 @@ class TestGenerateSingleSplit(unittest.TestCase):
             cell_types_mapping={"class_0": 0, "class_1": 1},
             gr_groups_mapping={"0": 0, "1": 1, "2": 2},
             substitution_method="uniform_number",
-            gr_sampling_method="uniform_multinomial",
+            grg_sampling_method="uniform_multinomial",
         )
         target_proportions = np.array(
             [

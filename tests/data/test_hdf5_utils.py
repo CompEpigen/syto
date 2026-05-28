@@ -167,13 +167,13 @@ class TestGenerationParameters(unittest.TestCase):
             cell_types_mapping={"A": 0, "B": 1},
             gr_groups_mapping={"gr1": 0, "gr2": 1},
             substitution_method="uniform_number",
-            gr_sampling_method="uniform_multinomial",
+            grg_sampling_method="uniform_multinomial",
         )
         params2 = GenerationParameters(
             cell_types_mapping={"A": 0, "B": 1},
             gr_groups_mapping={"gr1": 0, "gr2": 1},
             substitution_method="uniform_number",
-            gr_sampling_method="uniform_multinomial",
+            grg_sampling_method="uniform_multinomial",
         )
         self.assertEqual(params1.to_hash(), params2.to_hash())
 
@@ -183,13 +183,13 @@ class TestGenerationParameters(unittest.TestCase):
             cell_types_mapping={"A": 0, "B": 1},
             gr_groups_mapping={"gr1": 0, "gr2": 1},
             substitution_method="uniform_number",
-            gr_sampling_method="uniform_multinomial",
+            grg_sampling_method="uniform_multinomial",
         )
         params2 = GenerationParameters(
             cell_types_mapping={"A": 0, "C": 2},  # Different
             gr_groups_mapping={"gr1": 0, "gr2": 1},
             substitution_method="uniform_number",
-            gr_sampling_method="uniform_multinomial",
+            grg_sampling_method="uniform_multinomial",
         )
         self.assertNotEqual(params1.to_hash(), params2.to_hash())
 

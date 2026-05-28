@@ -150,7 +150,6 @@ class PseudobulkGenerator:
         n_reads_to_sample: int = 475_000,
         class_label_column: str = "original_label",
         grg_label_column: str = "dmr_ctype_label",
-        grg_grouping_columns: List[str] = None,
         columns_to_keep: List[str] = None,
         logger: logging.Logger = _module_logger,
     ):
@@ -170,9 +169,6 @@ class PseudobulkGenerator:
             n_reads_to_sample: Total reads to sample per pseudobulk.
             class_label_column: Column name containing the class labels for each read.
             grg_label_column: Column name containing the GRG labels for grouping reads.
-                Must be present in grg_grouping_columns.
-            grg_grouping_columns: Columns to group by for GRG aggregation.
-                Defaults to ["dmr_ctype_label", "dmr_ctype"].
             columns_to_keep: Columns to keep in aggregated output. If None, uses
                 the default columns from build_target_columns()
             logger: Logger instance.
@@ -196,21 +192,11 @@ class PseudobulkGenerator:
         self.n_reads_to_sample = n_reads_to_sample
         self.class_label_column = class_label_column
         self.grg_label_column = grg_label_column
-        self.grg_grouping_columns = grg_grouping_columns or [
-            "dmr_ctype_label",
-            "dmr_ctype",
-        ]
         self.n_classes = len(parameters.cell_types_mapping)
         self.n_gr_groups = len(parameters.gr_groups_mapping)
         # Default to legacy target columns if not specified
         self.columns_to_keep = columns_to_keep or build_target_columns(self.n_classes)
         self.logger = logger
-
-        # Validate that grg_label_column is in grg_grouping_columns
-        assert self.grg_label_column in self.grg_grouping_columns, (
-            f"grg_label_column '{self.grg_label_column}' must be in "
-            f"grg_grouping_columns {self.grg_grouping_columns}"
-        )
 
         # Initialize checkpoint manager
         self.checkpoint_manager = CheckpointManager(self.output_directory, self.logger)
@@ -396,7 +382,6 @@ class PseudobulkGenerator:
         Args:
             split_name: Name of the split to generate (e.g., 'train', 'valid', 'test').
         """
-        split_df = self.splits_df[split_name]
         target_proportions = self.target_proportions_per_split[split_name]
         n_pseudobulks = len(target_proportions)
 
@@ -450,9 +435,9 @@ class PseudobulkGenerator:
                     indices_per_class_and_grg=indices_dict,
                     numpy_arrays=numpy_arrays,
                     target_proportions=target_proportions[idx],
-                    grg_grouping_column=self.grg_label_column,
+                    grg_label_column=self.grg_label_column,
                     columns_to_keep=self.columns_to_keep,
-                    grg_sampling_type=self.parameters.gr_sampling_method,
+                    grg_sampling_type=self.parameters.grg_sampling_method,
                     index=idx,
                 )
                 delayed_results.append(result)
@@ -489,7 +474,6 @@ class PseudobulkGenerator:
         """
         self.logger.info("Generating pure profiles for split %s", split_name)
 
-        split_df = self.splits_df[split_name]
         indices_dict = self._indices_per_split[split_name]
         n_classes = len(self.parameters.cell_types_mapping)
 
@@ -511,9 +495,9 @@ class PseudobulkGenerator:
                 indices_per_class_and_grg=indices_dict,
                 numpy_arrays=self._numpy_arrays_per_split[split_name],
                 target_proportions=proportions,
-                grg_grouping_column=self.grg_label_column,
+                grg_label_column=self.grg_label_column,
                 columns_to_keep=self.columns_to_keep,
-                grg_sampling_type=self.parameters.gr_sampling_method,
+                grg_sampling_type=self.parameters.grg_sampling_method,
                 index=class_idx,
             )
 
@@ -590,7 +574,7 @@ class PseudobulkGenerator:
         indices_per_class_and_grg: Dict[Tuple[int, int], np.ndarray],
         numpy_arrays: Dict[str, np.ndarray],
         target_proportions: np.ndarray,
-        grg_grouping_column: str,
+        grg_label_column: str,
         columns_to_keep: list[str] = None,
         grg_sampling_type: Literal["uniform_multinomial"] = "uniform_multinomial",
         index: int = 0,
@@ -613,7 +597,7 @@ class PseudobulkGenerator:
                 - 'weight_array': weights (n_rows,)
                 - 'pred_matrix': prediction matrix (n_rows, n_classes), Fortran-order
             target_proportions: An array of proportions summing to 1, shape (n_classes,).
-            grg_grouping_column: Column name for the GR group column (used for output DataFrame).
+            grg_label_column: Column name for the GR group column (used for output DataFrame).
             columns_to_keep: Columns to keep in aggregated output. If None, keeps all.
             grg_sampling_type: The method to use for sampling reads across GR groups.
                 Currently only supports "uniform_multinomial".
@@ -687,7 +671,7 @@ class PseudobulkGenerator:
         )
 
         # Build result DataFrame from numpy arrays
-        result_data = {grg_grouping_column: np.arange(n_gr_groups, dtype=np.int64)}
+        result_data = {grg_label_column: np.arange(n_gr_groups, dtype=np.int64)}
         for i in range(n_classes):
             result_data[f"prediction_{i}_wavg"] = weighted_avgs[:, i]
         result_data["n_reads"] = counts
