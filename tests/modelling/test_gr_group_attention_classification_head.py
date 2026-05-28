@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import torch
 
-from syto.modelling.gr_group_attention_classification_head import (
+from syto.classification.gr_group_attention_classification_head import (
     GRGAttentionClassificationHead,
 )
 

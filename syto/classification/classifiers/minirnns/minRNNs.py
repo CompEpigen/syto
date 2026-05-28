@@ -3,10 +3,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
-from syto.modelling.classifiers.minirnns.associative_scan import (
+from syto.classification.classifiers.minirnns.associative_scan import (
     associative_scan_log,
 )
-from syto.modelling.classifiers.minirnns.helpers import g, log_g
+from syto.classification.classifiers.minirnns.helpers import g, log_g
 
 
 class MinGRUCell(nn.Module):

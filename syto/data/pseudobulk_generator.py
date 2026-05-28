@@ -16,7 +16,7 @@ from dask import delayed
 import pandas as pd
 import numpy as np
 
-from syto.modelling.prediction_aggregation import (
+from syto.classification.prediction_aggregation import (
     aggregate_by_grg_from_np_arrays,
     fill_in_missing_gr_groups,
 )

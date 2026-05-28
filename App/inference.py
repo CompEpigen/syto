@@ -26,10 +26,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from syto.data import LOYFER_CELL_TYPE_MATCH_DICT
 from syto.data.sequencing.bam_processing import process_bam_with_chunking
-from syto.modelling.prediction_aggregation import (
+from syto.classification.prediction_aggregation import (
     aggregate_predictions_by_grg,
 )
-from syto.modelling.classifiers.lazy_classifier_factory import (
+from syto.classification.classifiers.lazy_classifier_factory import (
     read_classifier_factory,
 )
 from syto.deconvolution.uxm import (

@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
-from syto.modelling.prediction_aggregation import _fill_in_missing_labels
+from syto.classification.prediction_aggregation import _fill_in_missing_labels
 
 from syto.data.pseudo_bulk_generation import (
     _build_target_columns,

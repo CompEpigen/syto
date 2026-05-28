@@ -6,15 +6,15 @@ using a registry of known classifier types.
 import importlib
 import warnings
 
-from syto.modelling.classifiers.abstract_read_classifier import (
+from syto.classification.classifiers.abstract_read_classifier import (
     AbstractReadClassifier,
 )
 
 _CLF_REGISTRY = {
-    "methylbert": "syto.modelling.classifiers.methylbert:MethylBert",
-    "dismir": "syto.modelling.classifiers.dismir:Dismir",
-    "lookup": "syto.modelling.classifiers.lookup:LookupClassifier",
-    "cancer_detector": "syto.modelling.classifiers.cancer_detector:CancerDetectorClassifier",
+    "methylbert": "syto.classification.classifiers.methylbert:MethylBert",
+    "dismir": "syto.classification.classifiers.dismir:Dismir",
+    "lookup": "syto.classification.classifiers.lookup:LookupClassifier",
+    "cancer_detector": "syto.classification.classifiers.cancer_detector:CancerDetectorClassifier",
 }
 
 

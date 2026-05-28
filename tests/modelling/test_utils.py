@@ -2,7 +2,7 @@ import unittest
 
 import torch.nn as nn
 
-from syto.modelling.utils import *
+from syto.classification.utils import *
 
 
 class TestCountModelParameters(unittest.TestCase):

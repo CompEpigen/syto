@@ -25,13 +25,13 @@ except ImportError:
 
     NotebookTrainingTracker = None
 
-from syto.modelling.evaluation import compute_metrics, compute_metrics_soft_labels
-from syto.modelling.gr_group_attention_classification_head import (
+from syto.classification.evaluation import compute_metrics, compute_metrics_soft_labels
+from syto.classification.gr_group_attention_classification_head import (
     GRGAttentionClassificationHead,
 )
-from syto.modelling.loss import ConfidenceWeightedCrossEntropy
-from syto.modelling.classifiers.minirnns.minRNNs import BiMinGRU
-from syto.modelling.classifiers.abstract_read_classifier import (
+from syto.classification.loss import ConfidenceWeightedCrossEntropy
+from syto.classification.classifiers.minirnns.minRNNs import BiMinGRU
+from syto.classification.classifiers.abstract_read_classifier import (
     AbstractReadClassifier,
 )
 
@@ -827,7 +827,7 @@ class Dismir(AbstractReadClassifier):
         Compute sklearn metrics from accumulated epoch outputs.
 
         Delegates to compute_metrics or compute_metrics_soft_labels
-        from syto.modelling.evaluation, depending on self.soft_labels.
+        from syto.classification.evaluation, depending on self.soft_labels.
 
         Args:
             all_outputs: list of numpy arrays – model output probabilities

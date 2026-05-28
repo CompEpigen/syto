@@ -21,7 +21,7 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
-from syto.modelling.evaluation import (
+from syto.classification.evaluation import (
     compute_metrics,
     compute_metrics_soft_labels,
 )
@@ -31,7 +31,7 @@ from syto.data.soft_labeling import (
     signature_distance,
     apply_normalized_knn_smoothing,
 )
-from syto.modelling.classifiers.abstract_read_classifier import (
+from syto.classification.classifiers.abstract_read_classifier import (
     AbstractReadClassifier,
 )
 

@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Dict, Any
 
 import yaml
-from syto.modelling.experiment_wrappers import (
+from syto.classification.experiment_wrappers import (
     AbstractMLFlowExperiment,
     TransformersMLFLowExperiment,
 )
@@ -21,12 +21,12 @@ from syto.modelling.experiment_wrappers import (
 sys.path.append(str(Path(__file__).parent.parent))
 
 # pylint: disable=wrong-import-position
-from syto.modelling.experiment_wrappers import (
+from syto.classification.experiment_wrappers import (
     DismirMLflowExperiment,
     EpigenBERT2MLflowExperiment,
     MethylBertMLflowExperiment,
 )
-from syto.modelling.classifiers.dnabert2 import (
+from syto.classification.classifiers.dnabert2 import (
     TrainingArguments,
 )  # TODO - must be different for MethylBERT
 

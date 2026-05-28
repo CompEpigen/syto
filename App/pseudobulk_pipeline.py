@@ -25,7 +25,7 @@ from syto.data.pseudo_bulk_generation import (
 )
 from syto.data.read_preparation import prepare_splits_for_pseudobulk
 from syto.data.split_rebalancing import rebalance_splits
-from syto.modelling.classifiers.lazy_classifier_factory import (
+from syto.classification.classifiers.lazy_classifier_factory import (
     read_classifier_factory,
 )
 

@@ -14,7 +14,7 @@ from syto.deconvolution.uxm import (
     rearange_uxm_deconvolution_results,
     uxm_deconvolution,
 )
-from syto.modelling.prediction_aggregation import (
+from syto.classification.prediction_aggregation import (
     aggregate_predictions_by_grg,
     aggregate_predictions_by_grg_optimized,
     _fill_in_missing_labels,

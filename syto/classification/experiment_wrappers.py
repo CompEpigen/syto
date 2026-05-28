@@ -32,9 +32,9 @@ from transformers import (
 from syto.data.dataset import SupervisedDataset
 from syto.data.sequencing.genome import generate_kmer_str_with_overlap
 from syto.data.utils import split_long_reads
-from syto.modelling.classifiers.dismir import Dismir
-from syto.modelling.classifiers.dnabert2 import EpigenDnabert2, TrainingArguments
-from syto.modelling.classifiers.methylbert import (
+from syto.classification.classifiers.dismir import Dismir
+from syto.classification.classifiers.dnabert2 import EpigenDnabert2, TrainingArguments
+from syto.classification.classifiers.methylbert import (
     MethylBert,
     MethylBertFinetuneDataset,
     MethylVocab,

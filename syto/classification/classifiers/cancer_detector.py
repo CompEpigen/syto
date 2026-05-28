@@ -20,10 +20,10 @@ from scipy import stats
 from scipy.special import beta as beta_func  # pylint: disable=no-name-in-module
 from tqdm import tqdm
 
-from syto.modelling.classifiers.abstract_read_classifier import (
+from syto.classification.classifiers.abstract_read_classifier import (
     AbstractReadClassifier,
 )
-from syto.modelling.evaluation import compute_metrics
+from syto.classification.evaluation import compute_metrics
 
 _module_logger = logging.getLogger(__name__)
 

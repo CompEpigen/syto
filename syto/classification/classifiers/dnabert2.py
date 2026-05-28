@@ -18,19 +18,19 @@ import torch
 import transformers
 from torch.utils.data import Dataset
 
-from syto.modelling.evaluation import (
+from syto.classification.evaluation import (
     compute_metrics,
     preprocess_logits_for_prediction,
     keep_logits_only,
 )
-from syto.modelling.utils import calculate_batch_size
+from syto.classification.utils import calculate_batch_size
 from syto.data.dataset import *
 from safetensors.torch import load_file
 from transformers.models.bert.configuration_bert import BertConfig
-from syto.modelling.gr_group_attention_classification_head import (
+from syto.classification.gr_group_attention_classification_head import (
     GRGAttentionClassificationHead,
 )
-from syto.modelling.loss import ConfidenceWeightedCrossEntropy
+from syto.classification.loss import ConfidenceWeightedCrossEntropy
 
 
 class BertEmbeddings(nn.Module):

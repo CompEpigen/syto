@@ -1,5 +1,5 @@
 """
-Unit tests for syto.modelling.classifier_calibration_metrics.
+Unit tests for syto.classification.classifier_calibration_metrics.
 
 Coverage
 --------
@@ -20,7 +20,7 @@ import unittest
 import warnings
 import numpy as np
 
-from syto.modelling.classifier_calibration_metrics import (
+from syto.classification.classifier_calibration_metrics import (
     _compute_bin_edges,
     _assign_to_bins,
     _compute_bins_and_stats_per_bin,
@@ -107,7 +107,7 @@ class TestComputeBinEdges(unittest.TestCase):
         """
         x = np.array([-0.1, 0.5, 1.2])
         with self.assertLogs(
-            "syto.modelling.classifier_calibration_metrics", level="WARNING"
+            "syto.classification.classifier_calibration_metrics", level="WARNING"
         ):
             edges = _compute_bin_edges(x, n_bins=5, binning_strategy="equal_width")
         # Should still return valid edges

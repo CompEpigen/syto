@@ -30,7 +30,7 @@ from syto.data.hdf5_utils import (
     GenerationMetadata,
     GenerationParameters,
 )
-from syto.modelling.classifiers.lazy_classifier_factory import (
+from syto.classification.classifiers.lazy_classifier_factory import (
     read_classifier_factory,
 )
 

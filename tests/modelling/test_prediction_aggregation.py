@@ -3,7 +3,7 @@ import unittest
 import numpy as np
 import pandas as pd
 
-from syto.modelling.prediction_aggregation import (
+from syto.classification.prediction_aggregation import (
     aggregate_chuncked_predictions_weighted,
     aggregate_predictions_by_grg,
     aggregate_predictions_by_grg_optimized,

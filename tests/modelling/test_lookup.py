@@ -23,7 +23,7 @@ import logging
 import numpy as np
 import pandas as pd
 
-from syto.modelling.classifiers.lookup import (
+from syto.classification.classifiers.lookup import (
     LabelConfig,
     LookupClassifier,
     SoftLabelConfig,

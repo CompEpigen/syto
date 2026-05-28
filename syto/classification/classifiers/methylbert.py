@@ -25,22 +25,22 @@ from transformers.modeling_outputs import ModelOutput
 from transformers import AutoTokenizer, Trainer, BertConfig
 
 
-from syto.modelling.evaluation import (
+from syto.classification.evaluation import (
     compute_metrics,
     preprocess_logits_for_prediction,
     compute_metrics_soft_labels,
 )
-from syto.modelling.gr_group_attention_classification_head import (
+from syto.classification.gr_group_attention_classification_head import (
     GRGAttentionClassificationHead,
 )
-from syto.modelling.loss import ConfidenceWeightedCrossEntropy, FocalLoss
-from syto.modelling.classifiers.abstract_read_classifier import (
+from syto.classification.loss import ConfidenceWeightedCrossEntropy, FocalLoss
+from syto.classification.classifiers.abstract_read_classifier import (
     AbstractReadClassifier,
 )
-from syto.modelling.data_preprocessing_for_inference import (
+from syto.classification.data_preprocessing_for_inference import (
     prepare_methylbert_list_inference,
 )
-from syto.modelling.prediction_aggregation import (
+from syto.classification.prediction_aggregation import (
     aggregate_chuncked_predictions_weighted,
 )
 
@@ -700,7 +700,7 @@ class MethylBert(AbstractReadClassifier):
 
         # Calculate recommended batch size
         if batch_size is None:
-            from syto.modelling.utils import calculate_batch_size
+            from syto.classification.utils import calculate_batch_size
 
             recommended_batch_size = calculate_batch_size(
                 gb_per_seq=0.0135 * 2, cpu_batch_size=700 / 2

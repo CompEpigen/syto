@@ -7,8 +7,8 @@ from parameterized import parameterized
 from transformers import BertConfig, TrainingArguments
 import torch
 
-import syto.modelling.classifiers.methylbert as methylbert_module
-from syto.modelling.classifiers.methylbert import (
+import syto.classification.classifiers.methylbert as methylbert_module
+from syto.classification.classifiers.methylbert import (
     MethylBert,
     MethylVocab,
     MethylBertFinetuneDataset,
@@ -381,14 +381,14 @@ class TestMethylBert(unittest.TestCase):
     def _create_small_model(self, **kwargs):
         """Create a wrapper with a tiny Hugging Face config for unit-level branches."""
         with patch(
-            "syto.modelling.classifiers.methylbert.BertConfig.from_pretrained",
+            "syto.classification.classifiers.methylbert.BertConfig.from_pretrained",
             return_value=self._build_small_hf_config(
                 num_labels=kwargs.get("num_labels", 2),
                 num_dmr_labels=kwargs.get("num_dmr_labels", 4),
                 loss=(kwargs.get("custom_config") or self.config).get("loss", "bce"),
             ),
         ), patch(
-            "syto.modelling.classifiers.methylbert.AutoTokenizer.from_pretrained",
+            "syto.classification.classifiers.methylbert.AutoTokenizer.from_pretrained",
             return_value=None,
         ):
             return MethylBert(
@@ -553,13 +553,13 @@ class TestMethylBert(unittest.TestCase):
         mocked_model = MagicMock()
 
         with patch(
-            "syto.modelling.classifiers.methylbert.BertConfig.from_pretrained",
+            "syto.classification.classifiers.methylbert.BertConfig.from_pretrained",
             return_value=self._build_small_hf_config(),
         ), patch(
-            "syto.modelling.classifiers.methylbert.MethylBertEmbeddedDMR.from_pretrained",
+            "syto.classification.classifiers.methylbert.MethylBertEmbeddedDMR.from_pretrained",
             return_value=mocked_model,
         ) as mocked_from_pretrained, patch(
-            "syto.modelling.classifiers.methylbert.AutoTokenizer.from_pretrained",
+            "syto.classification.classifiers.methylbert.AutoTokenizer.from_pretrained",
             return_value=object(),
         ):
             model = MethylBert(
@@ -858,7 +858,7 @@ class TestMethylBertSoftCollator(unittest.TestCase):
 
     def test_soft_finetune_collator(self):
         """Test soft-label collator stacks float labels and on_target_mask."""
-        from syto.modelling.classifiers.methylbert import (
+        from syto.classification.classifiers.methylbert import (
             methylbert_finetune_soft_collator,
         )
 
@@ -897,7 +897,7 @@ class TestMethylBertSoftCollator(unittest.TestCase):
 
     def test_soft_finetune_collator_with_list_labels(self):
         """Test that collator handles list labels (non-tensor) too."""
-        from syto.modelling.classifiers.methylbert import (
+        from syto.classification.classifiers.methylbert import (
             methylbert_finetune_soft_collator,
         )
 
@@ -936,7 +936,7 @@ class TestMethylBertSoftLabelLossSetup(unittest.TestCase):
 
     def test_setup_loss_cwce(self):
         """Verify _setup_loss('cwce') returns ConfidenceWeightedCrossEntropy."""
-        from syto.modelling.loss import ConfidenceWeightedCrossEntropy
+        from syto.classification.loss import ConfidenceWeightedCrossEntropy
 
         config = self._build_small_hf_config(num_labels=5, loss="cwce")
         model = MethylBertEmbeddedDMR(config, seq_len=5)
