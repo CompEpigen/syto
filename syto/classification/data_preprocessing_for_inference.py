@@ -1,7 +1,5 @@
 """"""
 
-from syto.data.sequencing.dmr_overlap_analysis import get_overlapping_dmrs
-
 
 def chunk_tokens(tokens, window_size, stride):
     """
