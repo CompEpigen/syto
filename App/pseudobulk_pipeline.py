@@ -24,7 +24,6 @@ from syto.data.pseudo_bulk_generation import (
     run_ios_generation_parallel,
 )
 from syto.data.read_preparation import prepare_splits_for_pseudobulk
-from syto.data.split_rebalancing import rebalance_splits
 from syto.classification.classifiers.lazy_classifier_factory import (
     read_classifier_factory,
 )
@@ -91,31 +90,7 @@ class PseudoBulkPipeline:
 
             # ── Stage 1b: Optional rebalancing ────────────────────────
             if self.config.get("rebalance_splits", False):
-                self.logger.info("Stage 1b: Rebalancing splits ...")
-                if (
-                    "train" in splits_data
-                    and "valid" in splits_data
-                    and "test" in splits_data
-                    and len(splits_data) == 3
-                ):
-                    manual_labels = self.config.get("manual_common_labels", [28, 35])
-                    train, valid, test = rebalance_splits(
-                        splits_data["train"],
-                        splits_data["valid"],
-                        splits_data["test"],
-                        manual_common_labels=manual_labels,
-                    )
-                    splits_data["train"] = train
-                    splits_data["valid"] = valid
-                    splits_data["test"] = test
-                    sizes = ", ".join(
-                        f"{name}={len(df)}" for name, df in splits_data.items()
-                    )
-                    self.logger.info(f"  After rebalance: {sizes}")
-                else:
-                    self.logger.warning(
-                        "Rebalancing is only supported when exactly train, valid, and test splits are present. Skipping."
-                    )
+                self.logger.warning("Split rebalancing has been removed.")
 
             # ── Stage 2: Prepare reads ────────────────────────────────
             self.logger.info("Stage 2: Preparing reads ...")
