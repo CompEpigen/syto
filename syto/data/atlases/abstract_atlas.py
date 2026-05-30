@@ -31,6 +31,7 @@ class AbstractAtlas(ABC):
         - 'chr': Chromosome name
         - 'start': Start position of the genomic region
         - 'end': End position of the genomic region
+        - 'name': the name of the genomic region (e.g. "chr1:1000-2000")
         - 'target': the name of the group that is characteristic for the genomic region
         (e.g. single cell type, set of cell type, tissue, etc.)
         """

@@ -14,6 +14,47 @@ class UXMMethylationAtlas(AbstractMethylationAtlas):
 
     REQUIRED_COLUMNS = AbstractMethylationAtlas.REQUIRED_COLUMNS.union({"direction"})
     VALID_DIRECTIONS = {"U", "M"}
+    EXPECTED_CTYPE_COLUMNS = [
+        "Adipocytes",
+        "Bladder-Ep",
+        "Blood-B",
+        "Blood-Granul",
+        "Blood-Mono+Macro",
+        "Blood-NK",
+        "Blood-T",
+        "Bone-Osteob",
+        "Breast-Basal-Ep",
+        "Breast-Luminal-Ep",
+        "Colon-Ep",
+        "Colon-Fibro",
+        "Dermal-Fibro",
+        "Endothel",
+        "Epid-Kerat",
+        "Eryth-prog",
+        "Fallopian-Ep",
+        "Gallbladder",
+        "Gastric-Ep",
+        "Head-Neck-Ep",
+        "Heart-Cardio",
+        "Heart-Fibro",
+        "Kidney-Ep",
+        "Liver-Hep",
+        "Lung-Ep-Alveo",
+        "Lung-Ep-Bron",
+        "Neuron",
+        "Oligodend",
+        "Ovary-Ep",
+        "Pancreas-Acinar",
+        "Pancreas-Alpha",
+        "Pancreas-Beta",
+        "Pancreas-Delta",
+        "Pancreas-Duct",
+        "Prostate-Ep",
+        "Skeletal-Musc",
+        "Small-Int-Ep",
+        "Smooth-Musc",
+        "Thyroid-Ep",
+    ]
 
     def __init__(
         self,
@@ -56,10 +97,23 @@ class UXMMethylationAtlas(AbstractMethylationAtlas):
             )
 
     @classmethod
+    def _check_ctype_columns(cls, candidate_atlas: pd.DataFrame) -> None:
+        """Check if the atlas DataFrame contains the expected cell type columns."""
+        missing_ctype_columns = set(cls.EXPECTED_CTYPE_COLUMNS) - set(
+            candidate_atlas.columns
+        )
+        if missing_ctype_columns:
+            raise ValueError(
+                f"Atlas DataFrame is missing expected cell type columns: {missing_ctype_columns}. "
+                f"Expected cell type columns are: {cls.EXPECTED_CTYPE_COLUMNS}"
+            )
+
+    @classmethod
     def _check_atlas_format(cls, candidate_atlas: pd.DataFrame) -> None:
         """Check if the atlas DataFrame has the required format."""
         super()._check_atlas_format(candidate_atlas)
         cls._check_direction(candidate_atlas)
+        cls._check_ctype_columns(candidate_atlas)
 
     @property
     def reference_genome(self) -> str:
@@ -77,7 +131,7 @@ class UXMMethylationAtlas(AbstractMethylationAtlas):
         represent the average ratio of hypomethylated reads in the genomic region
         for that cell type, and "M" if they represent the average ratio of hypermethylated reads
         in the genomic region for that cell type
-        - a column for each cell type in the atlas, containing the average ratio
+        - a column for each expected cell type in the atlas, containing the average ratio
         of hypomethylated reads (if direction is "U") or hypermethylated reads
         (if direction is "M") in the genomic region for that cell type
         """
