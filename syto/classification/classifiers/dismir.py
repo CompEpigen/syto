@@ -26,7 +26,7 @@ except ImportError:
     NotebookTrainingTracker = None
 
 from syto.classification.evaluation import compute_metrics, compute_metrics_soft_labels
-from syto.classification.gr_group_attention_classification_head import (
+from syto.classification.classification_heads import (
     GRGAttentionClassificationHead,
 )
 from syto.classification.loss import ConfidenceWeightedCrossEntropy
