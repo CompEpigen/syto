@@ -1509,14 +1509,14 @@ class Dismir(AbstractReadClassifier):
                     (default: "dmr_attention_based")
                 - num_dmr_labels: number of DMR labels (default: 39, only used if
                     classifier_head_implementation is "dmr_attention_based")
-                - dmr_label_column: name of the DMR label column in the dataset
+                - grg_label_column: name of the DMR label column in the dataset
                     (required if classifier_head_implementation is "dmr_attention_based")
         """
         classifier_head_implementation = kwargs.get(
             "classifier_head_implementation", "dmr_attention_based"
         )
-        dmr_label_column = (
-            kwargs["dmr_label_column"]
+        grg_label_column = (
+            kwargs["grg_label_column"]
             if classifier_head_implementation == "dmr_attention_based"
             else None
         )
@@ -1531,7 +1531,7 @@ class Dismir(AbstractReadClassifier):
                 "classifier_head_implementation", "dmr_attention_based"
             ),
             num_dmr_labels=kwargs.get("num_dmr_labels", 39),
-            dmr_label_col=dmr_label_column,
+            dmr_label_col=grg_label_column,
         )
         # Load pre-trained weights
         instance.model.load_state_dict(torch.load(path, weights_only=True))

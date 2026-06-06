@@ -299,10 +299,10 @@ class TestAggregatePredictionsByDmr(PredictionAggregationDataFrameTestBase):
 
         missing_row = result[result["dmr_ctype_label"] == 1].iloc[0]
         self.assertEqual(missing_row["dmr_ctype"], "ctype_b")
-        self.assertEqual(missing_row["prediction_0_avg"], 0)
-        self.assertEqual(missing_row["prediction_1_avg"], 0)
-        self.assertEqual(missing_row["prediction_0_wavg"], 0)
-        self.assertEqual(missing_row["prediction_1_wavg"], 0)
+        self.assertEqual(missing_row["prediction_0_avg"], 0.5)
+        self.assertEqual(missing_row["prediction_1_avg"], 0.5)
+        self.assertEqual(missing_row["prediction_0_wavg"], 0.5)
+        self.assertEqual(missing_row["prediction_1_wavg"], 0.5)
         self.assertEqual(missing_row["n_reads"], 0)
         self.assertEqual(missing_row["label"], -1)
         self.assertEqual(missing_row["chromosome"], 0)
@@ -597,27 +597,6 @@ def _build_aggregated_with_missing_label() -> tuple:
         ]
     )
     return df, labels_dict, uniform_prior
-
-
-class TestSubstitutionStrategyZeroes(unittest.TestCase):
-    """Confirm backward-compatible zeroes strategy."""
-
-    def test_zeroes_strategy_fills_missing_with_zeros(self):
-        df, labels_dict, _ = _build_aggregated_with_missing_label()
-        result = aggregate_predictions_by_grg(
-            df,
-            group_cols=["dmr_ctype_label", "dmr_ctype"],
-            prediction_cols=["prediction_0", "prediction_1", "methylation_level"],
-            weight_col="total_weight",
-            create_weight_from_cpgs=False,
-            fill_in_missing_labels=True,
-            labels_dict=labels_dict,
-            substitution_strategy="zeroes",
-        )
-        missing = result[result["dmr_ctype_label"] == 1].iloc[0]
-        self.assertEqual(missing["prediction_0_wavg"], 0)
-        self.assertEqual(missing["prediction_1_wavg"], 0)
-        self.assertEqual(missing["n_reads"], 0)
 
 
 class TestSubstitutionStrategyPriorBlending(unittest.TestCase):

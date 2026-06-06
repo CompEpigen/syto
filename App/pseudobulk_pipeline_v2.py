@@ -191,7 +191,7 @@ class PseudoBulkPipelineV2:
             classifier_head_implementation=classifier_config.get(
                 "classifier_head_implementation"
             ),
-            dmr_label_column=classifier_config.get("dmr_label_column"),
+            grg_label_column=classifier_config.get("grg_label_column"),
             soft_labels=classifier_config.get("soft_labels", True),
             dismir_flavor=classifier_config.get("dismir_flavor", "lstm"),
             batch_size=classifier_config.get("batch_size"),

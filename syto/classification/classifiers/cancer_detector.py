@@ -577,24 +577,19 @@ class CancerDetectorClassifier(AbstractReadClassifier):
             split_df: Input DataFrame with read-level data.
             **kwargs: Additional keyword arguments. Can include:
                 - grg_label_column: Column name for the Genomic Region Group (GRG) label
-                - dmr_label_column: Alternative column name for the marker label (DMR)
         """
         if not self.is_fitted:
             raise ValueError(
                 "CancerDetectorClassifier must be fitted before prediction."
             )
 
-        if not "grg_label_column" in kwargs and not "dmr_label_column" in kwargs:
+        if not "grg_label_column" in kwargs:
             _module_logger.warning(
-                "grg_label_column nor dmr_label_column provided in kwargs. Defaulting to 'dmr_ctype_label'."
+                "grg_label_column not provided in kwargs. Defaulting to 'dmr_ctype_label'."
             )
             grg_label_column = "dmr_ctype_label"
         else:
-            grg_label_column = (
-                kwargs["grg_label_column"]
-                if "grg_label_column" in kwargs
-                else kwargs["dmr_label_column"]
-            )
+            grg_label_column = kwargs["grg_label_column"]
 
         probabilities = self.predict_proba(
             test_data=split_df,
