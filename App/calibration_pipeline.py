@@ -422,7 +422,11 @@ class CalibratorFittingPipeline:
                 f"    Found existing VectorScalingCalibrator with CV at {vs_path},"
                 " loading instead of re-fitting"
             )
-            vs_calibrator = CrossValidationEngine.load(vs_path)
+            vs_calibrator = VectorScalingCalibrator.load(vs_path)
+            best_params = {
+                k: v for k, v in vs_calibrator.get_params().items() if k != "logger"
+            }
+            best_cv_val_loss = vs_calibrator.get_cv_metric(val_pred, y_valid)
         else:
             # get config for vector scaling calibrator,
             # log any missing parameters and their defaults
@@ -510,13 +514,18 @@ class CalibratorFittingPipeline:
                 random_state=42,
                 disable_pbar=False,
             )
+            best_params = vs_calibrator.best_params_
+            best_cv_val_loss = vs_calibrator.best_metric_
+
+            # Keep only the cross-validated model going forward and persist it
+            # (default save mode saves only the model, not the whole CV engine).
             vs_calibrator.save(vs_path)
+            vs_calibrator = vs_calibrator.best_model_
 
             self.logger.info(f"    Saved VectorScaling calibrator to {vs_path}")
 
         self.logger.info(
-            f"    Best CV loss: {vs_calibrator.best_cv_val_loss_:.6f}, "
-            f"params: {vs_calibrator.best_params_}"
+            f"    Best CV loss: {best_cv_val_loss:.6f}, " f"params: {best_params}"
         )
 
         vs_pred_path = os.path.join(deconv_out, "vector_scaling_predictions.npz")
@@ -548,8 +557,8 @@ class CalibratorFittingPipeline:
         result["vector_scaling"] = {
             "val_metrics": val_vs_m,
             "test_metrics": test_vs_m,
-            "best_params": vs_calibrator.best_params_,
-            "best_cv_val_loss": vs_calibrator.best_cv_val_loss_,
+            "best_params": best_params,
+            "best_cv_val_loss": best_cv_val_loss,
         }
 
         return result
