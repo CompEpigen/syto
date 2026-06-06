@@ -167,16 +167,46 @@ class CrossValidationEngine(CrossValidationCompatibleModel):
             raise RuntimeError("Model not fitted yet. Call fit() first.")
         return self.best_model_.predict(X, **kwargs)
 
-    def save(self, path: Union[str, Path], **kwargs) -> None:
-        """Save the whole CV engine, including the best model and all relevant attributes."""
+    def save(
+        self, path: Union[str, Path], mode: str = "save-cv-model", **kwargs
+    ) -> None:
+        """Save the cross-validation result to disk.
+
+        Two saving modes are supported:
+
+        - ``"save-cv-model"`` (default): save ONLY the cross-validated model
+          (i.e. ``best_model_``, the model retrained on the full dataset with the
+          best hyperparameters). Saving is delegated to the model's own ``save``
+          method, so the resulting file can be loaded directly with the model
+          class (e.g. ``VectorScalingCalibrator.load``).
+        - ``"save-cv-engine"``: save the whole CV engine, including the best model
+          and all CV bookkeeping attributes (metrics per param, best params, etc.).
+          Only the ``.joblib`` format is supported in this mode, and the file must
+          be loaded back with :meth:`CrossValidationEngine.load`.
+
+        Args:
+            path: File path to save to.
+            mode: Either ``"save-cv-model"`` (default) or ``"save-cv-engine"``.
+            **kwargs: Forwarded to the model's ``save`` method in
+                ``"save-cv-model"`` mode.
+        """
         if not self.is_fitted:
             raise RuntimeError("Model not fitted yet. Call fit() first.")
-        path = Path(path)
-        assert (
-            path.suffix == ".joblib"
-        ), "Only .joblib format is supported for saving the CV engine"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        joblib.dump(value=self, filename=path)
+
+        if mode == "save-cv-model":
+            self.best_model_.save(path, **kwargs)
+        elif mode == "save-cv-engine":
+            path = Path(path)
+            assert (
+                path.suffix == ".joblib"
+            ), "Only .joblib format is supported for saving the CV engine"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            joblib.dump(value=self, filename=path)
+        else:
+            raise ValueError(
+                f"Unsupported save mode: {mode!r}. "
+                "Use 'save-cv-model' (default) or 'save-cv-engine'."
+            )
 
     @classmethod
     def load(cls, path: Union[str, Path], **kwargs) -> "CrossValidationEngine":

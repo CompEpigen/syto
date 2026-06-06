@@ -364,25 +364,65 @@ class TestCrossValidationEngineSaveLoad(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 cv.save(Path(td) / "model.joblib")
 
-    def test_save_wrong_extension_raises(self):
-        """save() with a non-.joblib extension should raise AssertionError."""
+    def test_save_unfitted_engine_mode_raises(self):
+        """save(mode='save-cv-engine') before fit() should raise RuntimeError."""
+        cv = CrossValidationEngine()
+        with tempfile.TemporaryDirectory() as td:
+            with self.assertRaises(RuntimeError):
+                cv.save(Path(td) / "model.joblib", mode="save-cv-engine")
+
+    def test_save_unknown_mode_raises(self):
+        """save() with an unknown mode should raise ValueError."""
+        with tempfile.TemporaryDirectory() as td:
+            with self.assertRaises(ValueError):
+                self.cv.save(Path(td) / "model.joblib", mode="bogus")
+
+    # ── save-cv-model mode (default) ──────────────────────────────
+
+    def test_default_mode_saves_only_the_model(self):
+        """Default save() should persist only the cross-validated model."""
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "model.joblib"
+            self.cv.save(path)
+            self.assertTrue(path.exists())
+            loaded = DummyModel.load(path)
+            self.assertIsInstance(loaded, DummyModel)
+            self.assertNotIsInstance(loaded, CrossValidationEngine)
+
+    def test_default_mode_round_trip_predictions(self):
+        """A model saved in default mode should reproduce the engine's predictions."""
+        # pylint: disable=invalid-name
+        X_test = _make_dummy_probs(10, _N_CLASSES, seed=99)
+        original_preds = self.cv.predict(X_test)
+
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "model.joblib"
+            self.cv.save(path)
+            loaded = DummyModel.load(path)
+
+        np.testing.assert_array_equal(loaded.predict(X_test), original_preds)
+
+    # ── save-cv-engine mode ───────────────────────────────────────
+
+    def test_engine_mode_wrong_extension_raises(self):
+        """save(mode='save-cv-engine') with a non-.joblib extension should raise."""
         with tempfile.TemporaryDirectory() as td:
             with self.assertRaises(AssertionError):
-                self.cv.save(Path(td) / "model.npz")
+                self.cv.save(Path(td) / "model.npz", mode="save-cv-engine")
 
     def test_load_wrong_extension_raises(self):
         """load() with a non-.joblib extension should raise AssertionError."""
         with self.assertRaises(AssertionError):
             CrossValidationEngine.load("model.npz")
 
-    def test_save_creates_joblib_file(self):
-        """save() should create a .joblib file at the specified path."""
+    def test_engine_mode_creates_joblib_file(self):
+        """save(mode='save-cv-engine') should create a .joblib file at the path."""
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / "cv_engine.joblib"
-            self.cv.save(path)
+            self.cv.save(path, mode="save-cv-engine")
             self.assertTrue(path.exists())
 
-    def test_save_load_round_trip_predictions(self):
+    def test_engine_mode_round_trip_predictions(self):
         """Predictions from a loaded engine should match the original engine's predictions."""
         # pylint: disable=invalid-name
         X_test = _make_dummy_probs(10, _N_CLASSES, seed=99)
@@ -390,43 +430,43 @@ class TestCrossValidationEngineSaveLoad(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / "cv_engine.joblib"
-            self.cv.save(path)
+            self.cv.save(path, mode="save-cv-engine")
             loaded = CrossValidationEngine.load(path)
 
         np.testing.assert_array_equal(loaded.predict(X_test), original_preds)
 
-    def test_save_load_restores_is_fitted(self):
+    def test_engine_mode_restores_is_fitted(self):
         """load() should restore is_fitted=True."""
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / "cv_engine.joblib"
-            self.cv.save(path)
+            self.cv.save(path, mode="save-cv-engine")
             loaded = CrossValidationEngine.load(path)
 
         self.assertTrue(loaded.is_fitted)
 
-    def test_save_load_restores_best_params(self):
+    def test_engine_mode_restores_best_params(self):
         """load() should restore best_params_ identically."""
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / "cv_engine.joblib"
-            self.cv.save(path)
+            self.cv.save(path, mode="save-cv-engine")
             loaded = CrossValidationEngine.load(path)
 
         self.assertEqual(loaded.best_params_, self.cv.best_params_)
 
-    def test_save_load_restores_best_metric(self):
+    def test_engine_mode_restores_best_metric(self):
         """load() should restore best_metric_ to the same value."""
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / "cv_engine.joblib"
-            self.cv.save(path)
+            self.cv.save(path, mode="save-cv-engine")
             loaded = CrossValidationEngine.load(path)
 
         self.assertAlmostEqual(loaded.best_metric_, self.cv.best_metric_, places=12)
 
-    def test_save_load_restores_metrics_per_param(self):
+    def test_engine_mode_restores_metrics_per_param(self):
         """load() should restore metrics_per_param_ with the same number of entries."""
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / "cv_engine.joblib"
-            self.cv.save(path)
+            self.cv.save(path, mode="save-cv-engine")
             loaded = CrossValidationEngine.load(path)
 
         self.assertEqual(
@@ -437,7 +477,7 @@ class TestCrossValidationEngineSaveLoad(unittest.TestCase):
         """save() should create any missing parent directories."""
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / "nested" / "subdir" / "cv_engine.joblib"
-            self.cv.save(path)
+            self.cv.save(path, mode="save-cv-engine")
             self.assertTrue(path.exists())
 
 
