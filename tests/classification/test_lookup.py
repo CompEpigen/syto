@@ -28,7 +28,9 @@ from syto.classification.classifiers.lookup import (
     LookupClassifier,
     SoftLabelConfig,
 )
-from syto.data.soft_labeling import extract_cpg_signature
+from syto.data.omics_signatures_handlers.binary_cpg_signature import (
+    BinaryCpGSignatureHandler,
+)
 
 warnings.filterwarnings("ignore")
 
@@ -375,7 +377,12 @@ class TestLookupClassifierSoftMode(unittest.TestCase):
 
         # Pre-compute cpg_sig on a copy of the data
         df_with_sig = self.df.copy()
-        df_with_sig["cpg_sig"] = df_with_sig.apply(extract_cpg_signature, axis=1)
+        signature_handler = BinaryCpGSignatureHandler(
+            start_column="trimmed_start", methylation_pattern_column="pattern"
+        )
+        df_with_sig["cpg_sig"] = df_with_sig.apply(
+            signature_handler.extract_signature, axis=1
+        )
         # Ensure tuple type, as the classifier does internally
         df_with_sig["cpg_sig"] = df_with_sig["cpg_sig"].apply(
             lambda x: (

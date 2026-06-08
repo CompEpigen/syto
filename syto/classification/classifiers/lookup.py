@@ -26,10 +26,9 @@ from syto.classification.evaluation import (
     compute_metrics_soft_labels,
 )
 
-from syto.data.soft_labeling import (
-    extract_cpg_signature,
-    signature_distance,
-    apply_normalized_knn_smoothing,
+from syto.data.labelers.data_driven_soft_labeler import DataDrivenSoftLabeler
+from syto.data.omics_signatures_handlers.binary_cpg_signature import (
+    BinaryCpGSignatureHandler,
 )
 from syto.classification.classifiers.abstract_read_classifier import (
     AbstractReadClassifier,
@@ -91,6 +90,11 @@ class LookupClassifier(AbstractReadClassifier):
 
     def __init__(self, config: Optional[LabelConfig] = None):
         self.config = config or LabelConfig()
+
+        # Handler used to extract binary CpG signatures and compute distances
+        self.signature_handler = BinaryCpGSignatureHandler(
+            start_column="trimmed_start", methylation_pattern_column="pattern"
+        )
 
         # Populated by fit() --------------------------------------------------
         # {(region, cpg_sig): {"soft_label": [...], "normalized_counts": [...]}}
@@ -242,7 +246,9 @@ class LookupClassifier(AbstractReadClassifier):
         # Ensure cpg_sig exists
         if "cpg_sig" not in df.columns:
             tqdm.pandas(desc="Extracting signatures")
-            df["cpg_sig"] = df.progress_apply(extract_cpg_signature, axis=1)
+            df["cpg_sig"] = df.progress_apply(
+                self.signature_handler.extract_signature, axis=1
+            )
         # Guarantee tuple type
         df["cpg_sig"] = df["cpg_sig"].apply(
             lambda x: (
@@ -350,11 +356,16 @@ class LookupClassifier(AbstractReadClassifier):
         cfg = self.config
         df = df.copy()
 
+        if cfg.label_mode != "hard":
+            return self._build_soft_mapping(df)
+
         # Ensure cpg_sig column
 
         if "cpg_sig" not in df.columns:
             tqdm.pandas(desc="Extracting signatures")
-            df["cpg_sig"] = df.progress_apply(extract_cpg_signature, axis=1)
+            df["cpg_sig"] = df.progress_apply(
+                self.signature_handler.extract_signature, axis=1
+            )
         df["cpg_sig"] = df["cpg_sig"].apply(
             lambda x: (
                 tuple(tuple(int(e) for e in p) for p in x)
@@ -375,35 +386,46 @@ class LookupClassifier(AbstractReadClassifier):
         class_cols = list(range(cfg.num_classes))
         base_counts["total_reads"] = base_counts[class_cols].sum(axis=1)
 
-        if cfg.label_mode == "hard":
-            return self._build_hard_mapping(base_counts, class_cols)
+        return self._build_hard_mapping(base_counts, class_cols)
 
-        return self._build_soft_mapping(base_counts)
-
-    def _build_soft_mapping(self, base_counts: pd.DataFrame) -> Dict[tuple, dict]:
-        """Build the soft-label lookup table via KNN smoothing."""
+    def _build_soft_mapping(self, df: pd.DataFrame) -> Dict[tuple, dict]:
+        """Build the soft-label lookup table via data-driven KNN smoothing."""
         cfg = self.config
-        mapping_df = apply_normalized_knn_smoothing(
-            base_counts,
+
+        reads_df = df.copy()
+        # DataDrivenSoftLabeler expects an integer "original_label" column
+        if cfg.label_col != "original_label":
+            reads_df["original_label"] = reads_df[cfg.label_col]
+        reads_df["original_label"] = reads_df["original_label"].astype(np.int32)
+
+        labeler = DataDrivenSoftLabeler(
+            distance_name="jaccard",
+            signature_handler=self.signature_handler,
+        )
+        labeled_df = labeler.compute_labels(
+            reads_df,
+            perform_pooling=True,
             min_reads=cfg.min_reads,
             max_distance=cfg.max_distance,
             num_classes=cfg.num_classes,
+            keep_intermediate_values=True,
         )
+
+        # The weighted (globally normalized) counts play the role of the
+        # "normalized_counts" used by the lookup table and the NN fallback.
+        weighted_cols = [f"weighted_counts_{c}" for c in range(cfg.num_classes)]
+        mapping_df = labeled_df.drop_duplicates(subset=["name", "signature"])
 
         table: Dict[tuple, dict] = {}
         for _, row in mapping_df.iterrows():
-            key = (row["name"], row["cpg_sig"])
+            key = (row["name"], row["signature"])
             table[key] = {
                 "soft_label": (
                     row["soft_label"]
                     if isinstance(row["soft_label"], list)
                     else list(row["soft_label"])
                 ),
-                "normalized_counts": (
-                    row["normalized_counts"]
-                    if isinstance(row["normalized_counts"], list)
-                    else list(row["normalized_counts"])
-                ),
+                "normalized_counts": [float(row[col]) for col in weighted_cols],
             }
         return table
 
@@ -413,7 +435,7 @@ class LookupClassifier(AbstractReadClassifier):
         """Build the hard-label lookup table (argmax with tie-averaging).
 
         Counts are first normalized using global sequencing-depth weights
-        (same method as ``apply_normalized_knn_smoothing``) before the
+        (same method as the data-driven soft labeler) before the
         argmax is computed.
         """
         cfg = self.config
@@ -493,7 +515,7 @@ class LookupClassifier(AbstractReadClassifier):
         best_entries: List[dict] = []
 
         for sig, entry in candidates:
-            d = signature_distance(query_sig, sig)
+            d = self.signature_handler.compute_jaccard_distance(query_sig, sig)
             if d < best_dist:
                 best_dist = d
                 best_entries = [entry]
@@ -517,7 +539,7 @@ class LookupClassifier(AbstractReadClassifier):
             return (agg_counts / total).tolist()
         return [1.0 / num_classes] * num_classes
 
-    # ---- serialisation helpers (tuples ↔ JSON-safe strings) ----
+    # ---- serialisation helpers (tuples <-> JSON-safe strings) ----
 
     @staticmethod
     def _key_to_str(key: tuple) -> str:
