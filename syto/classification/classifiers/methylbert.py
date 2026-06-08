@@ -68,6 +68,7 @@ default_methylbert_config = OrderedDict(
     ]
 )
 
+
 def __chunk_tokens(tokens, window_size, stride):
     """
     Splits a list of tokens into overlapping chunks of fixed size.
@@ -139,6 +140,7 @@ def extract_signal_mask(dataset):
             mask[i] = bool(dataset.lines[i].get("on_target_mask", False))
     return mask
 
+
 def prepare_methylbert_list(
     results_df,
     gr_label_column,
@@ -146,7 +148,7 @@ def prepare_methylbert_list(
     stride=75,
     soft_labels=False,
     is_binary=False,
-    gr_ctype_label = "dmr_ctype_label"
+    gr_ctype_label="dmr_ctype_label",
 ):
     """
     Prepares inference data with sliding window chunking.
@@ -163,7 +165,7 @@ def prepare_methylbert_list(
             "original_label",
             "read_name",
             "ncpgs_marked",
-            "on_target_mask"
+            "on_target_mask",
         ]
     ]
 
@@ -202,12 +204,11 @@ def prepare_methylbert_list(
                     o_label,
                     read_name,
                     ncpgs_marked,
-                    o_label == gr_ctype
+                    o_label == gr_ctype,
                 ]
             )
 
     return data_list
-
 
 
 class BalancedBackgroundBatchSampler(Sampler):
@@ -374,10 +375,14 @@ def methylbert_finetune_collator(features):
     if isinstance(first_label, torch.Tensor):
         batch["labels"] = torch.stack([f["labels"] for f in features])
     elif isinstance(first_label, (list, tuple, np.ndarray, float)):
-        batch["labels"] = torch.stack([torch.tensor(f["labels"], dtype=torch.float) for f in features])
+        batch["labels"] = torch.stack(
+            [torch.tensor(f["labels"], dtype=torch.float) for f in features]
+        )
     else:
         # Hard labels (ints)
-        batch["labels"] = torch.tensor([f["labels"] for f in features], dtype=torch.long)
+        batch["labels"] = torch.tensor(
+            [f["labels"] for f in features], dtype=torch.long
+        )
 
     return batch
 
@@ -986,7 +991,6 @@ class MethylBert(AbstractReadClassifier):
             cache_dir=self.cache_dir,
         )
 
-
         self.trainer = self._init_trainer(
             train_dataset=train_dataset,
             eval_dataset=val_dataset,
@@ -1227,6 +1231,7 @@ def _line2tokens_pretrain(l, tokenizer, max_len=120):
     else:
         return tokened + [[tokenizer.pad_index] for k in range(max_len - len(tokened))]
 
+
 def _line2tokens_finetune(l, tokenizer, max_len=150, headers=None, soft_labels=False):
     """
     Parses a line into tokens and labels.
@@ -1242,11 +1247,11 @@ def _line2tokens_finetune(l, tokenizer, max_len=150, headers=None, soft_labels=F
 
     # Cannot have more than 510 tokens in sequence due to positional embeddings
     max_len = min(max_len, 511)
-    
+
     # 2. Separate n-mers tokens and labels from each line
     if isinstance(l, str):
         l = l.strip().split("\t")
-        
+
     if isinstance(l, (list, tuple)):
         if len(headers) == len(l):
             l = {k: v for k, v in zip(headers, l)}
@@ -1258,12 +1263,12 @@ def _line2tokens_finetune(l, tokenizer, max_len=150, headers=None, soft_labels=F
 
     if isinstance(l["dna_seq"], str):
         l["dna_seq"] = l["dna_seq"].split(" ")
-        
+
     l["methyl_seq"] = [int(m) for m in l["methyl_seq"]]
 
     # 3. Tokenize sequences
     l["dna_seq"] = [[f] for f in tokenizer.to_seq(l["dna_seq"])]
-    
+
     # 4. Parse Labels (The Harmonized Logic)
     if soft_labels:
         if isinstance(l["ctype"], str):
@@ -1286,7 +1291,6 @@ def _line2tokens_finetune(l, tokenizer, max_len=150, headers=None, soft_labels=F
         l["methyl_seq"].extend([2] * pad_len)
 
     return l
-
 
 
 class MethylBertDataset(Dataset):
@@ -1593,7 +1597,7 @@ class MethylBertFinetuneDataset(MethylBertDataset):
                             tokenizer=self.vocab,
                             max_len=self.seq_len,
                             headers=self.headers,
-                            soft_labels=self.soft_labels
+                            soft_labels=self.soft_labels,
                         )
                         for line in raw_seqs
                     ]
@@ -1606,7 +1610,7 @@ class MethylBertFinetuneDataset(MethylBertDataset):
                                 tokenizer=self.vocab,
                                 max_len=self.seq_len,
                                 headers=self.headers,
-                                soft_labels=self.soft_labels
+                                soft_labels=self.soft_labels,
                             ),
                             raw_seqs,
                         )
@@ -1641,7 +1645,11 @@ class MethylBertFinetuneDataset(MethylBertDataset):
         # Tokenize
         line = self.raw_lines[index]
         tokenized = self._tokenize_fn(
-            line, tokenizer=self.vocab, max_len=self.seq_len, headers=self.headers, soft_labels=self.soft_labels
+            line,
+            tokenizer=self.vocab,
+            max_len=self.seq_len,
+            headers=self.headers,
+            soft_labels=self.soft_labels,
         )
 
         # Store in cache

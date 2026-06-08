@@ -155,9 +155,7 @@ class DISMIRNet(nn.Module):
                     "num_gr_labels must be provided for gr_attention_based classifier"
                 )
 
-            self._init_dmr_attention_classifier(
-                num_labels, num_gr_labels, dropout_prob
-            )
+            self._init_dmr_attention_classifier(num_labels, num_gr_labels, dropout_prob)
             # Set vanilla FC components to None
             self.fc1 = None
             self.drop3 = None
