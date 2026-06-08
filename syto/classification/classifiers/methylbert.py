@@ -30,7 +30,7 @@ from syto.classification.evaluation import (
     preprocess_logits_for_prediction,
     compute_metrics_soft_labels,
 )
-from syto.classification.gr_group_attention_classification_head import (
+from syto.classification.classification_heads import (
     GRGAttentionClassificationHead,
 )
 from syto.classification.loss import ConfidenceWeightedCrossEntropy, FocalLoss
@@ -989,7 +989,7 @@ class MethylBert(AbstractReadClassifier):
             split_df: DataFrame containing the data for a single split, with columns 'seq'
                 and 'pattern' for input sequences and methylation patterns, respectively.
             **kwargs: Additional keyword arguments for prediction, such as :
-                - dmr_label_column: Name of the column in split_df that contains DMR labels
+                - grg_label_column: Name of the column in split_df that contains DMR labels
                     (default: 'dmr_ctype_label')
                 - batch_size: Batch size for prediction (default: 2200)
         """
@@ -1000,7 +1000,7 @@ class MethylBert(AbstractReadClassifier):
 
         data_list = prepare_methylbert_list_inference(
             input_df,
-            dmr_label_column=kwargs.get("dmr_label_column", "dmr_ctype_label"),
+            grg_label_column=kwargs.get("grg_label_column", "dmr_ctype_label"),
             seq_length=self.seq_len,
             stride=int(self.seq_len / 2),
             soft_labels=self.soft_labels,

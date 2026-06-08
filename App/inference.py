@@ -49,7 +49,7 @@ from syto.deconvolution.xgbdeconvolver import (
     XGBoostDeconvolver,
 )
 from syto.calibration.linear_calibrator import LinearCalibrator
-from syto.cross_validation_engine import CrossValidationEngine
+from syto.calibration.vector_scaling_calibrator import VectorScalingCalibrator
 
 LINEAR_NORM_METHODS = ["clip0-normalize", "simplex-projection"]
 
@@ -613,7 +613,7 @@ class InferencePipeline:
             calibrator_label = "vector_scaling"
             self.logger.info(f"  Loading vector-scaling calibrator from {vs_path}")
             try:
-                vs_cal = CrossValidationEngine.load(vs_path)
+                vs_cal = VectorScalingCalibrator.load(vs_path)
                 calib = vs_cal.predict(props_2d)
                 results.append((base_name, calibrator_label, np.round(calib, 4)))
                 self.logger.info(f"    ✓ {base_name} + {calibrator_label}")

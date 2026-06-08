@@ -27,7 +27,7 @@ from syto.classification.utils import calculate_batch_size
 from syto.data.dataset import *
 from safetensors.torch import load_file
 from transformers.models.bert.configuration_bert import BertConfig
-from syto.classification.gr_group_attention_classification_head import (
+from syto.classification.classification_heads import (
     GRGAttentionClassificationHead,
 )
 from syto.classification.loss import ConfidenceWeightedCrossEntropy
