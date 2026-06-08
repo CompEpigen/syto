@@ -5,9 +5,9 @@ import torch.nn.functional as F
 import math
 
 
-class GRGAttentionClassificationHead(nn.Module):
+class GRAttentionClassificationHead(nn.Module):
     """
-    Attention-based classifier that uses DMR information as contextual labels
+    Attention-based classifier that uses GR information as contextual labels
     for sequence-level classification.
     """
 
@@ -16,11 +16,11 @@ class GRGAttentionClassificationHead(nn.Module):
 
         self.hidden_size = config.hidden_size
         self.num_labels = config.num_labels
-        self.num_dmr_labels = config.num_dmr_labels
+        self.num_gr_labels = config.num_gr_labels
 
-        # DMR embedding layer
-        self.dmr_embedding = nn.Embedding(
-            num_embeddings=self.num_dmr_labels, embedding_dim=self.hidden_size
+        # GR embedding layer
+        self.gr_embedding = nn.Embedding(
+            num_embeddings=self.num_gr_labels, embedding_dim=self.hidden_size
         )
 
         # Single-head attention components
@@ -31,7 +31,7 @@ class GRGAttentionClassificationHead(nn.Module):
         # Attention dropout
         self.attn_dropout = nn.Dropout(config.attention_probs_dropout_prob)
 
-        # Context fusion layer - combines attended features with DMR context
+        # Context fusion layer - combines attended features with GR context
         self.context_fusion = nn.Sequential(
             nn.Linear(config.hidden_size * 2, config.hidden_size),
             nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps),
@@ -67,11 +67,11 @@ class GRGAttentionClassificationHead(nn.Module):
         # Scale factor for attention scores
         self.scale = config.hidden_size**-0.5
 
-    def forward(self, sequence_output, dmr_ids, attention_mask=None):
+    def forward(self, sequence_output, gr_ids, attention_mask=None):
         """
         Args:
             sequence_output: [batch_size, seq_len, hidden_size] - BERT output
-            dmr_ids: [batch_size] - DMR labels for each sequence
+            gr_ids: [batch_size] - GR labels for each sequence
             attention_mask: [batch_size, seq_len] - attention mask for padding
 
         Returns:
@@ -80,15 +80,15 @@ class GRGAttentionClassificationHead(nn.Module):
         """
         batch_size, seq_len, hidden_size = sequence_output.shape
 
-        # Get DMR embeddings and expand to sequence length
-        dmr_embeds = self.dmr_embedding(dmr_ids)  # [batch_size, hidden_size]
-        dmr_context = dmr_embeds.unsqueeze(1).expand(
+        # Get GR embeddings and expand to sequence length
+        gr_embeds = self.gr_embedding(gr_ids)  # [batch_size, hidden_size]
+        gr_context = gr_embeds.unsqueeze(1).expand(
             -1, seq_len, -1
         )  # [batch_size, seq_len, hidden_size]
 
-        # Compute attention using DMR context as query
-        # This allows the model to attend to sequence positions relevant to the DMR
-        queries = self.query_proj(dmr_context)  # [batch_size, seq_len, hidden_size]
+        # Compute attention using GR context as query
+        # This allows the model to attend to sequence positions relevant to the GR
+        queries = self.query_proj(gr_context)  # [batch_size, seq_len, hidden_size]
         keys = self.key_proj(sequence_output)  # [batch_size, seq_len, hidden_size]
         values = self.value_proj(sequence_output)  # [batch_size, seq_len, hidden_size]
 
@@ -120,9 +120,9 @@ class GRGAttentionClassificationHead(nn.Module):
         # We use mean of the attended features as the sequence representation
         aggregated_features = attended_features.mean(dim=1)  # [batch_size, hidden_size]
 
-        # Combine with DMR embedding for final context
+        # Combine with GR embedding for final context
         combined_features = torch.cat(
-            [aggregated_features, dmr_embeds], dim=-1
+            [aggregated_features, gr_embeds], dim=-1
         )  # [batch_size, hidden_size * 2]
 
         # Apply context fusion

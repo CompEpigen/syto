@@ -1,10 +1,10 @@
 [tool.poetry]
-name = "methyldl"
+name = "syto"
 version = "0.5.0"
 description = ""
 authors = ["Dmytro Rizdvanteskyi", "Nathan Roos"]
 readme = "README.md"
-packages = [{include = "methyldl"}]
+packages = [{include = "syto"}]
 
 [tool.poetry.dependencies]
 python = "^3.11"

@@ -483,7 +483,7 @@ class TestBertForSequenceClassificationForward(unittest.TestCase):
         model = object.__new__(dnabert2_module.BertForSequenceClassification)
         torch.nn.Module.__init__(model)
         model.num_labels = logits.shape[-1]
-        model.num_dmr_labels = None
+        model.num_gr_labels = None
         model.config = SimpleNamespace(problem_type=None, use_return_dict=True)
         model.bert = _FixedBackbone((sequence_output, pooled_output, extra_output))
         model.dropout = torch.nn.Identity()
@@ -529,7 +529,7 @@ class TestBertForSequenceClassificationSoftLabels(unittest.TestCase):
         model = object.__new__(dnabert2_module.BertForSequenceClassification)
         torch.nn.Module.__init__(model)
         model.num_labels = logits.shape[-1]
-        model.num_dmr_labels = None
+        model.num_gr_labels = None
         model.config = SimpleNamespace(problem_type=None, use_return_dict=True)
         model.bert = _FixedBackbone((sequence_output, pooled_output, extra_output))
         model.dropout = torch.nn.Identity()
