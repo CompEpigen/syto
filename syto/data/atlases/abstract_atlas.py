@@ -10,7 +10,7 @@ class AbstractAtlas(ABC):
     Abstract base class for atlases
     """
 
-    REQUIRED_COLUMNS = {"chr", "start", "end", "target"}
+    REQUIRED_COLUMNS = {"chr", "start", "end", "target", "name"}
     VALID_REFERENCE_GENOMES = {"hg38", "hg19"}
     VALID_CHROMOSOMES = {f"chr{i}" for i in range(1, 23)}.union({"chrX", "chrY"})
 

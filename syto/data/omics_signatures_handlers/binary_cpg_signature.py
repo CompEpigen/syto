@@ -2,7 +2,7 @@
 Module for generating binary CpG signatures from methylation data.
 """
 
-from typing import Tuple, Literal
+from typing import Tuple, Literal, Callable
 
 import pandas as pd
 
@@ -24,10 +24,16 @@ class BinaryCpGSignatureHandler(AbstractOmicsSignatureHandler):
     and we disregard any positions that are not clearly defined as either state.
     """
 
-    VALID_DISTANCE_NAMES = super().VALID_DISTANCE_NAMES.union({"jaccard"})
+    VALID_DISTANCES = AbstractOmicsSignatureHandler.VALID_DISTANCES.union({"jaccard"})
 
-    @classmethod
-    def extract_signature(cls, read_data: pd.Series) -> BinaryCpGSignature:
+    def __init__(
+        self, start_column: str = "start", methylation_pattern_column: str = "pattern"
+    ):
+        super().__init__()
+        self.start_column = start_column
+        self.methylation_pattern_column = methylation_pattern_column
+
+    def extract_signature(self, read_data: pd.Series) -> BinaryCpGSignature:
         """
         Extract a binary CpG signature from the given read data.
 
@@ -36,26 +42,26 @@ class BinaryCpGSignatureHandler(AbstractOmicsSignatureHandler):
         The pattern string consists of characters where '0' represents unmethylated,
         '1' represents methylated, and any other character is ignored.
         """
-        start = read_data["start"]
-        pattern = read_data["pattern"]
+        start = read_data[self.start_column]
+        pattern = read_data[self.methylation_pattern_column]
         return tuple(
             (start + i, int(val)) for i, val in enumerate(pattern) if val in ("0", "1")
         )
 
-    @classmethod
-    def compute_distance_dispatcher(cls, signature1, signature2, distance_name: str):
+    def compute_distance_dispatcher(
+        self, distance_name: str
+    ) -> Callable[[BinaryCpGSignature, BinaryCpGSignature], float]:
         match distance_name:
             case "jaccard":
-                return cls.compute_jaccard_distance(signature1, signature2)
+                return self.compute_jaccard_distance
             case _:
                 raise ValueError(
                     f"Unsupported distance metric: {distance_name}"
-                    f"Supported metrics: {cls.VALID_DISTANCE_NAMES}"
+                    f"Supported metrics: {self.VALID_DISTANCES}"
                 )
 
-    @classmethod
     def compute_jaccard_distance(
-        cls, sig1: BinaryCpGSignature, sig2: BinaryCpGSignature
+        self, sig1: BinaryCpGSignature, sig2: BinaryCpGSignature
     ) -> float:
         """
         Compute the Jaccard distance between two binary CpG signatures.
