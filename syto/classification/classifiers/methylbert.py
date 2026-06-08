@@ -122,6 +122,23 @@ def __generate_valid_tokens(read_data, k=3):
         yield [kmer, methylation_code]
 
 
+def extract_signal_mask(dataset):
+    """
+    Extract boolean signal mask aligned with dataset indices.
+    Reads the on_target_mask field that was set during data prep.
+    """
+    n = len(dataset)
+    mask = np.zeros(n, dtype=bool)
+    for i in range(n):
+        if dataset.lazy_tokenization:
+            # Parse from raw line to avoid tokenizing everything
+            fields = dataset.raw_lines[i]
+            col_idx = dataset.headers.index("on_target_mask")
+            mask[i] = bool(fields[col_idx])
+        else:
+            mask[i] = bool(dataset.lines[i].get("on_target_mask", False))
+    return mask
+
 def prepare_methylbert_list(
     results_df,
     gr_label_column,
@@ -146,6 +163,7 @@ def prepare_methylbert_list(
             "original_label",
             "read_name",
             "ncpgs_marked",
+            "on_target_mask"
         ]
     ]
 
@@ -184,6 +202,7 @@ def prepare_methylbert_list(
                     o_label,
                     read_name,
                     ncpgs_marked,
+                    o_label == gr_ctype
                 ]
             )
 
@@ -1219,102 +1238,66 @@ def _line2tokens_pretrain(l, tokenizer, max_len=120):
     else:
         return tokened + [[tokenizer.pad_index] for k in range(max_len - len(tokened))]
 
-
-def _line2tokens_finetune(l, tokenizer, max_len=150, headers=None):
-    # Check the header
-    if not all(
-        [
-            h in headers
-            for h in ["dna_seq", "methyl_seq", "ctype", "gr_ctype", "gr_label"]
-        ]
-    ):
+def _line2tokens_finetune(l, tokenizer, max_len=150, headers=None, soft_labels=False):
+    """
+    Parses a line into tokens and labels.
+    If soft_labels=True, parses 'ctype' as a comma-separated float vector or list.
+    Otherwise, parses 'ctype' as an integer.
+    """
+    # 1. Check the header
+    required_headers = {"dna_seq", "methyl_seq", "ctype", "gr_ctype", "gr_label"}
+    if not required_headers.issubset(headers):
         raise ValueError(
             "The header must contain dna_seq, methyl_seq, ctype, gr_ctype, gr_label"
         )
 
-    max_len = min(
-        max_len, 511
-    )  # Cannot have more then 510 tokens in sequence due to positional embeddings
-
-    # Separate n-mers tokens and labels from each line
-    l = l.strip().split("\t")
-    if len(headers) == len(l):
-        l = {k: v for k, v in zip(headers, l)}
-    else:
-        print(headers, l)
-        raise ValueError(
-            f"Only {len(headers)} elements are in the input file header, whereas the line has {len(l)} elements."
-        )
-
-    l["dna_seq"] = l["dna_seq"].split(" ")
-    l["dna_seq"] = [[f] for f in tokenizer.to_seq(l["dna_seq"])]
-    l["methyl_seq"] = [int(m) for m in l["methyl_seq"]]
-
-    l["ctype_label"] = int(l["ctype"])
-    l["gr_label"] = int(l["gr_label"])
-
-    if len(l["dna_seq"]) > max_len:
-        l["dna_seq"] = l["dna_seq"][:max_len]
-        l["methyl_seq"] = l["methyl_seq"][:max_len]
-    else:
-        cur_seq_len = len(l["dna_seq"])
-        l["dna_seq"] = l["dna_seq"] + [
-            [tokenizer.pad_index] for k in range(max_len - cur_seq_len)
-        ]
-        l["methyl_seq"] = l["methyl_seq"] + [2 for k in range(max_len - cur_seq_len)]
-
-    return l
-
-
-def _line2tokens_finetune_soft(l, tokenizer, max_len=150, headers=None):
-    """
-    Like _line2tokens_finetune but parses soft labels.
-    The 'ctype' column should contain comma-separated floats, e.g. "0.1,0.0,0.9".
-    """
-    if not all(
-        [
-            h in headers
-            for h in ["dna_seq", "methyl_seq", "ctype", "gr_ctype", "gr_label"]
-        ]
-    ):
-        raise ValueError(
-            "The header must contain dna_seq, methyl_seq, ctype, gr_ctype, gr_label"
-        )
-
+    # Cannot have more than 510 tokens in sequence due to positional embeddings
     max_len = min(max_len, 511)
+    
+    # 2. Separate n-mers tokens and labels from each line
+    if isinstance(l, str):
+        l = l.strip().split("\t")
+        
+    if isinstance(l, (list, tuple)):
+        if len(headers) == len(l):
+            l = {k: v for k, v in zip(headers, l)}
+        else:
+            print(headers, l)
+            raise ValueError(
+                f"Only {len(headers)} elements are in the input file header, whereas the line has {len(l)} elements."
+            )
 
-    l = l.strip().split("\t")
-    if len(headers) == len(l):
-        l = {k: v for k, v in zip(headers, l)}
-    else:
-        print(headers, l)
-        raise ValueError(
-            f"Only {len(headers)} elements are in the input file header, whereas the line has {len(l)} elements."
-        )
-
-    l["dna_seq"] = l["dna_seq"].split(" ")
-    l["dna_seq"] = [[f] for f in tokenizer.to_seq(l["dna_seq"])]
+    if isinstance(l["dna_seq"], str):
+        l["dna_seq"] = l["dna_seq"].split(" ")
+        
     l["methyl_seq"] = [int(m) for m in l["methyl_seq"]]
 
-    # Parse soft labels: comma-separated float vector, or array/list directly
-    if isinstance(l["ctype"], str):
-        l["ctype_label"] = [float(x) for x in l["ctype"].split(",")]
+    # 3. Tokenize sequences
+    l["dna_seq"] = [[f] for f in tokenizer.to_seq(l["dna_seq"])]
+    
+    # 4. Parse Labels (The Harmonized Logic)
+    if soft_labels:
+        if isinstance(l["ctype"], str):
+            l["ctype_label"] = [float(x) for x in l["ctype"].split(",")]
+        else:
+            # Already a list or numpy array (e.g. from in-memory data)
+            l["ctype_label"] = list(l["ctype"])
     else:
-        # Already a list or numpy array (e.g. from in-memory data)
-        l["ctype_label"] = list(l["ctype"])
+        l["ctype_label"] = int(l["ctype"])
+
     l["gr_label"] = int(l["gr_label"])
 
+    # 5. Truncate or Pad Sequences
     if len(l["dna_seq"]) > max_len:
         l["dna_seq"] = l["dna_seq"][:max_len]
         l["methyl_seq"] = l["methyl_seq"][:max_len]
     else:
-        cur_seq_len = len(l["dna_seq"])
-        l["dna_seq"] = l["dna_seq"] + [
-            [tokenizer.pad_index] for k in range(max_len - cur_seq_len)
-        ]
-        l["methyl_seq"] = l["methyl_seq"] + [2 for k in range(max_len - cur_seq_len)]
+        pad_len = max_len - len(l["dna_seq"])
+        l["dna_seq"].extend([[tokenizer.pad_index]] * pad_len)
+        l["methyl_seq"].extend([2] * pad_len)
 
     return l
+
 
 
 class MethylBertDataset(Dataset):
@@ -1552,9 +1535,7 @@ class MethylBertFinetuneDataset(MethylBertDataset):
         self.soft_labels = soft_labels
 
         # Select the appropriate tokenizer function
-        self._tokenize_fn = (
-            _line2tokens_finetune_soft if soft_labels else _line2tokens_finetune
-        )
+        self._tokenize_fn = _line2tokens_finetune
 
         # Create cache directory if needed
         if self.cache_dir:
@@ -1567,32 +1548,24 @@ class MethylBertFinetuneDataset(MethylBertDataset):
             self.f_path = data_source
             with open(data_source, "r") as f_input:
                 lines = f_input.read().splitlines()
+            self.headers = lines[0].split("\t")
+            raw_seqs = lines[1:]
         else:
             self.f_path = None
-            header = data_source[0]
-            if "gr_label" not in header:
-                header.append("gr_label")
+            self.headers = data_source[0]
+            if "gr_label" not in self.headers:
+                self.headers.append("gr_label")
                 for row in data_source[1:]:
                     row.append(0)
-            if "gr_ctype" not in header:
-                header.append("gr_ctype")
+            if "gr_ctype" not in self.headers:
+                self.headers.append("gr_ctype")
                 for row in data_source[1:]:
                     row.append(1)
-            if "on_target_mask" not in header:
-                header.append("on_target_mask")
+            if "on_target_mask" not in self.headers:
+                self.headers.append("on_target_mask")
                 for row in data_source[1:]:
                     row.append(0)
-
-            def _serialize_val(v):
-                if isinstance(v, np.ndarray):
-                    return ",".join(str(x) for x in v)
-                return str(v)
-
-            lines = ["\t".join(_serialize_val(x) for x in row) for row in data_source]
-
-        # Parse header and raw sequences
-        self.headers = lines[0].split("\t")
-        raw_seqs = lines[1:]
+            raw_seqs = data_source[1:]
 
         if n_seqs is not None:
             raw_seqs = raw_seqs[:n_seqs]
@@ -1631,6 +1604,7 @@ class MethylBertFinetuneDataset(MethylBertDataset):
                             tokenizer=self.vocab,
                             max_len=self.seq_len,
                             headers=self.headers,
+                            soft_labels=self.soft_labels
                         )
                         for line in raw_seqs
                     ]
@@ -1643,6 +1617,7 @@ class MethylBertFinetuneDataset(MethylBertDataset):
                                 tokenizer=self.vocab,
                                 max_len=self.seq_len,
                                 headers=self.headers,
+                                soft_labels=self.soft_labels
                             ),
                             raw_seqs,
                         )
@@ -1677,7 +1652,7 @@ class MethylBertFinetuneDataset(MethylBertDataset):
         # Tokenize
         line = self.raw_lines[index]
         tokenized = self._tokenize_fn(
-            line, tokenizer=self.vocab, max_len=self.seq_len, headers=self.headers
+            line, tokenizer=self.vocab, max_len=self.seq_len, headers=self.headers, soft_labels=self.soft_labels
         )
 
         # Store in cache
