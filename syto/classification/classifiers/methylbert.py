@@ -357,37 +357,29 @@ class BalancedTrainer(MethylBertTrainer):
 
 def methylbert_finetune_collator(features):
     """
-    Batch features that are already in the correct format (hard labels).
+    Harmonized batching for MethylBERT fine-tuning.
+    Automatically handles both hard and soft labels, as well as an optional on_target_mask.
     """
-    return {
+    batch = {
         "input_ids": torch.stack([f["input_ids"] for f in features]),
         "token_type_ids": torch.stack([f["token_type_ids"] for f in features]),
-        "labels": torch.tensor([f["labels"] for f in features], dtype=torch.long),
         "gr_ids": torch.tensor([f["gr_ids"] for f in features], dtype=torch.long),
     }
 
+    if "on_target_mask" in features[0]:
+        batch["on_target_mask"] = torch.stack([f["on_target_mask"] for f in features])
 
-def methylbert_finetune_soft_collator(features):
-    """
-    Batch features for soft-label fine-tuning.
-    Labels are stacked as float tensors of shape [batch_size, num_classes].
-    """
-    return {
-        "input_ids": torch.stack([f["input_ids"] for f in features]),
-        "token_type_ids": torch.stack([f["token_type_ids"] for f in features]),
-        "labels": torch.stack(
-            [
-                (
-                    f["labels"]
-                    if isinstance(f["labels"], torch.Tensor)
-                    else torch.tensor(f["labels"], dtype=torch.float)
-                )
-                for f in features
-            ]
-        ),
-        "gr_ids": torch.tensor([f["gr_ids"] for f in features], dtype=torch.long),
-        "on_target_mask": torch.stack([f["on_target_mask"] for f in features]),
-    }
+    # Handle labels flexibly based on their type
+    first_label = features[0]["labels"]
+    if isinstance(first_label, torch.Tensor):
+        batch["labels"] = torch.stack([f["labels"] for f in features])
+    elif isinstance(first_label, (list, tuple, np.ndarray, float)):
+        batch["labels"] = torch.stack([torch.tensor(f["labels"], dtype=torch.float) for f in features])
+    else:
+        # Hard labels (ints)
+        batch["labels"] = torch.tensor([f["labels"] for f in features], dtype=torch.long)
+
+    return batch
 
 
 def methylbert_pretrain_collator(features):
@@ -907,10 +899,7 @@ class MethylBert(AbstractReadClassifier):
 
         # fallback to a user-provided or default data_collator
         if data_collator is None:
-            if self.soft_labels:
-                data_collator = methylbert_finetune_soft_collator
-            else:
-                data_collator = methylbert_finetune_collator
+            data_collator = methylbert_finetune_collator
 
         args = self.training_args
         if prediction_mode:
