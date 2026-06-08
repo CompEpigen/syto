@@ -1,11 +1,3 @@
-.vscode/*
-App/mlruns/*
-App/output/*
-output/*
-*.code-workspace
-poetry.toml
-tmp_*
-
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -177,6 +169,7 @@ cython_debug/
 #.idea/
 
 # local data and files
+.vscode/*
 /Data
 /mlruns
 /Experiments
@@ -202,6 +195,12 @@ cython_debug/
 /EDA/*/*.png
 /App/config/rrbs/tmp_configs
 /App/config/*
+App/mlruns/*
+App/output/*
+output/*
+*.code-workspace
+poetry.toml
+tmp_*
 
 # Singularity/Docker artifacts
 *.sif

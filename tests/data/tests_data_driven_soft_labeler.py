@@ -169,20 +169,32 @@ class TestComputeLabelsSignatureExtraction(unittest.TestCase):
         # pattern "01" at start 100 -> ((100, 0), (101, 1))
         for _ in range(20):
             rows.append(
-                {"name": "RegionA", "trimmed_start": 100, "pattern": "01",
-                 "original_label": 0}
+                {
+                    "name": "RegionA",
+                    "trimmed_start": 100,
+                    "pattern": "01",
+                    "original_label": 0,
+                }
             )
         # pattern "00" at start 100 -> ((100, 0), (101, 0))
         for _ in range(15):
             rows.append(
-                {"name": "RegionA", "trimmed_start": 100, "pattern": "00",
-                 "original_label": 1}
+                {
+                    "name": "RegionA",
+                    "trimmed_start": 100,
+                    "pattern": "00",
+                    "original_label": 1,
+                }
             )
         # pattern "0" at start 200 -> ((200, 0),)
         for _ in range(50):
             rows.append(
-                {"name": "RegionA", "trimmed_start": 200, "pattern": "0",
-                 "original_label": 2}
+                {
+                    "name": "RegionA",
+                    "trimmed_start": 200,
+                    "pattern": "0",
+                    "original_label": 2,
+                }
             )
         self.df = pd.DataFrame(rows)
         self.labeler = _make_labeler()
@@ -244,9 +256,7 @@ class TestComputeLabelsValidation(unittest.TestCase):
 
     def test_out_of_range_labels_raises(self):
         """A label outside [0, num_classes-1] triggers an assertion error."""
-        df = pd.DataFrame(
-            {"name": ["R1"], "original_label": [5], "sig": [((100, 0),)]}
-        )
+        df = pd.DataFrame({"name": ["R1"], "original_label": [5], "sig": [((100, 0),)]})
         with self.assertRaises(AssertionError):
             self.labeler.compute_labels(
                 df, num_classes=NUM_CLASSES, precomputed_signature_column="sig"

@@ -78,9 +78,7 @@ class TestComputeJaccardDistance(unittest.TestCase):
         """One differing (position, state) pair gives distance 1 - 1/3."""
         sig1 = ((100, 0), (101, 1))
         sig2 = ((100, 0), (101, 0))  # share (100,0); union has 3 elements
-        self.assertAlmostEqual(
-            self.handler.compute_jaccard_distance(sig1, sig2), 2 / 3
-        )
+        self.assertAlmostEqual(self.handler.compute_jaccard_distance(sig1, sig2), 2 / 3)
 
     def test_subset_signature(self):
         """A signature that is a subset of another gives distance 1 - 1/2."""

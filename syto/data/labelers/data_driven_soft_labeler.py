@@ -81,9 +81,9 @@ class DataDrivenSoftLabeler(AbstractLabeler):
                 self.signature_handler.extract_signature, axis=1
             )
         else:
-            assert precomputed_signature_column in reads_df.columns, (
-                f"Column '{precomputed_signature_column}' not found in the input DataFrame."
-            )
+            assert (
+                precomputed_signature_column in reads_df.columns
+            ), f"Column '{precomputed_signature_column}' not found in the input DataFrame."
             reads_df["signature"] = reads_df[precomputed_signature_column]
 
         ## Aggregate the counts of classes by signatures
