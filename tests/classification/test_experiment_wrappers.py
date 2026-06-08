@@ -1089,9 +1089,9 @@ class TestMethylBertMlFlowExperiment(ExperimentTestBase):
         run = self.verify_experiment_was_logged(experiment)[0]
 
         params = run.data.params
-        self.assertIn("num_dmr_labels", params)
+        self.assertIn("num_gr_labels", params)
         self.assertEqual(
-            params["num_dmr_labels"], "1"
+            params["num_gr_labels"], "1"
         )  # By default if data doesn't posses dmr indexes, assigns 0 to all
 
 

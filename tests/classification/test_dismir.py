@@ -208,7 +208,7 @@ class TestDismirTraining(DismirTestBase):
 
     @parameterized.expand(
         [
-            ("dmr_attention_based",),
+            ("gr_attention_based",),
             ("vanilla",),
         ]
     )
@@ -221,7 +221,7 @@ class TestDismirTraining(DismirTestBase):
             valid_data_path=self.valid_path,
             device=torch.device("cuda"),
             classifier_type=classifier_type,
-            num_dmr_labels=100,
+            num_gr_labels=100,
             dmr_label_col="dmr_label",
         )
 
@@ -757,7 +757,7 @@ class TestDismirSoftLabels(DismirTestBase):
         df.to_parquet(self.valid_path)
 
     def test_soft_label_criterion_is_cwce(self):
-        """With soft_labels=True and dmr_attention_based, criterion should be CWCE."""
+        """With soft_labels=True and gr_attention_based, criterion should be CWCE."""
         from syto.classification.loss import ConfidenceWeightedCrossEntropy
 
         model = Dismir(
@@ -765,9 +765,9 @@ class TestDismirSoftLabels(DismirTestBase):
             train_data_path=self.train_path,
             test_data_path=self.test_path,
             valid_data_path=self.valid_path,
-            classifier_type="dmr_attention_based",
+            classifier_type="gr_attention_based",
             num_labels=3,
-            num_dmr_labels=5,
+            num_gr_labels=5,
             dmr_label_col="dmr_label",
             soft_labels=True,
             device=torch.device("cpu"),
@@ -803,9 +803,9 @@ class TestDismirSoftLabels(DismirTestBase):
             train_data_path=self.train_path,
             test_data_path=self.test_path,
             valid_data_path=self.valid_path,
-            classifier_type="dmr_attention_based",
+            classifier_type="gr_attention_based",
             num_labels=3,
-            num_dmr_labels=5,
+            num_gr_labels=5,
             dmr_label_col="dmr_label",
             soft_labels=True,
             device=torch.device("cpu"),
