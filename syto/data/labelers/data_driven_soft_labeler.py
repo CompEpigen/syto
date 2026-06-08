@@ -34,6 +34,7 @@ class DataDrivenSoftLabeler(AbstractLabeler):
         max_distance=0.5,
         num_classes=39,
         keep_intermediate_values=True,
+        precomputed_signature_column=None,
     ):
         """
         Compute the data driven soft labels for the given dataframe of reads.
@@ -51,6 +52,9 @@ class DataDrivenSoftLabeler(AbstractLabeler):
             num_classes: total number of classes in the original labels
             keep_intermediate_values: whether to keep intermediate values
                 (raw counts, weighted counts) in the final output
+            precomputed_signature_column: if None, the signatures are computed from the reads
+                using the signature handler. If not None, the column with this name is used as
+                the precomputed signature for each read (and signatures are not recomputed).
 
         Returns:
             DataFrame with original columns plus:
@@ -70,11 +74,17 @@ class DataDrivenSoftLabeler(AbstractLabeler):
         ), f"All 'original_label' values must be between 0 and {num_classes - 1}."
         reads_df = reads_df.copy()
 
-        ## Compute the signatures for each read
-        tqdm.pandas(desc="Extracting signatures")
-        reads_df["signature"] = reads_df.progress_apply(
-            self.signature_handler.extract_signature, axis=1
-        )
+        ## Compute the signatures for each read (or reuse precomputed ones)
+        if precomputed_signature_column is None:
+            tqdm.pandas(desc="Extracting signatures")
+            reads_df["signature"] = reads_df.progress_apply(
+                self.signature_handler.extract_signature, axis=1
+            )
+        else:
+            assert precomputed_signature_column in reads_df.columns, (
+                f"Column '{precomputed_signature_column}' not found in the input DataFrame."
+            )
+            reads_df["signature"] = reads_df[precomputed_signature_column]
 
         ## Aggregate the counts of classes by signatures
         class_counts = (
