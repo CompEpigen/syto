@@ -1781,9 +1781,9 @@ class MethylBertMLflowExperiment(TransformersMLFLowExperiment):
 
                 dmrs = pd.DataFrame(enumerate(all_dmrs))
                 dmrs.columns = ["dmr_id", "dmr_name"]
-                num_dmr_labels = len(dmrs)
+                num_gr_labels = len(dmrs)
 
-                mlflow.log_param("num_dmr_labels", num_dmr_labels)
+                mlflow.log_param("num_gr_labels", num_gr_labels)
 
                 # Prepare datasets
                 print(f"Preparing datasets for dataset {dataset_name}")
@@ -1842,7 +1842,7 @@ class MethylBertMLflowExperiment(TransformersMLFLowExperiment):
                     foundation_model_path=self.foundation_model_huggingface,
                     load_weights=True,
                     num_labels=2,
-                    num_dmr_labels=num_dmr_labels,
+                    num_gr_labels=num_gr_labels,
                     seq_len=self.max_sequence_length,
                     output_dir=output_dir,
                     batch_size=batch_size,
@@ -1913,7 +1913,7 @@ class MethylBertMLflowExperiment(TransformersMLFLowExperiment):
                     foundation_model_path=self.foundation_model_huggingface,
                     load_weights=True,
                     num_labels=2,
-                    num_dmr_labels=num_dmr_labels,
+                    num_gr_labels=num_gr_labels,
                     seq_len=self.max_sequence_length,
                     output_dir=output_dir,
                     batch_size=batch_size,
@@ -1963,7 +1963,7 @@ class MethylBertMLflowExperiment(TransformersMLFLowExperiment):
                     "model_params": {
                         "max_sequence_length": self.max_sequence_length,
                         "foundation_model": self.foundation_model_huggingface,
-                        "num_dmr_labels": num_dmr_labels,
+                        "num_gr_labels": num_gr_labels,
                         "epochs": epochs,
                         "batch_size": batch_size,
                         "learning_rate": lr,
