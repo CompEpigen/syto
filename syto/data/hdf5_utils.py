@@ -44,7 +44,7 @@ class HDF5Schema:
     INPUTS_TEST = f"{INPUTS}/test"
 
     # Metadata attributes
-    ATTR_GR_ID_COLUMN = "gr_id_column"
+    ATTR_GR_ID_COLUMN = "grg_id_column"
     ATTR_LABELING_SCHEME = "labeling_scheme"
     ATTR_CLASSIFIER = "classifier"
     ATTR_DATA_WATERMARK = "data_watermark"
@@ -143,7 +143,7 @@ class PureProfileResult:
 class GenerationMetadata:
     """Metadata about the generation process."""
 
-    gr_id_column: str
+    grg_id_column: str
     labeling_scheme: str
     classifier: str
     data_watermark: str
@@ -152,7 +152,7 @@ class GenerationMetadata:
     def to_dict(self) -> Dict[str, Any]:
         """Convert metadata to a dictionary for serialization."""
         return {
-            "gr_id_column": self.gr_id_column,
+            "grg_id_column": self.grg_id_column,
             "labeling_scheme": self.labeling_scheme,
             "classifier": self.classifier,
             "data_watermark": self.data_watermark,
@@ -687,7 +687,7 @@ class HDF5ConsolidationWriter:
 
         # Metadata subgroup
         meta_grp = inputs_grp.create_group("metadata")
-        meta_grp.attrs[HDF5Schema.ATTR_GR_ID_COLUMN] = metadata.gr_id_column
+        meta_grp.attrs[HDF5Schema.ATTR_GR_ID_COLUMN] = metadata.grg_id_column
         meta_grp.attrs[HDF5Schema.ATTR_LABELING_SCHEME] = metadata.labeling_scheme
         meta_grp.attrs[HDF5Schema.ATTR_CLASSIFIER] = metadata.classifier
         meta_grp.attrs[HDF5Schema.ATTR_DATA_WATERMARK] = metadata.data_watermark

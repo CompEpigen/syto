@@ -858,13 +858,13 @@ class TestComputeUniformPriorMatrix(unittest.TestCase):
 class TestFillInMissingGrGroups(unittest.TestCase):
     """Tests for fill_in_missing_gr_groups function."""
 
-    def _create_aggregated_df(self, present_gr_ids: list, n_classes: int = 2):
+    def _create_aggregated_df(self, present_grg_ids: list, n_classes: int = 2):
         """Create a sample aggregated DataFrame with specified GR IDs."""
         rows = []
-        for gr_id in present_gr_ids:
+        for grg_id in present_grg_ids:
             row = {
-                "dmr_ctype_label": gr_id,
-                "dmr_ctype": f"ctype_{gr_id}",
+                "dmr_ctype_label": grg_id,
+                "dmr_ctype": f"ctype_{grg_id}",
                 "n_reads": 100,
                 "total_weight": 500,
                 "label": 0,
@@ -875,28 +875,28 @@ class TestFillInMissingGrGroups(unittest.TestCase):
             rows.append(row)
         return pd.DataFrame(rows)
 
-    def test_no_missing_gr_ids_returns_unchanged(self):
+    def test_no_missing_grg_ids_returns_unchanged(self):
         """Test that if all GR IDs are present, the DataFrame is unchanged."""
-        df = self._create_aggregated_df(present_gr_ids=[0, 1, 2])
-        expected_gr_ids = [0, 1, 2]
+        df = self._create_aggregated_df(present_grg_ids=[0, 1, 2])
+        expected_grg_ids = [0, 1, 2]
 
         result = fill_in_missing_gr_groups(
             df=df,
-            expected_gr_ids=expected_gr_ids,
+            expected_grg_ids=expected_grg_ids,
             n_classes=2,
         )
 
         self.assertEqual(len(result), 3)
         self.assertEqual(set(result["dmr_ctype_label"]), {0, 1, 2})
 
-    def test_fills_missing_gr_ids(self):
+    def test_fills_missing_grg_ids(self):
         """Test that missing GR IDs are filled in."""
-        df = self._create_aggregated_df(present_gr_ids=[0, 2])  # Missing 1
-        expected_gr_ids = [0, 1, 2]
+        df = self._create_aggregated_df(present_grg_ids=[0, 2])  # Missing 1
+        expected_grg_ids = [0, 1, 2]
 
         result = fill_in_missing_gr_groups(
             df=df,
-            expected_gr_ids=expected_gr_ids,
+            expected_grg_ids=expected_grg_ids,
             n_classes=2,
         )
 
@@ -908,33 +908,33 @@ class TestFillInMissingGrGroups(unittest.TestCase):
 
     def test_uniform_number_substitution(self):
         """Test that uniform_number substitution fills predictions with 1/n_classes."""
-        df = self._create_aggregated_df(present_gr_ids=[0])  # Missing 1, 2
-        expected_gr_ids = [0, 1, 2]
+        df = self._create_aggregated_df(present_grg_ids=[0])  # Missing 1, 2
+        expected_grg_ids = [0, 1, 2]
         n_classes = 3
 
         result = fill_in_missing_gr_groups(
             df=df,
-            expected_gr_ids=expected_gr_ids,
+            expected_grg_ids=expected_grg_ids,
             n_classes=n_classes,
             substitution_strategy="uniform_number",
         )
 
         # Check synthetic rows have uniform predictions
-        for gr_id in [1, 2]:
-            row = result[result["dmr_ctype_label"] == gr_id].iloc[0]
+        for grg_id in [1, 2]:
+            row = result[result["dmr_ctype_label"] == grg_id].iloc[0]
             for i in range(n_classes):
                 col = f"prediction_{i}_wavg"
                 if col in result.columns:
                     self.assertAlmostEqual(row[col], 1.0 / n_classes)
 
-    def test_sorts_by_gr_label(self):
+    def test_sorts_by_grg_label(self):
         """Test that output is sorted by GR label."""
-        df = self._create_aggregated_df(present_gr_ids=[2, 0])  # Out of order
-        expected_gr_ids = [0, 1, 2]
+        df = self._create_aggregated_df(present_grg_ids=[2, 0])  # Out of order
+        expected_grg_ids = [0, 1, 2]
 
         result = fill_in_missing_gr_groups(
             df=df,
-            expected_gr_ids=expected_gr_ids,
+            expected_grg_ids=expected_grg_ids,
             n_classes=2,
         )
 
@@ -943,12 +943,12 @@ class TestFillInMissingGrGroups(unittest.TestCase):
 
     def test_synthetic_row_has_label_minus_one(self):
         """Test that synthetic rows have label = -1."""
-        df = self._create_aggregated_df(present_gr_ids=[0])
-        expected_gr_ids = [0, 1]
+        df = self._create_aggregated_df(present_grg_ids=[0])
+        expected_grg_ids = [0, 1]
 
         result = fill_in_missing_gr_groups(
             df=df,
-            expected_gr_ids=expected_gr_ids,
+            expected_grg_ids=expected_grg_ids,
             n_classes=2,
         )
 
@@ -957,12 +957,12 @@ class TestFillInMissingGrGroups(unittest.TestCase):
 
     def test_invalid_strategy_raises(self):
         """Test that invalid substitution strategy raises ValueError."""
-        df = self._create_aggregated_df(present_gr_ids=[0, 1, 2])
+        df = self._create_aggregated_df(present_grg_ids=[0, 1, 2])
 
         with self.assertRaises(ValueError) as context:
             fill_in_missing_gr_groups(
                 df=df,
-                expected_gr_ids=[0, 1, 2],
+                expected_grg_ids=[0, 1, 2],
                 substitution_strategy="invalid_strategy",
             )
 

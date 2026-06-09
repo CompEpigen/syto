@@ -52,7 +52,7 @@ requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.coverage.run]
-source_pkgs = ["methyldl"]
+source_pkgs = ["syto"]
 omit = [
     "*/tests/*",
     "*/test_*",

@@ -481,7 +481,7 @@ class PseudobulkGenerator:
         pure_results: List[PseudobulkResult] = []
 
         # Get expected GR group IDs from parameters (values of the dict)
-        expected_gr_ids = sorted(self.parameters.gr_groups_mapping.values())
+        expected_grg_ids = sorted(self.parameters.gr_groups_mapping.values())
 
         for class_idx in range(n_classes):
             # Create one-hot proportions (100% of reads from this cell type)
@@ -504,8 +504,8 @@ class PseudobulkGenerator:
             # Fill in missing GR groups using the substitution method
             filled_features = fill_in_missing_gr_groups(
                 df=result.aggregated_features,
-                expected_gr_ids=expected_gr_ids,
-                gr_label_column=self.grg_label_column,
+                expected_grg_ids=expected_grg_ids,
+                grg_label_column=self.grg_label_column,
                 n_classes=n_classes,
                 substitution_strategy=self.parameters.substitution_method,
                 uniform_prior=None,  # Will be computed after first pass if needed

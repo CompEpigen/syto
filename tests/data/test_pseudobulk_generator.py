@@ -269,7 +269,7 @@ class TestPseudobulkGeneratorColumnArguments(unittest.TestCase):
         """Create a PseudobulkGenerator instance for testing."""
 
         metadata = GenerationMetadata(
-            gr_id_column="name",
+            grg_id_column="name",
             labeling_scheme="test",
             classifier="test",
             data_watermark="test",
@@ -544,7 +544,7 @@ class TestPureProfileGeneration(unittest.TestCase):
 
         cell_types = {f"class_{i}": i for i in range(n_classes)}
         metadata = GenerationMetadata(
-            gr_id_column="name",
+            grg_id_column="name",
             labeling_scheme="test",
             classifier="test",
             data_watermark="test",
@@ -635,7 +635,7 @@ class TestGenerateSingleSplit(unittest.TestCase):
         splits_df = {"train": df}
 
         metadata = GenerationMetadata(
-            gr_id_column="name",
+            grg_id_column="name",
             labeling_scheme="test",
             classifier="test",
             data_watermark="test",
@@ -694,7 +694,7 @@ class TestGenerateSingleSplit(unittest.TestCase):
         splits_df = {"train": df}
 
         metadata = GenerationMetadata(
-            gr_id_column="name",
+            grg_id_column="name",
             labeling_scheme="test",
             classifier="test",
             data_watermark="test",

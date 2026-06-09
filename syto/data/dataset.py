@@ -43,7 +43,7 @@ class SupervisedDataset(Dataset):
         first_n_samples: int = None,
         data_interface: str = "csv",
         lazy_tokenization=False,
-        include_gr_ids=False,
+        include_grg_ids=False,
         dmr_label_column=None,
         soft_labels=False,
     ):
@@ -60,7 +60,7 @@ class SupervisedDataset(Dataset):
         self.cpg_methylation = None
         self.m6a_methylation = None
         self.lazy_tokenization = lazy_tokenization
-        self.include_gr_ids = include_gr_ids
+        self.include_grg_ids = include_grg_ids
         self.soft_labels = soft_labels
         self.dmr_label_column = dmr_label_column
 
@@ -150,12 +150,12 @@ class SupervisedDataset(Dataset):
                 data[meth_col],
                 data[label_col],
             )
-            if self.include_gr_ids:
+            if self.include_grg_ids:
                 if self.dmr_label_column is None:
                     raise ValueError(
-                        "dmr_label_column must not be none if include_gr_ids is set to True"
+                        "dmr_label_column must not be none if include_grg_ids is set to True"
                     )
-                self.gr_ids = data[self.dmr_label_column]
+                self.grg_ids = data[self.dmr_label_column]
             self.labels = labels.to_list()
             self.cpg_methylation = methylation.to_list()
             texts = dna.to_list()
@@ -245,8 +245,8 @@ class SupervisedDataset(Dataset):
                 item["m6a_methylation"] = self.m6a_methylation[i]
         if self.labels is not None:
             item["labels"] = torch.tensor(self.labels[i])
-        if self.include_gr_ids:
-            item["gr_ids"] = torch.tensor(self.gr_ids[i])
+        if self.include_grg_ids:
+            item["grg_ids"] = torch.tensor(self.grg_ids[i])
         return item
 
 
@@ -283,8 +283,8 @@ class DataCollatorForSupervisedDataset:
                 batch["labels"] = torch.stack(batch["labels"]).float()
             else:
                 batch["labels"] = torch.stack(batch["labels"]).long()
-        if "gr_ids" in batch:
-            batch["gr_ids"] = torch.tensor(batch["gr_ids"], dtype=torch.long)
+        if "grg_ids" in batch:
+            batch["grg_ids"] = torch.tensor(batch["grg_ids"], dtype=torch.long)
 
         return batch
 

@@ -270,7 +270,7 @@ class PseudoBulkPipelineV2:
             }
 
         return GenerationMetadata(
-            gr_id_column=self.grg_label_column,
+            grg_id_column=self.grg_label_column,
             labeling_scheme=self.config["labeling_scheme"],
             classifier=self.config["classifier_type"],
             data_watermark=data_watermark,

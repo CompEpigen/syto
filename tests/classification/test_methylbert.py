@@ -6,6 +6,7 @@ from parameterized import parameterized
 
 from transformers import BertConfig, TrainingArguments
 import torch
+import pandas as pd
 
 import syto.classification.classifiers.methylbert as methylbert_module
 from syto.classification.classifiers.methylbert import (
@@ -13,16 +14,16 @@ from syto.classification.classifiers.methylbert import (
     MethylVocab,
     MethylBertFinetuneDataset,
     MethylBertPretrainDataset,
-    MethylBertEmbeddedGR,
+    MethylBertEmbeddedGRG,
     VanillaClassifier,
     methylbert_finetune_collator,
     methylbert_pretrain_collator,
     default_methylbert_config,
     _line2tokens_finetune,
     _line2tokens_pretrain,
-    chunk_tokens,
-    generate_valid_tokens,
-    prepare_methylbert_list_inference,
+    prepare_methylbert_list,
+    _chunk_tokens,
+    _generate_valid_tokens,
 )
 
 
@@ -33,7 +34,7 @@ class TestChunkTokens(unittest.TestCase):
         """Returns the input as a single chunk when the read is shorter than the window."""
         tokens = ["a", "b", "c"]
 
-        chunks = list(chunk_tokens(tokens, window_size=5, stride=2))
+        chunks = list(_chunk_tokens(tokens, window_size=5, stride=2))
 
         self.assertEqual(chunks, [tokens])
 
@@ -41,7 +42,7 @@ class TestChunkTokens(unittest.TestCase):
         """Returns one chunk when the read length matches the window size exactly."""
         tokens = ["a", "b", "c", "d"]
 
-        chunks = list(chunk_tokens(tokens, window_size=4, stride=2))
+        chunks = list(_chunk_tokens(tokens, window_size=4, stride=2))
 
         self.assertEqual(chunks, [tokens])
 
@@ -51,7 +52,7 @@ class TestChunkTokens(unittest.TestCase):
         """Avoids duplicating the final window when the sliding loop already lands on the tail."""
         tokens = list(range(9))
 
-        chunks = list(chunk_tokens(tokens, window_size=5, stride=2))
+        chunks = list(_chunk_tokens(tokens, window_size=5, stride=2))
 
         self.assertEqual(chunks, [tokens[0:5], tokens[2:7], tokens[4:9]])
 
@@ -59,7 +60,7 @@ class TestChunkTokens(unittest.TestCase):
         """Emits the final tail window when the last valid start is missed by the stride."""
         tokens = list(range(8))
 
-        chunks = list(chunk_tokens(tokens, window_size=5, stride=2))
+        chunks = list(_chunk_tokens(tokens, window_size=5, stride=2))
 
         # This is the regression case: the last possible window starts at index 3,
         # but the stride visits only starts 0 and 2, so an explicit tail chunk is required.
@@ -76,7 +77,7 @@ class TestGenerateValidTokens(unittest.TestCase):
             "methylation_ids": "012210",
         }
 
-        tokens = list(generate_valid_tokens(read_data, k=3))
+        tokens = list(_generate_valid_tokens(read_data, k=3))
 
         self.assertEqual(tokens, [["CGA", "1"]])
 
@@ -87,7 +88,7 @@ class TestGenerateValidTokens(unittest.TestCase):
             "methylation_ids": "0123",
         }
 
-        tokens = list(generate_valid_tokens(read_data, k=3))
+        tokens = list(_generate_valid_tokens(read_data, k=3))
 
         self.assertEqual(tokens, [])
 
@@ -98,7 +99,7 @@ class TestGenerateValidTokens(unittest.TestCase):
             "methylation_ids": "0123",
         }
 
-        tokens = list(generate_valid_tokens(read_data, k=2))
+        tokens = list(_generate_valid_tokens(read_data, k=2))
 
         self.assertEqual(tokens, [["AT", "1"], ["TC", "2"], ["CG", "3"]])
 
@@ -114,14 +115,14 @@ class TestPrepareMethylbertListInference(unittest.TestCase):
                     "read_name": "read-empty",
                     "input_ids": "NNNN",
                     "methylation_ids": "0123",
-                    "dmr_ctype_label": "tumor",
-                    "dmr_label": "dmr-a",
+                    "grg_ctype_label": "tumor",
+                    "grg_label": "grg-a",
                 }
             ]
         )
 
-        prepared = prepare_methylbert_list_inference(
-            results_df, dmr_label_column="dmr_label", seq_length=3, stride=1
+        prepared = prepare_methylbert_list(
+            results_df, grg_label_column="grg_label", seq_length=3, stride=1
         )
 
         self.assertEqual(
@@ -130,32 +131,39 @@ class TestPrepareMethylbertListInference(unittest.TestCase):
                 [
                     "dna_seq",
                     "methyl_seq",
-                    "dmr_ctype",
-                    "dmr_label",
+                    "grg_ctype",
+                    "grg_label",
                     "ctype",
                     "original_label",
                     "read_name",
                     "ncpgs_marked",
+                    "on_target_mask",
                 ]
             ],
         )
 
     def test_creates_one_output_row_per_chunk_with_metadata_propagation(self):
-        """Splits valid tokens into chunks and propagates DMR metadata to each output row."""
+        """Splits valid tokens into chunks and propagates GRG metadata to each output row."""
         results_df = pd.DataFrame(
             [
                 {
                     "read_name": "read-1",
                     "input_ids": "ATCGAT",
                     "methylation_ids": "010101",
-                    "dmr_ctype_label": "tumor",
-                    "dmr_label": "dmr-a",
+                    "grg_ctype_label": "tumor",
+                    "grg_label": "grg-a",
+                    "original_label": 775,
+                    "label": 555,
                 }
             ]
         )
 
-        prepared = prepare_methylbert_list_inference(
-            results_df, dmr_label_column="dmr_label", seq_length=2, stride=1
+        prepared = prepare_methylbert_list(
+            results_df,
+            grg_label_column="grg_label",
+            seq_length=2,
+            stride=1,
+            grg_ctype_label="grg_ctype_label",
         )
 
         self.assertEqual(len(prepared), 4)
@@ -164,20 +172,21 @@ class TestPrepareMethylbertListInference(unittest.TestCase):
             [
                 "dna_seq",
                 "methyl_seq",
-                "dmr_ctype",
-                "dmr_label",
+                "grg_ctype",
+                "grg_label",
                 "ctype",
                 "original_label",
                 "read_name",
                 "ncpgs_marked",
+                "on_target_mask",
             ],
         )
         self.assertEqual(
             prepared[1:],
             [
-                ["ATC TCG", "10", "tumor", "dmr-a", 0, 0, "read-1", 2],
-                ["TCG CGA", "01", "tumor", "dmr-a", 0, 0, "read-1", 2],
-                ["CGA GAT", "10", "tumor", "dmr-a", 0, 0, "read-1", 2],
+                ["ATC TCG", "10", "tumor", "grg-a", 555, 775, "read-1", 2, False],
+                ["TCG CGA", "01", "tumor", "grg-a", 555, 775, "read-1", 2, False],
+                ["CGA GAT", "10", "tumor", "grg-a", 555, 775, "read-1", 2, False],
             ],
         )
 
@@ -189,17 +198,23 @@ class TestPrepareMethylbertListInference(unittest.TestCase):
                     "read_name": "read-2",
                     "input_ids": "ATCGA",
                     "methylation_ids": "12010",
-                    "dmr_ctype_label": "normal",
-                    "dmr_label": "dmr-b",
+                    "grg_ctype_label": "normal",
+                    "grg_label": "grg-b",
+                    "original_label": 775,
+                    "label": 555,
                 }
             ]
         )
 
-        prepared = prepare_methylbert_list_inference(
-            results_df, dmr_label_column="dmr_label", seq_length=10, stride=5
+        prepared = prepare_methylbert_list(
+            results_df,
+            grg_label_column="grg_label",
+            seq_length=10,
+            stride=5,
+            grg_ctype_label="grg_ctype_label",
         )
 
-        self.assertEqual(prepared[1][-1], 2)
+        self.assertEqual(prepared[1][-2], 2)
 
 
 class TestMethylVocab(unittest.TestCase):
@@ -299,7 +314,7 @@ class TestMethylVocab(unittest.TestCase):
                 "AAA TTT\t01\t0\t1",
                 tokenizer=vocab,
                 max_len=5,
-                headers=["dna_seq", "methyl_seq", "ctype", "gr_ctype"],
+                headers=["dna_seq", "methyl_seq", "ctype", "grg_ctype"],
             )
 
         with self.assertRaises(ValueError):
@@ -311,8 +326,8 @@ class TestMethylVocab(unittest.TestCase):
                     "dna_seq",
                     "methyl_seq",
                     "ctype",
-                    "gr_ctype",
-                    "gr_label",
+                    "grg_ctype",
+                    "grg_label",
                 ],
             )
 
@@ -329,7 +344,7 @@ class TestMethylBertFinetuneDataset(unittest.TestCase):
         """Test dataset creation from list of lists."""
         # Create example data
         data = [
-            ["dna_seq", "methyl_seq", "ctype", "gr_ctype", "gr_label"],
+            ["dna_seq", "methyl_seq", "ctype", "grg_ctype", "grg_label"],
             ["AAA TTT CCC", "012", "0", "0", "0"],
             ["GGG AAA TTT", "120", "1", "0", "1"],
         ]
@@ -343,7 +358,7 @@ class TestMethylBertFinetuneDataset(unittest.TestCase):
     def test_dataset_getitem(self):
         """Test retrieving items from dataset."""
         data = [
-            ["dna_seq", "methyl_seq", "ctype", "gr_ctype", "gr_label"],
+            ["dna_seq", "methyl_seq", "ctype", "grg_ctype", "grg_label"],
             ["AAA TTT CCC", "012", "0", "1", "0"],
         ]
 
@@ -357,18 +372,18 @@ class TestMethylBertFinetuneDataset(unittest.TestCase):
         self.assertIn("input_ids", item)
         self.assertIn("token_type_ids", item)
         self.assertIn("labels", item)
-        self.assertIn("gr_ids", item)
+        self.assertIn("grg_ids", item)
 
         # Check types
         self.assertIsInstance(item["input_ids"], torch.Tensor)
         self.assertIsInstance(item["token_type_ids"], torch.Tensor)
         self.assertIsInstance(item["labels"], int)
-        self.assertIsInstance(item["gr_ids"], int)
+        self.assertIsInstance(item["grg_ids"], int)
 
-    def test_dataset_adds_missing_gr_label(self):
-        """Test that dataset adds default gr_label if missing."""
+    def test_dataset_adds_missing_grg_label(self):
+        """Test that dataset adds default grg_label if missing."""
         data = [
-            ["dna_seq", "methyl_seq", "ctype", "gr_ctype"],
+            ["dna_seq", "methyl_seq", "ctype", "grg_ctype"],
             ["AAA TTT", "01", "0", "1"],
         ]
 
@@ -377,12 +392,12 @@ class TestMethylBertFinetuneDataset(unittest.TestCase):
         )
 
         item = dataset[0]
-        self.assertEqual(item["gr_ids"], 0)  # Default value
+        self.assertEqual(item["grg_ids"], 0)  # Default value
 
     def test_dataset_special_tokens(self):
         """Test that SOS and EOS tokens are added."""
         data = [
-            ["dna_seq", "methyl_seq", "ctype", "gr_ctype", "gr_label"],
+            ["dna_seq", "methyl_seq", "ctype", "grg_ctype", "grg_label"],
             ["AAA TTT", "01", "1", "0", "0"],
         ]
 
@@ -401,7 +416,7 @@ class TestMethylBertFinetuneDataset(unittest.TestCase):
     def test_dataset_num_grs(self):
         """Test num_grs method."""
         data = [
-            ["dna_seq", "methyl_seq", "ctype", "gr_ctype", "gr_label"],
+            ["dna_seq", "methyl_seq", "ctype", "grg_ctype", "grg_label"],
             ["AAA", "0", "1", "1", "0"],
             ["TTT", "1", "2", "1", "1"],
             ["CCC", "2", "2", "1", "2"],
@@ -417,7 +432,7 @@ class TestMethylBertFinetuneDataset(unittest.TestCase):
     def test_lazy_tokenization_caches_items_and_num_grs(self):
         """Test lazy tokenization cache population and on-demand GR counting."""
         data = [
-            ["dna_seq", "methyl_seq", "ctype", "gr_ctype", "gr_label"],
+            ["dna_seq", "methyl_seq", "ctype", "grg_ctype", "grg_label"],
             ["AAA TTT CCC GGG", "0120", "0", "1", "0"],
             ["GGG CCC AAA TTT", "1201", "1", "1", "2"],
         ]
@@ -440,7 +455,7 @@ class TestMethylBertFinetuneDataset(unittest.TestCase):
     def test_eager_mode_reuses_cache_file(self):
         """Test that eager mode reloads tokenized content from cache."""
         data = [
-            ["dna_seq", "methyl_seq", "ctype", "gr_ctype", "gr_label"],
+            ["dna_seq", "methyl_seq", "ctype", "grg_ctype", "grg_label"],
             ["AAA TTT CCC GGG", "0120", "0", "1", "0"],
             ["GGG CCC AAA TTT", "1201", "1", "1", "2"],
         ]
@@ -482,13 +497,13 @@ class TestMethylBertCollators(unittest.TestCase):
                 "input_ids": torch.randint(0, 10, (150,)),
                 "token_type_ids": torch.randint(0, 3, (150,)),
                 "labels": 0,
-                "gr_ids": 1,
+                "grg_ids": 1,
             },
             {
                 "input_ids": torch.randint(0, 10, (150,)),
                 "token_type_ids": torch.randint(0, 3, (150,)),
                 "labels": 1,
-                "gr_ids": 2,
+                "grg_ids": 2,
             },
         ]
 
@@ -498,13 +513,13 @@ class TestMethylBertCollators(unittest.TestCase):
         self.assertIn("input_ids", batch)
         self.assertIn("token_type_ids", batch)
         self.assertIn("labels", batch)
-        self.assertIn("gr_ids", batch)
+        self.assertIn("grg_ids", batch)
 
         # Check shapes
         self.assertEqual(batch["input_ids"].shape[0], 2)  # Batch size
         self.assertEqual(batch["token_type_ids"].shape[0], 2)
         self.assertEqual(batch["labels"].shape[0], 2)
-        self.assertEqual(batch["gr_ids"].shape[0], 2)
+        self.assertEqual(batch["grg_ids"].shape[0], 2)
 
     def test_pretrain_collator(self):
         """Test pretrain data collator."""
@@ -541,7 +556,7 @@ class TestMethylBert(unittest.TestCase):
         self.seq_len = 150
         self.config = default_methylbert_config.copy()
 
-    def _build_small_hf_config(self, num_labels=2, num_gr_labels=4, loss="bce"):
+    def _build_small_hf_config(self, num_labels=2, num_grg_labels=4, loss="bce"):
         """Build a tiny BERT config so wrapper-level tests stay lightweight."""
         config = BertConfig(
             vocab_size=80,
@@ -553,7 +568,7 @@ class TestMethylBert(unittest.TestCase):
             type_vocab_size=3,
         )
         config.num_labels = num_labels
-        config.num_gr_labels = num_gr_labels
+        config.num_grg_labels = num_grg_labels
         config.loss = loss
         return config
 
@@ -563,7 +578,7 @@ class TestMethylBert(unittest.TestCase):
             "syto.classification.classifiers.methylbert.BertConfig.from_pretrained",
             return_value=self._build_small_hf_config(
                 num_labels=kwargs.get("num_labels", 2),
-                num_gr_labels=kwargs.get("num_gr_labels", 4),
+                num_grg_labels=kwargs.get("num_grg_labels", 4),
                 loss=(kwargs.get("custom_config") or self.config).get("loss", "bce"),
             ),
         ), patch(
@@ -576,7 +591,7 @@ class TestMethylBert(unittest.TestCase):
                 custom_config=kwargs.pop("custom_config", self.config.copy()),
                 load_weights=kwargs.pop("load_weights", False),
                 num_labels=kwargs.pop("num_labels", 2),
-                num_gr_labels=kwargs.pop("num_gr_labels", 4),
+                num_grg_labels=kwargs.pop("num_grg_labels", 4),
                 output_dir=kwargs.pop(
                     "output_dir", "../test_container_tmp/tmp_trainer"
                 ),
@@ -584,7 +599,7 @@ class TestMethylBert(unittest.TestCase):
             )
 
     def _create_model(
-        self, num_labels=2, num_gr_labels=10, load_weights=False, custom_config=None
+        self, num_labels=2, num_grg_labels=10, load_weights=False, custom_config=None
     ):
         """Helper to create a MethylBert model."""
         return MethylBert(
@@ -593,7 +608,7 @@ class TestMethylBert(unittest.TestCase):
             custom_config=self.config if custom_config is None else custom_config,
             load_weights=load_weights,
             num_labels=num_labels,
-            num_gr_labels=num_gr_labels,
+            num_grg_labels=num_grg_labels,
             output_dir="../test_container_tmp/tmp_trainer",
         )
 
@@ -624,7 +639,7 @@ class TestMethylBert(unittest.TestCase):
             custom_config=custom_config,
             load_weights=False,
             num_labels=2,
-            num_gr_labels=10,
+            num_grg_labels=10,
             output_dir="../test_container_tmp/tmp_trainer",
         )
 
@@ -636,7 +651,7 @@ class TestMethylBert(unittest.TestCase):
             ("multiclass", 5, 20),
         ]
     )
-    def test_model_predict(self, name, num_labels, num_gr_labels):
+    def test_model_predict(self, name, num_labels, num_grg_labels):
         """Test model prediction with different configurations."""
         custom_config = self.config
         if num_labels > 2:
@@ -645,7 +660,7 @@ class TestMethylBert(unittest.TestCase):
             custom_config["loss"] = "bce"
         model = self._create_model(
             num_labels=num_labels,
-            num_gr_labels=num_gr_labels,
+            num_grg_labels=num_grg_labels,
             load_weights=False,
             custom_config=custom_config,
         )
@@ -653,7 +668,7 @@ class TestMethylBert(unittest.TestCase):
         # Create dummy dataset
         vocab = MethylVocab(k=3)
         data = [
-            ["dna_seq", "methyl_seq", "ctype", "gr_ctype", "gr_label"],
+            ["dna_seq", "methyl_seq", "ctype", "grg_ctype", "grg_label"],
             ["AAA TTT CCC GGG", "0120", 0, 0, 1],
             ["GGG CCC AAA TTT", "1201", 1, 1, 2],
         ]
@@ -674,9 +689,9 @@ class TestMethylBert(unittest.TestCase):
         config = self._build_small_hf_config(num_labels=3)
         classifier = VanillaClassifier(config, seq_len=5)
         sequence_output = torch.randn(2, 6, 12)
-        gr_ids = torch.tensor([1, 2], dtype=torch.long)
+        grg_ids = torch.tensor([1, 2], dtype=torch.long)
 
-        logits, sequence_output_with_gr = classifier(sequence_output, gr_ids)
+        logits, sequence_output_with_gr = classifier(sequence_output, grg_ids)
 
         self.assertEqual(logits.shape, (2, 3))
         self.assertEqual(sequence_output_with_gr.shape, (2, 6, 13))
@@ -686,17 +701,17 @@ class TestMethylBert(unittest.TestCase):
         config = self._build_small_hf_config(loss="not_a_loss")
 
         with self.assertRaises(ValueError):
-            MethylBertEmbeddedGR(config, seq_len=5)
+            MethylBertEmbeddedGRG(config, seq_len=5)
 
     def test_embedded_model_forward_attention_classifier_returns_attention_weights(
         self,
     ):
         """Test the attention-based classifier forward path on a tiny configuration."""
         config = self._build_small_hf_config(num_labels=3, loss="ce")
-        model = MethylBertEmbeddedGR(
+        model = MethylBertEmbeddedGRG(
             config,
             seq_len=5,
-            classifier_implementation="gr_attention_based",
+            classifier_implementation="grg_attention_based",
         )
         input_ids = torch.randint(5, 20, (2, 6))
         token_type_ids = torch.randint(0, 3, (2, 6))
@@ -709,7 +724,7 @@ class TestMethylBert(unittest.TestCase):
             attention_mask=attention_mask,
             token_type_ids=token_type_ids,
             labels=torch.tensor([1, 2], dtype=torch.long),
-            gr_ids=torch.tensor([1, 2], dtype=torch.long),
+            grg_ids=torch.tensor([1, 2], dtype=torch.long),
         )
 
         self.assertIsNotNone(output.loss)
@@ -735,7 +750,7 @@ class TestMethylBert(unittest.TestCase):
             "syto.classification.classifiers.methylbert.BertConfig.from_pretrained",
             return_value=self._build_small_hf_config(),
         ), patch(
-            "syto.classification.classifiers.methylbert.MethylBertEmbeddedGR.from_pretrained",
+            "syto.classification.classifiers.methylbert.MethylBertEmbeddedGRG.from_pretrained",
             return_value=mocked_model,
         ) as mocked_from_pretrained, patch(
             "syto.classification.classifiers.methylbert.AutoTokenizer.from_pretrained",
@@ -748,7 +763,7 @@ class TestMethylBert(unittest.TestCase):
                 load_weights=True,
                 fine_tuned_model_path="/tmp/fine_tuned_model",
                 num_labels=2,
-                num_gr_labels=4,
+                num_grg_labels=4,
             )
 
         self.assertIs(model.model, mocked_model)
@@ -807,7 +822,7 @@ class TestMethylBertFineTune(unittest.TestCase):
             custom_config=self.config,
             load_weights=False,
             num_labels=2,
-            num_gr_labels=10,
+            num_grg_labels=10,
             output_dir="../test_container_tmp/tmp_trainer",
         )
 
@@ -847,7 +862,7 @@ class TestMethylBertFineTune(unittest.TestCase):
             custom_config=self.config,
             load_weights=False,
             num_labels=2,
-            num_gr_labels=10,
+            num_grg_labels=10,
             output_dir="../test_container_tmp/tmp_trainer",
         )
 
@@ -1047,14 +1062,14 @@ class TestMethylBertSoftCollator(unittest.TestCase):
                 "input_ids": torch.randint(0, 10, (150,)),
                 "token_type_ids": torch.randint(0, 3, (150,)),
                 "labels": torch.softmax(torch.randn(num_classes), dim=-1),
-                "gr_ids": 1,
+                "grg_ids": 1,
                 "on_target_mask": torch.tensor(True),
             },
             {
                 "input_ids": torch.randint(0, 10, (150,)),
                 "token_type_ids": torch.randint(0, 3, (150,)),
                 "labels": torch.softmax(torch.randn(num_classes), dim=-1),
-                "gr_ids": 2,
+                "grg_ids": 2,
                 "on_target_mask": torch.tensor(False),
             },
         ]
@@ -1064,15 +1079,15 @@ class TestMethylBertSoftCollator(unittest.TestCase):
         # Check batch structure
         self.assertIn("input_ids", batch)
         self.assertIn("labels", batch)
-        self.assertIn("gr_ids", batch)
+        self.assertIn("grg_ids", batch)
         self.assertIn("on_target_mask", batch)
 
         # Labels should be float tensors of shape [batch_size, num_classes]
         self.assertEqual(batch["labels"].shape, (2, num_classes))
         self.assertEqual(batch["labels"].dtype, torch.float32)
 
-        # gr_ids should be long
-        self.assertEqual(batch["gr_ids"].dtype, torch.long)
+        # grg_ids should be long
+        self.assertEqual(batch["grg_ids"].dtype, torch.long)
 
     def test_soft_finetune_collator_with_list_labels(self):
         """Test that collator handles list labels (non-tensor) too."""
@@ -1085,7 +1100,7 @@ class TestMethylBertSoftCollator(unittest.TestCase):
                 "input_ids": torch.randint(0, 10, (150,)),
                 "token_type_ids": torch.randint(0, 3, (150,)),
                 "labels": [0.8, 0.1, 0.1],
-                "gr_ids": 0,
+                "grg_ids": 0,
                 "on_target_mask": torch.tensor(True),
             },
         ]
@@ -1109,7 +1124,7 @@ class TestMethylBertSoftLabelLossSetup(unittest.TestCase):
             type_vocab_size=3,
         )
         config.num_labels = num_labels
-        config.num_gr_labels = 4
+        config.num_grg_labels = 4
         config.loss = loss
         return config
 
@@ -1118,7 +1133,7 @@ class TestMethylBertSoftLabelLossSetup(unittest.TestCase):
         from syto.classification.loss import ConfidenceWeightedCrossEntropy
 
         config = self._build_small_hf_config(num_labels=5, loss="cwce")
-        model = MethylBertEmbeddedGR(config, seq_len=5)
+        model = MethylBertEmbeddedGRG(config, seq_len=5)
         self.assertIsInstance(
             model.classification_loss_fct, ConfidenceWeightedCrossEntropy
         )
@@ -1138,7 +1153,7 @@ class TestMethylBertSoftLabelForward(unittest.TestCase):
             type_vocab_size=3,
         )
         config.num_labels = num_labels
-        config.num_gr_labels = 4
+        config.num_grg_labels = 4
         config.loss = loss
         config.on_target_weight = on_target_weight
         return config
@@ -1146,19 +1161,19 @@ class TestMethylBertSoftLabelForward(unittest.TestCase):
     def test_forward_with_soft_labels_cwce(self):
         """Forward pass with loss='cwce' and 2D float soft labels should compute loss."""
         config = self._build_small_hf_config(num_labels=5, loss="cwce")
-        model = MethylBertEmbeddedGR(config, seq_len=5)
+        model = MethylBertEmbeddedGRG(config, seq_len=5)
 
         input_ids = torch.randint(5, 20, (2, 6))
         token_type_ids = torch.randint(0, 3, (2, 6))
         # Soft labels: [batch_size, num_classes]
         soft_labels = torch.softmax(torch.randn(2, 5), dim=-1)
-        gr_ids = torch.tensor([1, 2], dtype=torch.long)
+        grg_ids = torch.tensor([1, 2], dtype=torch.long)
 
         output = model(
             input_ids=input_ids,
             token_type_ids=token_type_ids,
             labels=soft_labels,
-            gr_ids=gr_ids,
+            grg_ids=grg_ids,
         )
 
         self.assertIsNotNone(output.loss)
@@ -1170,19 +1185,19 @@ class TestMethylBertSoftLabelForward(unittest.TestCase):
         config = self._build_small_hf_config(
             num_labels=5, loss="cwce", on_target_weight=1.0
         )
-        model = MethylBertEmbeddedGR(config, seq_len=5)
+        model = MethylBertEmbeddedGRG(config, seq_len=5)
 
         input_ids = torch.randint(5, 20, (2, 6))
         token_type_ids = torch.randint(0, 3, (2, 6))
         soft_labels = torch.softmax(torch.randn(2, 5), dim=-1)
-        gr_ids = torch.tensor([1, 2], dtype=torch.long)
+        grg_ids = torch.tensor([1, 2], dtype=torch.long)
         on_target_mask = torch.tensor([True, False])
 
         output = model(
             input_ids=input_ids,
             token_type_ids=token_type_ids,
             labels=soft_labels,
-            gr_ids=gr_ids,
+            grg_ids=grg_ids,
             on_target_mask=on_target_mask,
         )
 
