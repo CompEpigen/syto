@@ -1878,7 +1878,6 @@ class MethylBertMLflowExperiment(TransformersMLFLowExperiment):
                     data_path=None,
                     train_dataset=train_dataset,
                     val_dataset=valid_dataset,
-                    test_dataset=None,
                     training_args=model_instance.training_args,
                     callbacks=[early_stopping_callback],
                 )

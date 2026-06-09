@@ -320,7 +320,7 @@ class TestTrainMatrixDeconvolver(unittest.TestCase):
                 lr=1e-2,
                 device="cpu",
                 scheduler_type="none",
-                loss_weights={"mse": 2.0, "kl": 0.0},
+                loss_weights={"mse_weight": 2.0, "kl_weight": 0.0},
                 verbose=0,
             )
 
