@@ -743,7 +743,7 @@ class TestEpigenBERT2MLflowExperiment(ExperimentTestBase):
         self.assertIn("metrics", results)
         _ = self.verify_experiment_was_logged(experiment)
 
-    @patch("syto.classification.experiment_wrappers.SupervisedDataset")
+    @patch("syto.classification.experiment_wrappers.DNABERT2FineTuneDataset")
     @patch("syto.classification.experiment_wrappers.EpigenDnabert2")
     def test_progressive_predict_train_valid_standard_branch(
         self, mock_epigen_class, mock_supervised_dataset

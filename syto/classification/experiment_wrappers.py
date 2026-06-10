@@ -29,7 +29,7 @@ from transformers import (
     TrainerState,
 )
 
-from syto.data.dataset import SupervisedDataset
+from syto.classification.classifiers.dnabert2 import DNABERT2FineTuneDataset
 from syto.data.sequencing.genome import generate_kmer_str_with_overlap
 from syto.data.utils import split_long_reads
 from syto.classification.classifiers.dismir import Dismir
@@ -1012,7 +1012,7 @@ class EpigenBERT2MLflowExperiment(TransformersMLFLowExperiment):
                 use_triton=self.use_triton,
             )
 
-            test_dataset = SupervisedDataset(
+            test_dataset = DNABERT2FineTuneDataset(
                 tokenizer=epigenbert.tokenizer,
                 data_path_or_list=data_df,
                 kmer=-1,
@@ -1069,7 +1069,7 @@ class EpigenBERT2MLflowExperiment(TransformersMLFLowExperiment):
             )
 
             # Create dataset for this subset
-            test_dataset = SupervisedDataset(
+            test_dataset = DNABERT2FineTuneDataset(
                 tokenizer=epigenbert.tokenizer,
                 data_path_or_list=subset_data,
                 kmer=-1,

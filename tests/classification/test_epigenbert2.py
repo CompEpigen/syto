@@ -5,8 +5,12 @@ from types import SimpleNamespace
 import torch
 import syto.classification.classifiers.dnabert2 as dnabert2_module
 
-from syto.data.dataset import SupervisedDataset, generate_example_data
-from syto.classification.classifiers.dnabert2 import EpigenDnabert2, TrainingArguments
+from syto.classification.classifiers.dnabert2 import (
+    EpigenDnabert2,
+    TrainingArguments,
+    DNABERT2FineTuneDataset,
+)
+from syto.data.dataset import generate_example_data
 from unittest.mock import patch, MagicMock
 import tempfile
 from parameterized import parameterized
@@ -73,7 +77,7 @@ class TestEpigenDnabert2Predict(unittest.TestCase):
         )
 
     def create_dataset(self, model, synthetic_data):
-        return SupervisedDataset(
+        return DNABERT2FineTuneDataset(
             tokenizer=model.tokenizer, data_path_or_list=synthetic_data, kmer=-1
         )
 
@@ -168,7 +172,7 @@ class TestEpigenDnabert2FineTune(unittest.TestCase):
                 use_triton=use_triton,
             )
 
-            data_prepared = SupervisedDataset(data, tokenizer=model.tokenizer)
+            data_prepared = DNABERT2FineTuneDataset(data, tokenizer=model.tokenizer)
 
             training_args = TrainingArguments(
                 run_name=f"test_run_triton_{use_triton}",

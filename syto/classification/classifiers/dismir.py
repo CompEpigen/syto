@@ -35,6 +35,8 @@ from syto.classification.classifiers.abstract_read_classifier import (
     AbstractReadClassifier,
 )
 
+from syto.data.dataset import resolve_column
+
 _module_logger = logging.getLogger(__name__)
 
 
@@ -1552,8 +1554,9 @@ class Dismir(AbstractReadClassifier):
         batch_size = kwargs.get("batch_size", 2200)
 
         # Extract DNA and methylation sequences
-        dna_col = "seq" if "seq" in split_df.columns else "input_ids"
-        meth_col = "pattern" if "pattern" in split_df.columns else "methylation_ids"
+        cols = list(split_df.columns)
+        dna_col = resolve_column(cols, "input_ids")
+        meth_col = resolve_column(cols, "methylation_ids")
 
         dna_sequences = split_df[dna_col].tolist()
         methylation_sequences = split_df[meth_col].tolist()

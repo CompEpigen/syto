@@ -1,8 +1,10 @@
 import os
+import csv
 import json
 import gc
+import random
 from dataclasses import dataclass, field
-from typing import Optional, Dict, Tuple, List, Union
+from typing import Optional, Dict, Sequence, Tuple, List, Union, Callable
 from transformers.models.bert.modeling_bert import BertPreTrainedModel
 from transformers.modeling_outputs import SequenceClassifierOutput
 
@@ -12,11 +14,11 @@ from transformers.data.data_collator import DataCollator
 from transformers.trainer_callback import TrainerCallback
 import torch
 import torch.nn as nn
-from typing import Optional, Callable
 
-import torch
 import transformers
 from torch.utils.data import Dataset
+import numpy as np
+import pandas as pd
 
 from syto.classification.evaluation import (
     compute_metrics,
@@ -24,13 +26,280 @@ from syto.classification.evaluation import (
     keep_logits_only,
 )
 from syto.classification.utils import calculate_batch_size
-from syto.data.dataset import *
+from syto.data.dataset import (
+    COLUMN_ALIASES,
+    resolve_column,
+    generate_example_data,
+    generate_example_data_for_methylbert,
+)
+from syto.data.sequencing.genome import collapse_methylation
 from safetensors.torch import load_file
 from transformers.models.bert.configuration_bert import BertConfig
 from syto.classification.classification_heads import (
     GRGAttentionClassificationHead,
 )
 from syto.classification.loss import ConfidenceWeightedCrossEntropy
+
+
+class DNABERT2FineTuneDataset(Dataset):
+    """Dataset for supervised fine-tuning or predicting with DNABERT2 (EpigenBERT)."""
+
+    def __init__(
+        self,
+        data_path_or_list: Union[str, list],
+        tokenizer: transformers.PreTrainedTokenizer,
+        kmer: int = -1,
+        first_n_samples: int = None,
+        data_interface: str = "csv",
+        lazy_tokenization=False,
+        include_grg_ids=False,
+        dmr_label_column=None,
+        soft_labels=False,
+    ):
+        """
+        Args:
+            data_path_or_list (str or list): Path to the CSV file or a structured list.
+            tokenizer (transformers.PreTrainedTokenizer): Tokenizer for encoding inputs.
+            kmer (int, optional): K-mer size. Defaults to -1.
+        """
+
+        super(DNABERT2FineTuneDataset, self).__init__()
+        self.tokenizer = tokenizer
+        self.inversed_vocab = {y: x for (x, y) in tokenizer.vocab.items()}
+        self.cpg_methylation = None
+        self.m6a_methylation = None
+        self.lazy_tokenization = lazy_tokenization
+        self.include_grg_ids = include_grg_ids
+        self.soft_labels = soft_labels
+        self.dmr_label_column = dmr_label_column
+
+        # Determine input type
+        if data_interface == "csv":
+            if isinstance(data_path_or_list, str):
+                # Load data from CSV file
+                with open(data_path_or_list + ".csv", "r") as f:
+                    data = list(csv.reader(f))
+            elif isinstance(data_path_or_list, list):
+                # Use data directly as a structured list
+                data = data_path_or_list
+            else:
+                raise ValueError(
+                    "data_path_or_list must be a string (CSV path) or a list (structured like a CSV)."
+                )
+            # Extract header and data
+            header = data[0]
+            if first_n_samples is not None:
+                data = data[1:first_n_samples]
+            else:
+                data = data[1:]
+
+            # Identify indices dynamically
+            indices = {col: idx for idx, col in enumerate(header)}
+            genome_index = (
+                indices.get("input_ids")
+                if "input_ids" in indices
+                else indices.get("genome_sequence")
+            )
+            cpg_index = (
+                indices.get("methylation_ids")
+                if "methylation_ids" in indices
+                else indices.get("cpg_methylation_sequence")
+            )
+            m6a_index = indices.get("m6a_methylation_sequence")
+            labels_index = indices.get("label")
+
+            if genome_index is None:
+                raise ValueError("Genome sequence is absent from the input data")
+
+            # Extract genome sequences
+            texts = [row[genome_index] for row in data]
+
+            # Extract labels (optional)
+            if soft_labels:
+                raise NotImplementedError(
+                    "Method to encode soft labels with .csv interface is not implemented"
+                )
+            else:
+                self.labels = (
+                    [int(row[labels_index]) for row in data]
+                    if labels_index is not None
+                    else None
+                )
+
+            # Extract methylation data (optional)
+            self.cpg_methylation = (
+                [row[cpg_index] for row in data] if cpg_index is not None else None
+            )
+            self.m6a_methylation = (
+                [row[m6a_index] for row in data] if m6a_index is not None else None
+            )
+        elif data_interface == "pandas":
+            if isinstance(data_path_or_list, pd.DataFrame):
+                data = data_path_or_list
+
+            elif os.path.exists(data_path_or_list + ".parquet"):
+                data = pd.read_parquet(data_path_or_list + ".parquet")
+            else:
+                data = pd.read_csv(data_path_or_list + ".csv")
+
+            cols = data.columns
+            dna_col = resolve_column(cols, "input_ids")
+            meth_col = resolve_column(cols, "methylation_ids")
+            label_col = resolve_column(cols, "soft_label" if soft_labels else "label")
+            if dna_col is None:
+                raise ValueError(
+                    f"No recognized DNA sequence column found. Expected one of: {COLUMN_ALIASES['input_ids']}"
+                )
+            if meth_col is None:
+                raise ValueError(
+                    f"No recognized Methylation sequence column found. Expected one of: {COLUMN_ALIASES['methylation_ids']}"
+                )
+            dna, methylation, labels = (
+                data[dna_col],
+                data[meth_col],
+                data[label_col],
+            )
+            if self.include_grg_ids:
+                if self.dmr_label_column is None:
+                    raise ValueError(
+                        "dmr_label_column must not be none if include_grg_ids is set to True"
+                    )
+                self.grg_ids = data[self.dmr_label_column]
+            self.labels = labels.to_list()
+            self.cpg_methylation = methylation.to_list()
+            texts = dna.to_list()
+        if not lazy_tokenization:
+            # Tokenize genome sequences
+            output = tokenizer(
+                texts,  # pylint: disable=possibily-used-before-assignment
+                return_tensors="pt",
+                padding="longest",
+                max_length=tokenizer.model_max_length,
+                truncation=True,
+            )
+            self.input_ids = output["input_ids"]
+            self.attention_mask = output["attention_mask"]
+
+            # Tokenize methylation sequences if present
+            if self.cpg_methylation is not None:
+                self.cpg_methylation = torch.tensor(
+                    [
+                        self.tokenize_methyl_sequences(input_ids, methyl_seq)
+                        for input_ids, methyl_seq in zip(
+                            self.input_ids, self.cpg_methylation
+                        )
+                    ]
+                )
+
+            if self.m6a_methylation is not None:
+                self.m6a_methylation = torch.tensor(
+                    [
+                        self.tokenize_methyl_sequences(input_ids, methyl_seq)
+                        for input_ids, methyl_seq in zip(
+                            self.input_ids, self.m6a_methylation
+                        )
+                    ]
+                )
+        else:
+            self.texts = texts
+
+    def tokenize_methyl_sequences(self, input_ids, methyl_seq):
+        methyl_seq = [int(x) for x in methyl_seq]
+        token_lengths = [len(self.inversed_vocab[x]) for x in input_ids.tolist()]
+        token_breaks = np.cumsum(token_lengths)
+        token_starts = np.insert(token_breaks[:-1], 0, 0)
+        return [
+            collapse_methylation(methyl_seq[start:end])
+            for start, end in zip(token_starts, token_breaks)
+        ]
+
+    def __len__(self):
+        if self.lazy_tokenization:
+            return len(self.texts)
+        else:
+            return len(self.input_ids)
+
+    def __getitem__(self, i) -> Dict[str, torch.Tensor]:
+        if self.lazy_tokenization:
+            encoded = self.tokenizer(
+                text=self.texts[i],
+                return_tensors="pt",
+                max_length=self.tokenizer.model_max_length,
+                truncation=True,
+            )
+            item = {
+                "input_ids": encoded["input_ids"].squeeze(0),
+                "attention_mask": encoded["attention_mask"].squeeze(0),
+            }
+            if self.cpg_methylation is not None:
+                item["cpg_methylation"] = torch.tensor(
+                    self.tokenize_methyl_sequences(
+                        encoded["input_ids"].squeeze(0), self.cpg_methylation[i]
+                    )
+                )
+            if self.m6a_methylation is not None:
+                item["m6a_methylation"] = torch.tensor(
+                    self.tokenize_methyl_sequences(
+                        encoded["input_ids"].squeeze(0), self.m6a_methylation[i]
+                    )
+                )
+        else:
+            item = {
+                "input_ids": self.input_ids[i],
+                "attention_mask": self.attention_mask[i],
+            }
+            if self.cpg_methylation is not None:
+                item["cpg_methylation"] = self.cpg_methylation[i]
+            if self.m6a_methylation is not None:
+                item["m6a_methylation"] = self.m6a_methylation[i]
+        if self.labels is not None:
+            item["labels"] = torch.tensor(self.labels[i])
+        if self.include_grg_ids:
+            item["grg_ids"] = torch.tensor(self.grg_ids[i])
+        return item
+
+
+# Backward-compatible alias
+SupervisedDataset = DNABERT2FineTuneDataset
+
+
+@dataclass
+class DataCollatorForFineTunedDataset:
+    """Collate examples for supervised fine-tuning."""
+
+    tokenizer: transformers.PreTrainedTokenizer
+    soft_labels: bool = False
+
+    def __call__(self, instances: Sequence[Dict]) -> Dict[str, torch.Tensor]:
+        keys = instances[0].keys()
+        batch = {key: [instance[key] for instance in instances] for key in keys}
+
+        # Pad input_ids and attention_mask
+        batch["input_ids"] = torch.nn.utils.rnn.pad_sequence(
+            batch["input_ids"],
+            batch_first=True,
+            padding_value=self.tokenizer.pad_token_id,
+        )
+        batch["attention_mask"] = batch["input_ids"].ne(self.tokenizer.pad_token_id)
+
+        # Handle optional fields
+        if "cpg_methylation" in batch:
+            batch["cpg_methylation"] = torch.nn.utils.rnn.pad_sequence(
+                batch["cpg_methylation"], batch_first=True, padding_value=2
+            )
+        if "m6a_methylation" in batch:
+            batch["m6a_methylation"] = torch.nn.utils.rnn.pad_sequence(
+                batch["m6a_methylation"], batch_first=True, padding_value=2
+            )
+        if "labels" in batch:
+            if self.soft_labels:
+                batch["labels"] = torch.stack(batch["labels"]).float()
+            else:
+                batch["labels"] = torch.stack(batch["labels"]).long()
+        if "grg_ids" in batch:
+            batch["grg_ids"] = torch.tensor(batch["grg_ids"], dtype=torch.long)
+
+        return batch
 
 
 class BertEmbeddings(nn.Module):
@@ -562,7 +831,7 @@ class EpigenDnabert2:
             use_fast=True,
             trust_remote_code=trust_remote_code,
         )
-        self.data_collator = DataCollatorForSupervisedDataset(
+        self.data_collator = DataCollatorForFineTunedDataset(
             tokenizer=self.tokenizer, soft_labels=self.soft_labels
         )
         self.trainer = None
@@ -703,9 +972,9 @@ class EpigenDnabert2:
         self,
         data_path: Optional[str] = None,
         training_args: Union[TrainingArguments, None] = None,
-        train_dataset: Optional[SupervisedDataset] = None,
-        val_dataset: Optional[SupervisedDataset] = None,
-        test_dataset: Optional[SupervisedDataset] = None,
+        train_dataset: Optional["DNABERT2FineTuneDataset"] = None,
+        val_dataset: Optional["DNABERT2FineTuneDataset"] = None,
+        test_dataset: Optional["DNABERT2FineTuneDataset"] = None,
         callbacks: Optional[List[TrainerCallback]] = None,
         data_interface: str = "csv",
         resume_from_checkpoint: Optional[Union[bool, str]] = None,
@@ -718,14 +987,14 @@ class EpigenDnabert2:
 
         # TODO Adding LoRA
         print("Starting to initialize datasets")
-        train_dataset = train_dataset or SupervisedDataset(
+        train_dataset = train_dataset or DNABERT2FineTuneDataset(
             tokenizer=self.tokenizer,
             data_path_or_list=os.path.join(data_path, "train"),
             kmer=-1,
             data_interface=data_interface,
         )
         print("Train is initialized")
-        val_dataset = val_dataset or SupervisedDataset(
+        val_dataset = val_dataset or DNABERT2FineTuneDataset(
             tokenizer=self.tokenizer,
             data_path_or_list=os.path.join(data_path, "valid"),
             kmer=-1,
