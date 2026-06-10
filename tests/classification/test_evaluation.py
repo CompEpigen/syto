@@ -8,6 +8,7 @@ from syto.classification.evaluation import (
     keep_logits_only,
     compute_metrics,
     compute_metrics_soft_labels,
+    make_compute_metrics,
 )
 
 
@@ -114,7 +115,7 @@ class TestKeepLogitsOnly(unittest.TestCase):
 
 
 class TestComputeMetrics(unittest.TestCase):
-    """Test suite for compute_metrics."""
+    """Test suite for compute_metrics (backward-compat alias)."""
 
     def test_multiclass_hard_labels(self):
         """Standard multiclass predictions should produce valid metrics."""
@@ -140,7 +141,7 @@ class TestComputeMetrics(unittest.TestCase):
 
 
 class TestComputeMetricsSoftLabels(unittest.TestCase):
-    """Test suite for compute_metrics_soft_labels."""
+    """Test suite for compute_metrics_soft_labels (backward-compat alias)."""
 
     def test_confident_predictions_match_labels(self):
         """When predictions and labels are both confident, they should match."""
@@ -152,8 +153,8 @@ class TestComputeMetricsSoftLabels(unittest.TestCase):
         metrics = compute_metrics_soft_labels((logits, soft_labels))
         self.assertAlmostEqual(metrics["accuracy"], 1.0)
 
-    def test_low_confidence_assigned_rejection_class(self):
-        """Predictions and labels below threshold should be assigned rejection class."""
+    def test_low_confidence_assigned_background_class(self):
+        """Predictions and labels below threshold should be assigned background class."""
         num_classes = 3
         # Flat logits → softmax will be ~uniform, max_prob ≈ 0.33 < 0.5
         logits = np.zeros((1, num_classes))
@@ -161,7 +162,7 @@ class TestComputeMetricsSoftLabels(unittest.TestCase):
         flat_labels = np.ones((1, num_classes)) / num_classes
 
         metrics = compute_metrics_soft_labels((logits, flat_labels))
-        # Both prediction and label should be rejection → correct match
+        # Both prediction and label should be background → correct match
         self.assertAlmostEqual(metrics["accuracy"], 1.0)
 
     def test_padded_rows_excluded(self):
@@ -173,25 +174,76 @@ class TestComputeMetricsSoftLabels(unittest.TestCase):
         # Only first sample is used → accuracy=1.0
         self.assertAlmostEqual(metrics["accuracy"], 1.0)
 
-    def test_custom_threshold_func(self):
-        """Custom threshold function should be respected."""
-        logits = np.array([[10.0, 0.0, 0.0]])  # max prob ~1.0 after softmax
-        soft_labels = np.array([[0.9, 0.05, 0.05]])
-
-        # Very high threshold → everything rejected
-        metrics = compute_metrics_soft_labels(
-            (logits, soft_labels), threshold_func=lambda n: 0.99
-        )
-        # Softmax of [10,0,0] → max ~0.9998 > 0.99, still passes
-        # Label max = 0.9 < 0.99, so label becomes rejection
-        # prediction = class 0, label = rejection → they differ
-        self.assertAlmostEqual(metrics["accuracy"], 0.0)
-
     def test_hard_labels_fallback(self):
         """If 1D labels are passed, they should be used as-is."""
         logits = np.array([[10.0, 0.0, 0.0], [0.0, 10.0, 0.0]])
         hard_labels = np.array([0, 1])
         metrics = compute_metrics_soft_labels((logits, hard_labels))
+        self.assertAlmostEqual(metrics["accuracy"], 1.0)
+
+
+class TestMakeComputeMetrics(unittest.TestCase):
+    """Test suite for the make_compute_metrics factory."""
+
+    def test_factory_no_args_matches_compute_metrics(self):
+        """make_compute_metrics() should behave identically to compute_metrics."""
+        fn = make_compute_metrics()
+        logits = np.array([[10.0, 0.0, 0.0], [0.0, 10.0, 0.0], [0.0, 0.0, 10.0]])
+        labels = np.array([0, 1, 2])
+        m1 = fn((logits, labels))
+        m2 = compute_metrics((logits, labels))
+        for key in m1:
+            self.assertAlmostEqual(
+                m1[key], m2[key], places=10, msg=f"Mismatch on {key}"
+            )
+
+    def test_factory_with_threshold_matches_soft_labels(self):
+        """make_compute_metrics(threshold) should behave identically to compute_metrics_soft_labels."""
+        fn = make_compute_metrics(background_threshold_func=lambda n: 0.5)
+        logits = np.array([[10.0, 0.0, 0.0], [0.0, 10.0, 0.0], [0.0, 0.0, 10.0]])
+        soft_labels = np.array(
+            [[0.9, 0.05, 0.05], [0.05, 0.9, 0.05], [0.05, 0.05, 0.9]]
+        )
+        m1 = fn((logits, soft_labels))
+        m2 = compute_metrics_soft_labels((logits, soft_labels))
+        for key in m1:
+            self.assertAlmostEqual(
+                m1[key], m2[key], places=10, msg=f"Mismatch on {key}"
+            )
+
+    def test_custom_threshold_func(self):
+        """Custom threshold function should be respected."""
+        logits = np.array([[10.0, 0.0, 0.0]])  # max prob ~1.0 after softmax
+        soft_labels = np.array([[0.9, 0.05, 0.05]])
+
+        # Very high threshold → label becomes background since 0.9 < 0.99
+        fn = make_compute_metrics(background_threshold_func=lambda n: 0.99)
+        metrics = fn((logits, soft_labels))
+        # Softmax of [10,0,0] → max ~0.9998 > 0.99, still passes
+        # Label max = 0.9 < 0.99, so label becomes background
+        # prediction = class 0, label = background → they differ
+        self.assertAlmostEqual(metrics["accuracy"], 0.0)
+
+    def test_append_background_probability_in_ap(self):
+        """With background threshold, AP should include synthesized background probability
+        even when no label exceeds n_prob_classes (the old heuristic's failure case)."""
+        # 3 classes, all labels are within [0, 2] — old heuristic would NOT append background
+        logits = np.array([[10.0, 0.0, 0.0], [0.0, 10.0, 0.0], [0.0, 0.0, 10.0]])
+        soft_labels = np.array(
+            [[0.9, 0.05, 0.05], [0.05, 0.9, 0.05], [0.05, 0.05, 0.9]]
+        )
+
+        fn = make_compute_metrics(background_threshold_func=lambda n: 0.5)
+        metrics = fn((logits, soft_labels))
+        # Should not raise and should produce valid AP
+        self.assertFalse(np.isnan(metrics["average_precision"]))
+
+    def test_background_threshold_with_hard_labels_fallback(self):
+        """1D hard labels should work in background mode too."""
+        fn = make_compute_metrics(background_threshold_func=lambda n: 0.5)
+        logits = np.array([[10.0, 0.0, 0.0], [0.0, 10.0, 0.0]])
+        hard_labels = np.array([0, 1])
+        metrics = fn((logits, hard_labels))
         self.assertAlmostEqual(metrics["accuracy"], 1.0)
 
 

@@ -5,25 +5,38 @@ Manually calculate the accuracy, f1, matthews_correlation, precision, recall wit
 import numpy as np
 import sklearn
 import torch
-from typing import Union, Tuple, Any
+from typing import Union, Tuple, Any, Callable, Optional
 from scipy.special import softmax
 
 
-def _safe_average_precision(labels: np.ndarray, predictions_proba: np.ndarray) -> float:
+def _safe_average_precision(
+    labels: np.ndarray,
+    predictions_proba: np.ndarray,
+    append_background_probability: bool = False,
+) -> float:
     """Compute average_precision_score, handling multi-class edge cases.
 
-    When labels contain class IDs that exceed the number of columns in
-    predictions_proba (e.g. a background class added by
-    compute_metrics_soft_labels), a pseudo-probability column for the
-    background class is appended as ``1 - max(predictions_proba, axis=1)``.
-    This lets AP measure how well the model separates confident (real-class)
-    predictions from uncertain (background) ones.
+    When ``append_background_probability`` is ``True``, a pseudo-probability
+    column for the background class is appended as
+    ``1 - max(predictions_proba, axis=1)``.  This lets AP measure how well the
+    model separates confident (real-class) predictions from uncertain
+    (background) ones when background class is not explicitely represented by
+    the original probability vector
+
+    Parameters
+    ----------
+    labels : np.ndarray
+        1-D array of integer class labels (may include a background class ID
+        that exceeds the number of probability columns).
+    predictions_proba : np.ndarray
+        Either a 1-D array (binary) or a 2-D array of shape
+        ``(n_samples, n_classes)`` with predicted probabilities.
+    append_background_probability : bool, default False
+        If ``True``, synthesize and append a background probability column
+        (``1 - max(proba)``) before computing per-class AP.
     """
     if predictions_proba.ndim >= 2:
-        n_prob_classes = predictions_proba.shape[1]
-        has_background = np.any(labels >= n_prob_classes)
-
-        if has_background:
+        if append_background_probability:
             # Append a pseudo-probability column for the background class:
             # high value when the model is unconfident (low max probability)
             background_proba = 1.0 - np.max(predictions_proba, axis=1, keepdims=True)
@@ -55,7 +68,10 @@ def _safe_average_precision(labels: np.ndarray, predictions_proba: np.ndarray) -
 
 
 def calculate_metric_with_sklearn(
-    predictions_proba: np.ndarray, predictions: np.ndarray, labels: np.ndarray
+    predictions_proba: np.ndarray,
+    predictions: np.ndarray,
+    labels: np.ndarray,
+    append_background_probability: bool = False,
 ):
     valid_mask = (
         labels != -100
@@ -79,7 +95,9 @@ def calculate_metric_with_sklearn(
             valid_labels, valid_predictions, average="macro", zero_division=0
         ),
         "average_precision": _safe_average_precision(
-            valid_labels, valid_predictions_proba
+            valid_labels,
+            valid_predictions_proba,
+            append_background_probability=append_background_probability,
         ),
     }
 
@@ -126,76 +144,91 @@ def keep_logits_only(raw_model_output, labels):
     return raw_model_output
 
 
-def compute_metrics(eval_pred):
-    processed_logits, labels = eval_pred
-    # Handle soft labels: convert [B, C] probabilities to [B] hard indices
-    if labels.ndim >= 2:
-        labels = np.argmax(labels, axis=-1)
-    num_classes = processed_logits.shape[-1]
-    if num_classes == 1:
-        # Binary with single output
-        predictions_proba = processed_logits.squeeze(-1)
-        predictions = (predictions_proba > 0.5).astype(int)
-    elif num_classes == 2:
-        # Binary with 2 outputs (use argmax or softmax)
-        predictions = np.argmax(processed_logits, axis=-1)
-        predictions_proba = processed_logits[:, 1]
-    else:
-        # Multi-class
-        predictions = np.argmax(processed_logits, axis=-1)
-        predictions_proba = processed_logits
+def make_compute_metrics(
+    background_threshold_func: Optional[Callable[[int], float]] = None,
+):
+    """Factory returning a HuggingFace Trainer-compatible compute_metrics callable.
 
-    return calculate_metric_with_sklearn(predictions_proba, predictions, labels)
+    Parameters
+    ----------
+    background_threshold_func : callable(int) -> float, optional
+        When provided, predictions and labels whose maximum probability falls
+        below this threshold are assigned to a synthetic background class
+        (index = ``num_classes``).  The callable receives the number of model
+        output classes and returns the decision threshold.
+        When ``None``, no background class is synthesized (standard hard-label
+        evaluation).
 
-
-"""
-Compute metrics soft labels.
-"""
-
-
-def compute_metrics_soft_labels(eval_pred, threshold_func=lambda n: 0.5):
+    Returns
+    -------
+    callable
+        ``compute_metrics(eval_pred) -> dict``
     """
-    Computes metrics for soft labels by dynamically assigning a "Rejection" class
-    if the maximum probability of a read falls below a certain threshold.
-    """
-    logits, soft_labels = eval_pred
-    num_classes = logits.shape[-1]
+    append_background_probability = background_threshold_func is not None
 
-    # 1. Calculate the threshold (e.g., 1/sqrt(39) ≈ 0.16)
-    threshold = threshold_func(num_classes)
+    def compute_metrics(eval_pred):
+        predictions_proba, labels = eval_pred
+        num_classes = predictions_proba.shape[-1]
 
-    # The background class will be assigned the index N (e.g., 39, if classes are 0-38)
-    background_class_id = num_classes
+        if append_background_probability:
+            # --- Background thresholding path ---
+            threshold = background_threshold_func(num_classes)
+            background_class_id = num_classes
 
-    # ==========================================
-    # PROCESS PREDICTIONS
-    # ==========================================
-    # Convert logits to probabilities
-    predictions_proba = logits
-    max_probs = np.max(predictions_proba, axis=-1)
-    pred_indices = np.argmax(predictions_proba, axis=-1)
+            # Predictions: assign background when max probability is below threshold
+            max_probs = np.max(predictions_proba, axis=-1)
+            pred_indices = np.argmax(predictions_proba, axis=-1)
+            predictions = np.where(
+                max_probs < threshold, background_class_id, pred_indices
+            )
 
-    # If the highest probability is below the threshold, assign it to the Rejection class
-    predictions = np.where(max_probs < threshold, background_class_id, pred_indices)
+            # Labels: convert soft labels to hard, with background thresholding
+            if labels.ndim >= 2:
+                max_labels = np.max(labels, axis=-1)
+                label_indices = np.argmax(labels, axis=-1)
+                hard_labels = np.where(
+                    max_labels < threshold, background_class_id, label_indices
+                )
+                # Handle HuggingFace Padding (-100)
+                # If the soft labels were padded, the row sum will be negative instead of 1.0
+                row_sums = np.sum(labels, axis=-1)
+                hard_labels = np.where(row_sums < 0, -100, hard_labels)
+            else:
+                # Fallback: hard labels passed directly
+                hard_labels = labels
 
-    # ==========================================
-    # PROCESS GROUND TRUTH
-    # ==========================================
-    if soft_labels.ndim >= 2:
-        max_labels = np.max(soft_labels, axis=-1)
-        label_indices = np.argmax(soft_labels, axis=-1)
+            labels = hard_labels
 
-        # Apply the same threshold logic to the ground truth
-        hard_labels = np.where(
-            max_labels < threshold, background_class_id, label_indices
+        else:
+            # --- Standard path (no background class) ---
+            # Handle soft labels: convert [B, C] probabilities to [B] hard indices
+            if labels.ndim >= 2:
+                labels = np.argmax(labels, axis=-1)
+
+            if num_classes == 1:
+                # Binary with single output
+                predictions_proba = predictions_proba.squeeze(-1)
+                predictions = (predictions_proba > 0.5).astype(int)
+            elif num_classes == 2:
+                # Binary with 2 outputs (use argmax or softmax)
+                predictions = np.argmax(predictions_proba, axis=-1)
+                predictions_proba = predictions_proba[:, 1]
+            else:
+                # Multi-class
+                predictions = np.argmax(predictions_proba, axis=-1)
+
+        return calculate_metric_with_sklearn(
+            predictions_proba,
+            predictions,
+            labels,
+            append_background_probability=append_background_probability,
         )
 
-        # Handle HuggingFace Padding (-100)
-        # If the soft labels were padded, the row sum will be negative instead of 1.0
-        row_sums = np.sum(soft_labels, axis=-1)
-        hard_labels = np.where(row_sums < 0, -100, hard_labels)
-    else:
-        # Fallback just in case hard labels were passed somehow
-        hard_labels = soft_labels
+    return compute_metrics
 
-    return calculate_metric_with_sklearn(predictions_proba, predictions, hard_labels)
+
+# Backward-compatible module-level callables
+compute_metrics = make_compute_metrics(background_threshold_func=None)
+compute_metrics_soft_labels = make_compute_metrics(
+    background_threshold_func=lambda n: 0.5
+)
