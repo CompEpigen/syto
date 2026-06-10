@@ -1,5 +1,5 @@
 """
-Pseudo-Bulk Generation Pipeline V2
+Pseudo-Bulk Generation Pipeline
 
 End-to-end pipeline using the new PseudobulkGenerator class with:
     - Crash-resilient batch processing with HDF5 checkpointing
@@ -15,10 +15,9 @@ This module orchestrates:
 
 import json
 import logging
-import os
 import pickle
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 import numpy as np
 import pandas as pd
@@ -35,7 +34,7 @@ from syto.classification.classifiers.lazy_classifier_factory import (
 )
 
 
-class PseudoBulkPipelineV2:
+class PseudoBulkPipeline:
     """Orchestrate pseudo-bulk mixture generation using PseudobulkGenerator.
 
     This pipeline replaces the legacy pickle-based generation with a new
