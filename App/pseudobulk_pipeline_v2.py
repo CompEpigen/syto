@@ -26,7 +26,7 @@ import pandas as pd
 from syto.data import LOYFER_CELL_TYPE_MATCH_DICT
 from syto.data.read_preparation import prepare_splits_for_pseudobulk
 from syto.data.pseudobulk_generator import PseudobulkGenerator
-from syto.data.hdf5_utils import (
+from syto.data.pseudobulk_hdf5_utils import (
     GenerationMetadata,
     GenerationParameters,
 )
@@ -83,6 +83,9 @@ class PseudoBulkPipelineV2:
         self.class_label_column = config["class_label_column"]
         self.grg_label_column = config["grg_label_column"]
         self.columns_to_keep = config.get("columns_to_keep")
+
+        # [for Debug] parameter to generate n pseudobulks by sampling first n from the target proportions 
+        self.n_pseudobulks_to_sample = config.get("n_pseudobulks_to_sample", None)
 
     # ═══════════════════════════════════════════════════════════════
     #  Public API
@@ -340,8 +343,11 @@ class PseudoBulkPipelineV2:
             tp_path = split_cfg["target_proportions_path"]
             tp_data = np.load(tp_path)
             proportions = tp_data["proportions"]
-
-            proportions = proportions[:100]
+            if self.n_pseudobulks_to_sample is not None:
+                self.logger.info(
+                "  n_pseudobulks_to_sample was set in config. Sampling first %d pseudobulks", self.n_pseudobulks_to_sample
+                )
+                proportions = proportions[:self.n_pseudobulks_to_sample]
 
             self.logger.info(
                 "  Loaded %d proportions for %s", len(proportions), split_name

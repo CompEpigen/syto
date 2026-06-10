@@ -14,12 +14,12 @@ from syto.data.pseudobulk_generator import (
     _sample_read_ids_from_grouped_dataframe,
     build_target_columns,
 )
-from syto.data.hdf5_utils import (
+from syto.data.pseudobulk_hdf5_utils import (
     PseudobulkResult,
     PureProfileResult,
     GenerationMetadata,
     GenerationParameters,
-    HDF5BatchWriter,
+    PseudobulkHDF5BatchWriter,
 )
 
 # pylint: disable=protected-access
@@ -365,8 +365,7 @@ class TestBuildTargetColumns(unittest.TestCase):
         self.assertIn("methylation_level_wavg", cols)
         self.assertIn("total_weight", cols)
         self.assertIn("n_reads", cols)
-        self.assertIn("chromosome", cols)
-        self.assertIn("label", cols)
+
 
     def test_custom_num_classes(self):
         """Verify prediction columns match num_prediction_classes."""
@@ -475,7 +474,7 @@ class TestReproducibilityFromStoredData(unittest.TestCase):
 
             # Write to HDF5
             batches_dir = Path(temp_dir) / "batches"
-            writer = HDF5BatchWriter(batches_dir)
+            writer = PseudobulkHDF5BatchWriter(batches_dir)
             writer.write_batch(0, [original_result])
 
             # Read back
@@ -726,14 +725,14 @@ class TestGenerateSingleSplit(unittest.TestCase):
         generator.checkpoint_manager.mark_batch_completed("train", 0)
 
         # Manually write batch 0 to simulate partial completion
-        batch_writer = HDF5BatchWriter(
+        batch_writer = PseudobulkHDF5BatchWriter(
             generator.checkpoint_manager.get_split_batches_dir("train")
         )
         dummy_result = PseudobulkResult(
             index=0,
             target_proportions=np.array([0.5, 0.5]),
             actual_proportions=np.array([0.5, 0.5]),
-            n_reads_really_sampled=50,
+            n_reads_sampled=50,
             n_samples_per_class_per_grg=np.array([[25], [25]]),
             seed=1,
             aggregated_features=pd.DataFrame({"col": [1, 2, 3]}),

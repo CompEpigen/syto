@@ -29,7 +29,7 @@ _module_logger = logging.getLogger(__name__)
 # =============================================================================
 
 
-class HDF5Schema:
+class PseudobulkHDF5Schema:
     """Constants defining the HDF5 file structure for pseudobulk data."""
 
     # Top-level groups
@@ -107,7 +107,7 @@ class PseudobulkResult:
     index: int
     target_proportions: np.ndarray
     actual_proportions: np.ndarray
-    n_reads_really_sampled: int
+    n_reads_sampled: int
     n_samples_per_class_per_grg: np.ndarray
     seed: int
     aggregated_features: pd.DataFrame
@@ -118,7 +118,7 @@ class PseudobulkResult:
             "index": self.index,
             "target_proportions": self.target_proportions,
             "actual_proportions": self.actual_proportions,
-            "n_reads_really_sampled": self.n_reads_really_sampled,
+            "n_reads_sampled": self.n_reads_sampled,
             "n_samples_per_class_per_grg": self.n_samples_per_class_per_grg,
             "seed": self.seed,
             "aggregated_features": self.aggregated_features,
@@ -452,7 +452,7 @@ class CheckpointManager:
 # =============================================================================
 
 
-class HDF5BatchWriter:
+class PseudobulkHDF5BatchWriter:
     """Writes pseudobulk batches to HDF5 files atomically."""
 
     def __init__(
@@ -492,7 +492,7 @@ class HDF5BatchWriter:
                     grp = f.create_group(f"pseudobulk_{result.index}")
                     grp.attrs["index"] = result.index
                     grp.attrs["seed"] = result.seed
-                    grp.attrs["n_reads_really_sampled"] = result.n_reads_really_sampled
+                    grp.attrs["n_reads_sampled"] = result.n_reads_sampled
                     grp.attrs["sampling_function"] = (
                         "_sample_read_ids_from_grouped_dataframe"
                     )
@@ -500,20 +500,20 @@ class HDF5BatchWriter:
                     grp.create_dataset(
                         "target_proportions",
                         data=result.target_proportions,
-                        compression=HDF5Schema.COMPRESSION,
-                        compression_opts=HDF5Schema.COMPRESSION_LEVEL,
+                        compression=PseudobulkHDF5Schema.COMPRESSION,
+                        compression_opts=PseudobulkHDF5Schema.COMPRESSION_LEVEL,
                     )
                     grp.create_dataset(
                         "actual_proportions",
                         data=result.actual_proportions,
-                        compression=HDF5Schema.COMPRESSION,
-                        compression_opts=HDF5Schema.COMPRESSION_LEVEL,
+                        compression=PseudobulkHDF5Schema.COMPRESSION,
+                        compression_opts=PseudobulkHDF5Schema.COMPRESSION_LEVEL,
                     )
                     grp.create_dataset(
                         "n_reads_per_gr",
                         data=result.n_samples_per_class_per_grg,
-                        compression=HDF5Schema.COMPRESSION,
-                        compression_opts=HDF5Schema.COMPRESSION_LEVEL,
+                        compression=PseudobulkHDF5Schema.COMPRESSION,
+                        compression_opts=PseudobulkHDF5Schema.COMPRESSION_LEVEL,
                     )
                     # Store aggregated features - handle numeric and string columns
                     numeric_cols = result.aggregated_features.select_dtypes(
@@ -528,8 +528,8 @@ class HDF5BatchWriter:
                         grp.create_dataset(
                             "aggregated_features",
                             data=result.aggregated_features[numeric_cols].values,
-                            compression=HDF5Schema.COMPRESSION,
-                            compression_opts=HDF5Schema.COMPRESSION_LEVEL,
+                            compression=PseudobulkHDF5Schema.COMPRESSION,
+                            compression_opts=PseudobulkHDF5Schema.COMPRESSION_LEVEL,
                         )
                         grp.attrs["feature_columns"] = numeric_cols
 
@@ -601,7 +601,7 @@ class HDF5BatchWriter:
                     index=grp.attrs["index"],
                     target_proportions=grp["target_proportions"][...],
                     actual_proportions=grp["actual_proportions"][...],
-                    n_reads_really_sampled=grp.attrs["n_reads_really_sampled"],
+                    n_reads_sampled=grp.attrs["n_reads_sampled"],
                     n_samples_per_class_per_grg=grp["n_reads_per_gr"][...],
                     seed=grp.attrs["seed"],
                     aggregated_features=aggregated_features,
@@ -620,7 +620,7 @@ class HDF5BatchWriter:
 # =============================================================================
 
 
-class HDF5ConsolidationWriter:
+class PseudobulkHDF5ConsolidationWriter:
     """Consolidates batch files into the final HDF5 output."""
 
     def __init__(
@@ -683,17 +683,17 @@ class HDF5ConsolidationWriter:
         input_dfs: Dict[str, pd.DataFrame],
     ) -> None:
         """Write inputs group with metadata and input DataFrames."""
-        inputs_grp = f.create_group(HDF5Schema.INPUTS)
+        inputs_grp = f.create_group(PseudobulkHDF5Schema.INPUTS)
 
         # Metadata subgroup
         meta_grp = inputs_grp.create_group("metadata")
-        meta_grp.attrs[HDF5Schema.ATTR_GR_ID_COLUMN] = metadata.grg_id_column
-        meta_grp.attrs[HDF5Schema.ATTR_LABELING_SCHEME] = metadata.labeling_scheme
-        meta_grp.attrs[HDF5Schema.ATTR_CLASSIFIER] = metadata.classifier
-        meta_grp.attrs[HDF5Schema.ATTR_DATA_WATERMARK] = metadata.data_watermark
+        meta_grp.attrs[PseudobulkHDF5Schema.ATTR_GR_ID_COLUMN] = metadata.grg_id_column
+        meta_grp.attrs[PseudobulkHDF5Schema.ATTR_LABELING_SCHEME] = metadata.labeling_scheme
+        meta_grp.attrs[PseudobulkHDF5Schema.ATTR_CLASSIFIER] = metadata.classifier
+        meta_grp.attrs[PseudobulkHDF5Schema.ATTR_DATA_WATERMARK] = metadata.data_watermark
         if metadata.data_stats:
             meta_grp.create_dataset(
-                HDF5Schema.DATASET_DATA_STATS,
+                PseudobulkHDF5Schema.DATASET_DATA_STATS,
                 data=json.dumps(metadata.data_stats),
             )
 
@@ -710,8 +710,8 @@ class HDF5ConsolidationWriter:
                 split_grp.create_dataset(
                     "numeric_data",
                     data=df[numeric_cols].values,
-                    compression=HDF5Schema.COMPRESSION,
-                    compression_opts=HDF5Schema.COMPRESSION_LEVEL,
+                    compression=PseudobulkHDF5Schema.COMPRESSION,
+                    compression_opts=PseudobulkHDF5Schema.COMPRESSION_LEVEL,
                 )
                 split_grp.attrs["numeric_columns"] = numeric_cols
 
@@ -730,7 +730,7 @@ class HDF5ConsolidationWriter:
 
     def _write_parameters(self, f: h5py.File, parameters: GenerationParameters) -> None:
         """Write parameters group."""
-        params_grp = f.create_group(HDF5Schema.PARAMETERS)
+        params_grp = f.create_group(PseudobulkHDF5Schema.PARAMETERS)
 
         # Cell types mapping as structured dataset
         cell_types = list(parameters.cell_types_mapping.items())
@@ -748,10 +748,10 @@ class HDF5ConsolidationWriter:
         params_grp.create_dataset("gr_groups_mapping", data=gr_groups_arr)
 
         # Attributes
-        params_grp.attrs[HDF5Schema.ATTR_SUBSTITUTION_METHOD] = (
+        params_grp.attrs[PseudobulkHDF5Schema.ATTR_SUBSTITUTION_METHOD] = (
             parameters.substitution_method
         )
-        params_grp.attrs[HDF5Schema.ATTR_GR_SAMPLING_METHOD] = (
+        params_grp.attrs[PseudobulkHDF5Schema.ATTR_GR_SAMPLING_METHOD] = (
             parameters.grg_sampling_method
         )
 
@@ -763,41 +763,41 @@ class HDF5ConsolidationWriter:
         pure_profile: Optional[PureProfileResult],
     ) -> None:
         """Write outputs for a single split."""
-        split_grp = f.create_group(HDF5Schema.outputs_split(split_name))
+        split_grp = f.create_group(PseudobulkHDF5Schema.outputs_split(split_name))
         pseudobulks_grp = split_grp.create_group("pseudobulks")
 
         # Read and write all batches
         batches_dir = checkpoint_manager.get_split_batches_dir(split_name)
-        batch_writer = HDF5BatchWriter(batches_dir)
+        batch_writer = PseudobulkHDF5BatchWriter(batches_dir)
 
         checkpoint = checkpoint_manager.load_split_checkpoint(split_name)
         for batch_idx in sorted(checkpoint.completed_batches):
             results = batch_writer.read_batch(batch_idx)
             for result in results:
                 pb_grp = pseudobulks_grp.create_group(f"i_{result.index}")
-                pb_grp.attrs[HDF5Schema.ATTR_SEED] = result.seed
-                pb_grp.attrs[HDF5Schema.ATTR_SAMPLING_FUNCTION] = (
+                pb_grp.attrs[PseudobulkHDF5Schema.ATTR_SEED] = result.seed
+                pb_grp.attrs[PseudobulkHDF5Schema.ATTR_SAMPLING_FUNCTION] = (
                     "_sample_read_ids_from_grouped_dataframe"
                 )
-                pb_grp.attrs["n_reads_really_sampled"] = result.n_reads_really_sampled
+                pb_grp.attrs["n_reads_sampled"] = result.n_reads_sampled
 
                 pb_grp.create_dataset(
-                    HDF5Schema.DATASET_TARGET_PROPORTIONS,
+                    PseudobulkHDF5Schema.DATASET_TARGET_PROPORTIONS,
                     data=result.target_proportions,
-                    compression=HDF5Schema.COMPRESSION,
-                    compression_opts=HDF5Schema.COMPRESSION_LEVEL,
+                    compression=PseudobulkHDF5Schema.COMPRESSION,
+                    compression_opts=PseudobulkHDF5Schema.COMPRESSION_LEVEL,
                 )
                 pb_grp.create_dataset(
-                    HDF5Schema.DATASET_ACTUAL_PROPORTIONS,
+                    PseudobulkHDF5Schema.DATASET_ACTUAL_PROPORTIONS,
                     data=result.actual_proportions,
-                    compression=HDF5Schema.COMPRESSION,
-                    compression_opts=HDF5Schema.COMPRESSION_LEVEL,
+                    compression=PseudobulkHDF5Schema.COMPRESSION,
+                    compression_opts=PseudobulkHDF5Schema.COMPRESSION_LEVEL,
                 )
                 pb_grp.create_dataset(
-                    HDF5Schema.DATASET_N_READS_PER_GR,
+                    PseudobulkHDF5Schema.DATASET_N_READS_PER_GR,
                     data=result.n_samples_per_class_per_grg,
-                    compression=HDF5Schema.COMPRESSION,
-                    compression_opts=HDF5Schema.COMPRESSION_LEVEL,
+                    compression=PseudobulkHDF5Schema.COMPRESSION,
+                    compression_opts=PseudobulkHDF5Schema.COMPRESSION_LEVEL,
                 )
                 # Store aggregated features - handle numeric and string columns
                 numeric_cols = result.aggregated_features.select_dtypes(
@@ -810,10 +810,10 @@ class HDF5ConsolidationWriter:
                 # Store numeric features
                 if numeric_cols:
                     pb_grp.create_dataset(
-                        HDF5Schema.DATASET_AGGREGATED_FEATURES,
+                        PseudobulkHDF5Schema.DATASET_AGGREGATED_FEATURES,
                         data=result.aggregated_features[numeric_cols].values,
-                        compression=HDF5Schema.COMPRESSION,
-                        compression_opts=HDF5Schema.COMPRESSION_LEVEL,
+                        compression=PseudobulkHDF5Schema.COMPRESSION,
+                        compression_opts=PseudobulkHDF5Schema.COMPRESSION_LEVEL,
                     )
                     pb_grp.attrs["feature_columns"] = numeric_cols
 
@@ -834,16 +834,16 @@ class HDF5ConsolidationWriter:
         if pure_profile:
             pp_grp = split_grp.create_group("pure_profiles")
             pp_grp.create_dataset(
-                HDF5Schema.DATASET_FEATURE_MATRICES,
+                PseudobulkHDF5Schema.DATASET_FEATURE_MATRICES,
                 data=pure_profile.feature_matrices,
-                compression=HDF5Schema.COMPRESSION,
-                compression_opts=HDF5Schema.COMPRESSION_LEVEL,
+                compression=PseudobulkHDF5Schema.COMPRESSION,
+                compression_opts=PseudobulkHDF5Schema.COMPRESSION_LEVEL,
             )
             pp_grp.create_dataset(
-                HDF5Schema.DATASET_UNIFORM_PRIOR,
+                PseudobulkHDF5Schema.DATASET_UNIFORM_PRIOR,
                 data=pure_profile.uniform_prior,
-                compression=HDF5Schema.COMPRESSION,
-                compression_opts=HDF5Schema.COMPRESSION_LEVEL,
+                compression=PseudobulkHDF5Schema.COMPRESSION,
+                compression_opts=PseudobulkHDF5Schema.COMPRESSION_LEVEL,
             )
             pp_grp.attrs["numeric_columns"] = pure_profile.numeric_columns
 
