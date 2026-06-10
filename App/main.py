@@ -69,11 +69,6 @@ def validate_config(config: Dict[str, Any], task: str) -> None:
             "input",
         ],
         "generate_pseudobulk": [
-            "classifier_type",
-            "output_dir",
-            "labels_dict_path",
-        ],
-        "generate_pseudobulk_v2": [
             "output_dir",
             "labels_dict_path",
         ],
@@ -105,7 +100,6 @@ def validate_config(config: Dict[str, Any], task: str) -> None:
     # Validate model-specific configuration (not needed for generate_pseudobulk or fit_deconvolution)
     if task not in (
         "generate_pseudobulk",
-        "generate_pseudobulk_v2",
         "fit_deconvolution",
         "fit_calibration",
         "confidence_intervals",
@@ -274,7 +268,7 @@ def run_pretraining(config: Dict[str, Any], logger: logging.Logger) -> None:
 
 def run_pseudobulk_generation(config: Dict[str, Any], logger: logging.Logger) -> None:
     """Run pseudo-bulk mixture generation based on configuration."""
-    from pseudobulk_pipeline import PseudoBulkPipeline
+    from App.pseudobulk_pipeline_v2 import PseudoBulkPipeline
 
     logger.info("Starting pseudo-bulk generation pipeline")
     pipeline = PseudoBulkPipeline(config=config, logger=logger)
@@ -296,7 +290,7 @@ def run_pseudobulk_generation_v2(
     config: Dict[str, Any], logger: logging.Logger
 ) -> None:
     """Run pseudo-bulk generation using the new HDF5-based PseudobulkGenerator."""
-    from pseudobulk_pipeline_v2 import PseudoBulkPipelineV2
+    from App.pseudobulk_pipeline_v2 import PseudoBulkPipelineV2
 
     logger.info("Starting pseudo-bulk generation pipeline V2 (HDF5-based)")
     pipeline = PseudoBulkPipelineV2(config=config, logger=logger)
@@ -364,7 +358,6 @@ Examples:
             "fine_tune",
             "inference",
             "generate_pseudobulk",
-            "generate_pseudobulk_v2",
             "fit_deconvolution",
             "fit_calibration",
             "confidence_intervals",
@@ -512,8 +505,6 @@ Examples:
             run_pretraining(config, logger)
         elif args.task == "generate_pseudobulk":
             run_pseudobulk_generation(config, logger)
-        elif args.task == "generate_pseudobulk_v2":
-            run_pseudobulk_generation_v2(config, logger)
         elif args.task == "fit_deconvolution":
             run_deconvolution_fitting(config, logger)
         elif args.task == "fit_calibration":
