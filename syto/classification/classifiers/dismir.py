@@ -27,7 +27,7 @@ except ImportError:
 
 from syto.classification.evaluation import compute_metrics, compute_metrics_soft_labels
 from syto.classification.classification_heads import (
-    GRAttentionClassificationHead,
+    GRGAttentionClassificationHead,
 )
 from syto.classification.loss import ConfidenceWeightedCrossEntropy
 from syto.classification.classifiers.minirnns.minRNNs import BiMinGRU
@@ -39,20 +39,20 @@ _module_logger = logging.getLogger(__name__)
 
 
 class DISMIRConfig:
-    """Simple config class for GRAttentionClassificationHead compatibility."""
+    """Simple config class for GRGAttentionClassificationHead compatibility."""
 
     def __init__(
         self,
         hidden_size,
         num_labels,
-        num_gr_labels,
+        num_grg_labels,
         attention_probs_dropout_prob=0.2,
         hidden_dropout_prob=0.2,
         layer_norm_eps=1e-12,
     ):
         self.hidden_size = hidden_size
         self.num_labels = num_labels
-        self.num_gr_labels = num_gr_labels
+        self.num_grg_labels = num_grg_labels
         self.attention_probs_dropout_prob = attention_probs_dropout_prob
         self.hidden_dropout_prob = hidden_dropout_prob
         self.layer_norm_eps = layer_norm_eps
@@ -75,8 +75,8 @@ class DISMIRNet(nn.Module):
     8. Dense -> ReLU
     9. Dense -> Sigmoid
 
-    gr_attention_based CLASSIFIER:
-    Uses GRAttentionClassificationHead on the sequence output from encoder (before flatten).
+    grg_attention_based CLASSIFIER:
+    Uses GRGAttentionClassificationHead on the sequence output from encoder (before flatten).
     """
 
     def __init__(
@@ -85,7 +85,7 @@ class DISMIRNet(nn.Module):
         flavor="lstm",
         num_labels=1,
         classifier_type="vanilla",
-        num_gr_labels=None,
+        num_grg_labels=None,
         dropout_prob=0.2,
         soft_labels=False,
     ):
@@ -93,7 +93,7 @@ class DISMIRNet(nn.Module):
         self.max_sequence_length = max_sequence_length
         self.num_labels = num_labels
         self.classifier_type = classifier_type
-        self.num_gr_labels = num_gr_labels
+        self.num_grg_labels = num_grg_labels
         self.soft_labels = soft_labels
 
         # ============== SHARED ENCODER ==============
@@ -148,14 +148,16 @@ class DISMIRNet(nn.Module):
             self._init_vanilla_classifier(dropout_prob)
             self.dmr_classifier = None
 
-        elif classifier_type == "gr_attention_based":
+        elif classifier_type == "grg_attention_based":
             print("Using attention-based classifier with DMR context")
-            if num_gr_labels is None:
+            if num_grg_labels is None:
                 raise ValueError(
-                    "num_gr_labels must be provided for gr_attention_based classifier"
+                    "num_grg_labels must be provided for grg_attention_based classifier"
                 )
 
-            self._init_dmr_attention_classifier(num_labels, num_gr_labels, dropout_prob)
+            self._init_dmr_attention_classifier(
+                num_labels, num_grg_labels, dropout_prob
+            )
             # Set vanilla FC components to None
             self.fc1 = None
             self.drop3 = None
@@ -165,7 +167,7 @@ class DISMIRNet(nn.Module):
         else:
             raise ValueError(
                 f"Unknown classifier_type: {classifier_type}. "
-                "Choose 'vanilla' or 'gr_attention_based'"
+                "Choose 'vanilla' or 'grg_attention_based'"
             )
 
     def _init_vanilla_classifier(self, dropout_prob):
@@ -176,7 +178,7 @@ class DISMIRNet(nn.Module):
         self.fc3 = nn.Linear(300, self.num_labels)
         self.sigmoid = nn.Sigmoid()
 
-    def _init_dmr_attention_classifier(self, num_labels, num_gr_labels, dropout_prob):
+    def _init_dmr_attention_classifier(self, num_labels, num_grg_labels, dropout_prob):
         """Initialize DMR attention-based classifier."""
         # After encoder: shape is (batch, 100, seq_len/4)
         # Permuted for attention: (batch, seq_len/4, 100)
@@ -184,12 +186,12 @@ class DISMIRNet(nn.Module):
         config = DISMIRConfig(
             hidden_size=self.encoder_hidden_size,  # 100 (conv2 output channels)
             num_labels=num_labels,
-            num_gr_labels=num_gr_labels,
+            num_grg_labels=num_grg_labels,
             attention_probs_dropout_prob=dropout_prob,
             hidden_dropout_prob=dropout_prob,
             layer_norm_eps=1e-12,
         )
-        self.dmr_classifier = GRAttentionClassificationHead(config)
+        self.dmr_classifier = GRGAttentionClassificationHead(config)
 
     def _forward_encoder(self, x, parallel_scan=True):
         """
@@ -228,25 +230,25 @@ class DISMIRNet(nn.Module):
 
         return x  # (batch, 100, seq_len/4)
 
-    def forward(self, x, parallel_scan=True, gr_ids=None, attention_mask=None):
+    def forward(self, x, parallel_scan=True, grg_ids=None, attention_mask=None):
         """
         Args:
             x: Input tensor of shape (batch_size, max_sequence_length, 5)
             parallel_scan: Whether to use parallel scan for MinGRU (only relevant for minigru flavor)
-            gr_ids: [batch_size] - DMR labels for each sequence (required for gr_attention_based)
-            attention_mask: [batch_size, seq_len] - attention mask for padding (optional, for gr_attention_based)
+            grg_ids: [batch_size] - DMR labels for each sequence (required for grg_attention_based)
+            attention_mask: [batch_size, seq_len] - attention mask for padding (optional, for grg_attention_based)
 
         Returns:
             For vanilla: output tensor of shape (batch_size, num_labels)
-            For gr_attention_based: tuple of (logits, attention_weights)
+            For grg_attention_based: tuple of (logits, attention_weights)
         """
         # Shared encoder
         x = self._forward_encoder(x, parallel_scan)  # (batch, 100, seq_len/4)
 
         if self.classifier_type == "vanilla":
             return self._forward_vanilla(x)
-        elif self.classifier_type == "gr_attention_based":
-            return self._forward_dmr_attention(x, gr_ids, attention_mask)
+        elif self.classifier_type == "grg_attention_based":
+            return self._forward_dmr_attention(x, grg_ids, attention_mask)
 
     def _forward_vanilla(self, x):
         """Forward pass for vanilla classifier (FC layers only)."""
@@ -263,18 +265,18 @@ class DISMIRNet(nn.Module):
         x = self.sigmoid(x)
         return x
 
-    def _forward_dmr_attention(self, x, gr_ids, attention_mask):
+    def _forward_dmr_attention(self, x, grg_ids, attention_mask):
         """Forward pass for DMR attention-based classifier."""
-        if gr_ids is None:
+        if grg_ids is None:
             raise ValueError(
-                "gr_ids must be provided when using gr_attention_based classifier"
+                "grg_ids must be provided when using grg_attention_based classifier"
             )
 
         # x shape: (batch, 100, seq_len/4)
         # Permute for attention: (batch, seq_len/4, 100) = (batch, seq_len, hidden_size)
         x = x.permute(0, 2, 1)
 
-        logits, attention_weights = self.dmr_classifier(x, gr_ids, attention_mask)
+        logits, attention_weights = self.dmr_classifier(x, grg_ids, attention_mask)
 
         return logits, attention_weights
 
@@ -470,7 +472,7 @@ class Dismir(AbstractReadClassifier):
         flavour="lstm",
         num_labels=2,
         classifier_type="vanilla",
-        num_gr_labels=None,
+        num_grg_labels=None,
         dmr_label_col=None,
         dna_column="input_ids",
         methylation_column="methylation_ids",
@@ -479,31 +481,31 @@ class Dismir(AbstractReadClassifier):
         self.max_sequence_length = max_sequence_length
         self.num_labels = num_labels
         self.classifier_type = classifier_type
-        self.num_gr_labels = num_gr_labels
+        self.num_grg_labels = num_grg_labels
         self.dmr_label_col = dmr_label_col
         self.dna_column = dna_column
         self.methylation_column = methylation_column
         self.soft_labels = soft_labels
 
         # Validate DMR parameters
-        if classifier_type == "gr_attention_based":
-            if num_gr_labels is None:
+        if classifier_type == "grg_attention_based":
+            if num_grg_labels is None:
                 raise ValueError(
-                    "num_gr_labels must be provided for gr_attention_based classifier"
+                    "num_grg_labels must be provided for grg_attention_based classifier"
                 )
             if dmr_label_col is None:
                 raise ValueError(
-                    "dmr_label_col must be provided for gr_attention_based classifier"
+                    "dmr_label_col must be provided for grg_attention_based classifier"
                 )
 
         # Set up loss function
-        # Note: GRAttentionClassificationHead returns raw logits (no sigmoid), so we need different loss
+        # Note: GRGAttentionClassificationHead returns raw logits (no sigmoid), so we need different loss
         if classifier_type == "vanilla":
             if num_labels == 1:
                 self.criterion = nn.BCELoss()
             else:
                 self.criterion = nn.CrossEntropyLoss()
-        else:  # gr_attention_based
+        else:  # grg_attention_based
             if num_labels == 1:
                 self.criterion = nn.BCEWithLogitsLoss()
             else:
@@ -529,7 +531,7 @@ class Dismir(AbstractReadClassifier):
             flavour,
             num_labels,
             classifier_type=classifier_type,
-            num_gr_labels=num_gr_labels,
+            num_grg_labels=num_grg_labels,
         ).to(self.device)
 
     def conv_onehot(self, dna_seq, c_methylation_seq):
@@ -667,7 +669,7 @@ class Dismir(AbstractReadClassifier):
             print("Preparing data for fixed-length training...")
 
         # Load data - with or without DMR labels
-        use_dmr = self.classifier_type == "gr_attention_based"
+        use_dmr = self.classifier_type == "grg_attention_based"
 
         if use_dmr:
             self.train_x, self.train_y, self.train_dmr = self.load_and_transform_input(
@@ -762,9 +764,9 @@ class Dismir(AbstractReadClassifier):
         """
         Variable-length training method with chunk-based weighted loss.
         """
-        if self.classifier_type == "gr_attention_based":
+        if self.classifier_type == "grg_attention_based":
             raise NotImplementedError(
-                "Variable-length training is not yet supported for gr_attention_based classifier. "
+                "Variable-length training is not yet supported for grg_attention_based classifier. "
                 "Please use fixed-length training or implement VariableLengthDataset with DMR support."
             )
 
@@ -955,7 +957,7 @@ class Dismir(AbstractReadClassifier):
         best_val_loss = float("inf")
         patience_counter = 0
         session_start_time = time.time()
-        use_dmr = self.classifier_type == "gr_attention_based"
+        use_dmr = self.classifier_type == "grg_attention_based"
 
         if verbose > 0:
             print(f"Start {mode}-length training...")
@@ -992,7 +994,7 @@ class Dismir(AbstractReadClassifier):
                 optimizer.zero_grad()
 
                 if use_dmr:
-                    outputs, _ = self.model(X_batch, gr_ids=dmr_batch)
+                    outputs, _ = self.model(X_batch, grg_ids=dmr_batch)
                 else:
                     outputs = self.model(X_batch)
 
@@ -1047,7 +1049,7 @@ class Dismir(AbstractReadClassifier):
                         X_val = X_val.to(self.device)
                         y_val = y_val.to(self.device)
                         dmr_val = dmr_val.to(self.device)
-                        val_outputs, _ = self.model(X_val, gr_ids=dmr_val)
+                        val_outputs, _ = self.model(X_val, grg_ids=dmr_val)
                     else:
                         X_val, y_val = batch
                         X_val = X_val.to(self.device)
@@ -1394,7 +1396,7 @@ class Dismir(AbstractReadClassifier):
         self,
         dna_sequences,
         methylation_sequences,
-        gr_ids=None,
+        grg_ids=None,
         batch_size=128,
         threshold=0.5,
         parallel_scan=True,
@@ -1406,27 +1408,27 @@ class Dismir(AbstractReadClassifier):
         Args:
             dna_sequences: list (or array-like) of DNA strings
             methylation_sequences: list (or array-like) of methylation strings ("0"/"1")
-            gr_ids: array-like of DMR labels (required for gr_attention_based classifier)
+            grg_ids: array-like of DMR labels (required for grg_attention_based classifier)
             batch_size: batch size for inference
             threshold: classification threshold for 'positive' label
             parallel_scan: whether to use parallel scan for MinGRU
-            return_attention: if True and using gr_attention_based, also return attention weights
+            return_attention: if True and using grg_attention_based, also return attention weights
 
         Returns:
             For vanilla: (probabilities, predicted_labels)
-            For gr_attention_based with return_attention=False: (probabilities, predicted_labels)
-            For gr_attention_based with return_attention=True: (probabilities, predicted_labels, attention_weights)
+            For grg_attention_based with return_attention=False: (probabilities, predicted_labels)
+            For grg_attention_based with return_attention=True: (probabilities, predicted_labels, attention_weights)
         """
         self.model.eval()
 
         # Validate DMR IDs for attention-based classifier
-        if self.classifier_type == "gr_attention_based":
-            if gr_ids is None:
+        if self.classifier_type == "grg_attention_based":
+            if grg_ids is None:
                 raise ValueError(
-                    "gr_ids must be provided for gr_attention_based classifier"
+                    "grg_ids must be provided for grg_attention_based classifier"
                 )
-            if len(gr_ids) != len(dna_sequences):
-                raise ValueError("gr_ids must have the same length as dna_sequences")
+            if len(grg_ids) != len(dna_sequences):
+                raise ValueError("grg_ids must have the same length as dna_sequences")
 
         # Convert to one-hot + methylation
         onehot_data = self.conv_onehot(dna_sequences, methylation_sequences)
@@ -1434,8 +1436,8 @@ class Dismir(AbstractReadClassifier):
         # Create PyTorch dataset and dataloader
         X_tensor = torch.tensor(onehot_data, dtype=torch.float32)
 
-        if self.classifier_type == "gr_attention_based":
-            dmr_tensor = torch.tensor(np.array(gr_ids), dtype=torch.long)
+        if self.classifier_type == "grg_attention_based":
+            dmr_tensor = torch.tensor(np.array(grg_ids), dtype=torch.long)
             dataset = torch.utils.data.TensorDataset(X_tensor, dmr_tensor)
         else:
             dataset = torch.utils.data.TensorDataset(X_tensor)
@@ -1448,18 +1450,18 @@ class Dismir(AbstractReadClassifier):
         all_outputs = []
         all_attention_weights = (
             []
-            if return_attention and self.classifier_type == "gr_attention_based"
+            if return_attention and self.classifier_type == "grg_attention_based"
             else None
         )
 
         with torch.no_grad():
             for batch in tqdm(loader, "predicting batches"):
-                if self.classifier_type == "gr_attention_based":
+                if self.classifier_type == "grg_attention_based":
                     X_batch, dmr_batch = batch
                     X_batch = X_batch.to(self.device)
                     dmr_batch = dmr_batch.to(self.device)
                     outputs, attn_weights = self.model(
-                        X_batch, parallel_scan=parallel_scan, gr_ids=dmr_batch
+                        X_batch, parallel_scan=parallel_scan, grg_ids=dmr_batch
                     )
 
                     # Apply sigmoid for probability output (model returns logits)
@@ -1485,7 +1487,7 @@ class Dismir(AbstractReadClassifier):
         else:
             predicted_labels = all_outputs.argmax(axis=-1)
 
-        if return_attention and self.classifier_type == "gr_attention_based":
+        if return_attention and self.classifier_type == "grg_attention_based":
             all_attention_weights = np.concatenate(all_attention_weights, axis=0)
             return all_outputs, predicted_labels, all_attention_weights
 
@@ -1504,18 +1506,18 @@ class Dismir(AbstractReadClassifier):
                 - dismir_flavor: model architecture flavor (default: "lstm")
                 - num_labels: number of output labels (required)
                 - classifier_head_implementation: type of classifier head
-                    (default: "gr_attention_based")
-                - num_gr_labels: number of DMR labels (default: 39, only used if
-                    classifier_head_implementation is "gr_attention_based")
+                    (default: "grg_attention_based")
+                - num_grg_labels: number of DMR labels (default: 39, only used if
+                    classifier_head_implementation is "grg_attention_based")
                 - grg_label_column: name of the DMR label column in the dataset
-                    (required if classifier_head_implementation is "gr_attention_based")
+                    (required if classifier_head_implementation is "grg_attention_based")
         """
         classifier_head_implementation = kwargs.get(
-            "classifier_head_implementation", "gr_attention_based"
+            "classifier_head_implementation", "grg_attention_based"
         )
         grg_label_column = (
             kwargs["grg_label_column"]
-            if classifier_head_implementation == "gr_attention_based"
+            if classifier_head_implementation == "grg_attention_based"
             else None
         )
         instance = cls(
@@ -1526,9 +1528,9 @@ class Dismir(AbstractReadClassifier):
             flavour=kwargs.get("dismir_flavor", "lstm"),
             num_labels=kwargs["num_labels"],
             classifier_type=kwargs.get(
-                "classifier_head_implementation", "gr_attention_based"
+                "classifier_head_implementation", "grg_attention_based"
             ),
-            num_gr_labels=kwargs.get("num_gr_labels", 39),
+            num_grg_labels=kwargs.get("num_grg_labels", 39),
             dmr_label_col=grg_label_column,
         )
         # Load pre-trained weights
@@ -1557,15 +1559,15 @@ class Dismir(AbstractReadClassifier):
         methylation_sequences = split_df[meth_col].tolist()
 
         # DMR ids if using attention-based classifier
-        gr_ids = None
-        if self.classifier_type == "gr_attention_based":
-            gr_ids = split_df[self.dmr_label_col].values
+        grg_ids = None
+        if self.classifier_type == "grg_attention_based":
+            grg_ids = split_df[self.dmr_label_col].values
 
         # Run prediction
         probabilities, _ = self.predict(
             dna_sequences=dna_sequences,
             methylation_sequences=methylation_sequences,
-            gr_ids=gr_ids,
+            grg_ids=grg_ids,
             batch_size=batch_size,
         )
 

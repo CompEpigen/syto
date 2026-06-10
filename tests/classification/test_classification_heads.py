@@ -4,50 +4,50 @@ from types import SimpleNamespace
 import torch
 
 from syto.classification.classification_heads import (
-    GRAttentionClassificationHead,
+    GRGAttentionClassificationHead,
 )
 
 
 def build_test_config(
     hidden_size=8,
     num_labels=3,
-    num_gr_labels=4,
+    num_grg_labels=4,
     attention_probs_dropout_prob=0.0,
     hidden_dropout_prob=0.0,
     layer_norm_eps=1e-12,
 ):
-    """Create a minimal configuration object for GRAttentionClassificationHead tests."""
+    """Create a minimal configuration object for GRGAttentionClassificationHead tests."""
     return SimpleNamespace(
         hidden_size=hidden_size,
         num_labels=num_labels,
-        num_gr_labels=num_gr_labels,
+        num_grg_labels=num_grg_labels,
         attention_probs_dropout_prob=attention_probs_dropout_prob,
         hidden_dropout_prob=hidden_dropout_prob,
         layer_norm_eps=layer_norm_eps,
     )
 
 
-class TestGRAttentionClassificationHead(unittest.TestCase):
+class TestGRGAttentionClassificationHead(unittest.TestCase):
     """Exercise the public behavior of the DMR attention classifier."""
 
     def setUp(self):
         """Create a deterministic classifier and reusable test inputs."""
         torch.manual_seed(7)
         self.config = build_test_config()
-        self.classifier = GRAttentionClassificationHead(self.config)
+        self.classifier = GRGAttentionClassificationHead(self.config)
         self.classifier.eval()
 
     def test_initialization_builds_expected_layers(self):
         """Verify the classifier stores config values and wires submodules correctly."""
         self.assertEqual(self.classifier.hidden_size, self.config.hidden_size)
         self.assertEqual(self.classifier.num_labels, self.config.num_labels)
-        self.assertEqual(self.classifier.num_gr_labels, self.config.num_gr_labels)
+        self.assertEqual(self.classifier.num_grg_labels, self.config.num_grg_labels)
 
         self.assertEqual(
-            self.classifier.gr_embedding.num_embeddings, self.config.num_gr_labels
+            self.classifier.grg_embedding.num_embeddings, self.config.num_grg_labels
         )
         self.assertEqual(
-            self.classifier.gr_embedding.embedding_dim, self.config.hidden_size
+            self.classifier.grg_embedding.embedding_dim, self.config.hidden_size
         )
 
         self.assertEqual(
@@ -82,9 +82,9 @@ class TestGRAttentionClassificationHead(unittest.TestCase):
     ):
         """Ensure the unmasked forward path returns finite tensors with expected shapes."""
         sequence_output = torch.randn(2, 5, self.config.hidden_size)
-        gr_ids = torch.tensor([0, 3], dtype=torch.long)
+        grg_ids = torch.tensor([0, 3], dtype=torch.long)
 
-        logits, attention_weights = self.classifier(sequence_output, gr_ids)
+        logits, attention_weights = self.classifier(sequence_output, grg_ids)
 
         self.assertEqual(logits.shape, (2, self.config.num_labels))
         self.assertEqual(attention_weights.shape, (2, 5))
@@ -113,11 +113,11 @@ class TestGRAttentionClassificationHead(unittest.TestCase):
                 ]
             ]
         )
-        gr_ids = torch.tensor([1], dtype=torch.long)
+        grg_ids = torch.tensor([1], dtype=torch.long)
         attention_mask = torch.tensor([[1, 0, 0]], dtype=torch.long)
 
         logits, attention_weights = self.classifier(
-            sequence_output, gr_ids, attention_mask=attention_mask
+            sequence_output, grg_ids, attention_mask=attention_mask
         )
 
         self.assertEqual(logits.shape, (1, self.config.num_labels))
@@ -133,12 +133,12 @@ class TestGRAttentionClassificationHead(unittest.TestCase):
     def test_forward_with_mask_changes_attention_distribution(self):
         """Confirm that providing a mask changes the returned attention profile."""
         sequence_output = torch.randn(1, 4, self.config.hidden_size)
-        gr_ids = torch.tensor([2], dtype=torch.long)
+        grg_ids = torch.tensor([2], dtype=torch.long)
         attention_mask = torch.tensor([[1, 1, 0, 0]], dtype=torch.long)
 
-        _, unmasked_attention = self.classifier(sequence_output, gr_ids)
+        _, unmasked_attention = self.classifier(sequence_output, grg_ids)
         _, masked_attention = self.classifier(
-            sequence_output, gr_ids, attention_mask=attention_mask
+            sequence_output, grg_ids, attention_mask=attention_mask
         )
 
         self.assertFalse(torch.allclose(unmasked_attention, masked_attention))
@@ -154,11 +154,11 @@ class TestGRAttentionClassificationHead(unittest.TestCase):
     ):
         """Lock in the current all-zero-mask behavior as part of the public contract."""
         sequence_output = torch.randn(1, 4, self.config.hidden_size)
-        gr_ids = torch.tensor([1], dtype=torch.long)
+        grg_ids = torch.tensor([1], dtype=torch.long)
         attention_mask = torch.zeros((1, 4), dtype=torch.long)
 
         logits, attention_weights = self.classifier(
-            sequence_output, gr_ids, attention_mask=attention_mask
+            sequence_output, grg_ids, attention_mask=attention_mask
         )
 
         self.assertEqual(logits.shape, (1, self.config.num_labels))

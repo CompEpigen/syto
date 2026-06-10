@@ -31,7 +31,7 @@ from syto.classification.evaluation import (
     compute_metrics_soft_labels,
 )
 from syto.classification.classification_heads import (
-    GRAttentionClassificationHead,
+    GRGAttentionClassificationHead,
 )
 from syto.classification.loss import ConfidenceWeightedCrossEntropy, FocalLoss
 from syto.classification.classifiers.abstract_read_classifier import (
@@ -69,7 +69,7 @@ default_methylbert_config = OrderedDict(
 )
 
 
-def __chunk_tokens(tokens, window_size, stride):
+def _chunk_tokens(tokens, window_size, stride):
     """
     Splits a list of tokens into overlapping chunks of fixed size.
     Ensures no chunk is shorter than window_size (unless the total read is shorter).
@@ -96,7 +96,7 @@ def __chunk_tokens(tokens, window_size, stride):
         yield tokens[-window_size:]
 
 
-def __generate_valid_tokens(read_data, k=3):
+def _generate_valid_tokens(read_data, k=3):
     """
     Yields valid k-mers and their ORIGINAL indices.
     Skips any k-mer containing 'N'.
@@ -143,12 +143,12 @@ def extract_signal_mask(dataset):
 
 def prepare_methylbert_list(
     results_df,
-    gr_label_column,
+    grg_label_column,
     seq_length=150,
     stride=75,
     soft_labels=False,
     is_binary=False,
-    gr_ctype_label="dmr_ctype_label",
+    grg_ctype_label="dmr_ctype_label",
 ):
     """
     Prepares inference data with sliding window chunking.
@@ -159,8 +159,8 @@ def prepare_methylbert_list(
         [
             "dna_seq",
             "methyl_seq",
-            "gr_ctype",
-            "gr_label",
+            "grg_ctype",
+            "grg_label",
             "ctype",
             "original_label",
             "read_name",
@@ -171,7 +171,7 @@ def prepare_methylbert_list(
 
     for i, row in results_df.iterrows():
         # 1. Get the CLEAN stream of tokens (Ns removed)
-        processed_read_full = list(__generate_valid_tokens(row))
+        processed_read_full = list(_generate_valid_tokens(row))
         read_name = row["read_name"]
         # If read was entirely Ns or empty, skip
         if not processed_read_full:
@@ -179,32 +179,32 @@ def prepare_methylbert_list(
 
         # 2. Chunk the valid tokens
         # We process the read in chunks of 'seq_length'
-        for chunk in __chunk_tokens(
+        for chunk in _chunk_tokens(
             processed_read_full, window_size=seq_length, stride=stride
         ):
             dna = " ".join([x[0] for x in chunk])
             methyl = "".join([x[1] for x in chunk])
             ncpgs_marked = methyl.count("0") + methyl.count("1")
             if is_binary:
-                label = int(row[gr_label_column] == row["label"])
+                label = int(row[grg_label_column] == row["label"])
             else:
                 label = row["soft_label"] if soft_labels else row["label"]
 
             o_label = row["original_label"]
-            gr_label = row[gr_label_column]
-            gr_ctype = row[gr_ctype_label]
+            grg_label = row[grg_label_column]
+            grg_ctype = row[grg_ctype_label]
 
             data_list.append(
                 [
                     dna,
                     methyl,
-                    gr_ctype,
-                    gr_label,
+                    grg_ctype,
+                    grg_label,
                     label,
                     o_label,
                     read_name,
                     ncpgs_marked,
-                    o_label == gr_ctype,
+                    o_label == grg_ctype,
                 ]
             )
 
@@ -364,7 +364,7 @@ def methylbert_finetune_collator(features):
     batch = {
         "input_ids": torch.stack([f["input_ids"] for f in features]),
         "token_type_ids": torch.stack([f["token_type_ids"] for f in features]),
-        "gr_ids": torch.tensor([f["gr_ids"] for f in features], dtype=torch.long),
+        "grg_ids": torch.tensor([f["grg_ids"] for f in features], dtype=torch.long),
     }
 
     if "on_target_mask" in features[0]:
@@ -410,14 +410,14 @@ def methylbert_pretrain_collator(features):
 @dataclass
 class MethylBertOutput(ModelOutput):
     """
-    Custom output type for MethylBertEmbeddedGR,
+    Custom output type for MethylBertEmbeddedGRG,
     so we can include both the standard classification
-    outputs and extra `gr_logits`.
+    outputs and extra `grg_logits`.
     """
 
     loss: Optional[torch.FloatTensor] = None
     logits: torch.FloatTensor = None  # ctype_logits
-    gr_logits: Optional[torch.FloatTensor] = None  # e.g. appended hidden states
+    grg_logits: Optional[torch.FloatTensor] = None  # e.g. appended hidden states
     hidden_states: Optional[Tuple[torch.FloatTensor]] = None
     attentions: Optional[Tuple[torch.FloatTensor]] = None
 
@@ -434,13 +434,13 @@ METHYLBERT_PRETRAINED_MODEL_ARCHIVE_MAP = {
 @dataclass
 class MethylBertOutput(ModelOutput):
     """
-    Custom output type for MethylBertEmbeddedGR.
+    Custom output type for MethylBertEmbeddedGRG.
     """
 
     loss: Optional[torch.FloatTensor] = None
     logits: torch.FloatTensor = None
     loss_ce: Optional[torch.FloatTensor] = None
-    gr_logits: Optional[torch.FloatTensor] = None
+    grg_logits: Optional[torch.FloatTensor] = None
     hidden_states: Optional[Tuple[torch.FloatTensor]] = None
     attentions: Optional[Tuple[torch.FloatTensor]] = None
     attention_weights: Optional[torch.FloatTensor] = (
@@ -450,7 +450,7 @@ class MethylBertOutput(ModelOutput):
 
 class VanillaClassifier(nn.Module):
     """
-    Original vanilla classifier with GR encoding and flattening.
+    Original vanilla classifier with GRG encoding and flattening.
     Extracted as a separate module for clarity.
     """
 
@@ -458,11 +458,11 @@ class VanillaClassifier(nn.Module):
         super().__init__()
         self.seq_len = seq_len
         self.num_labels = config.num_labels
-        self.num_gr_labels = config.num_gr_labels
+        self.num_grg_labels = config.num_grg_labels
 
-        # GR encoder (embedding)
-        self.gr_encoder = nn.Sequential(
-            nn.Embedding(num_embeddings=self.num_gr_labels, embedding_dim=seq_len + 1),
+        # GRG encoder (embedding)
+        self.grg_encoder = nn.Sequential(
+            nn.Embedding(num_embeddings=self.num_grg_labels, embedding_dim=seq_len + 1),
         )
 
         # Read classifier with flattening
@@ -474,11 +474,11 @@ class VanillaClassifier(nn.Module):
             nn.Linear(seq_len + 1, self.num_labels),
         )
 
-    def forward(self, sequence_output, gr_ids):
+    def forward(self, sequence_output, grg_ids):
         """
         Args:
             sequence_output: [batch_size, seq_len, hidden_size] - BERT output after dropout
-            gr_ids: [batch_size] - GR labels
+            grg_ids: [batch_size] - GRG labels
 
         Returns:
             logits: [batch_size, num_labels] - classification logits
@@ -486,13 +486,13 @@ class VanillaClassifier(nn.Module):
         """
         batch_size = sequence_output.size(0)
 
-        # GR embedding
-        gr_embedding = self.gr_encoder(gr_ids.view(-1))  # [batch_size, seq_len+1]
+        # GRG embedding
+        grg_embedding = self.grg_encoder(grg_ids.view(-1))  # [batch_size, seq_len+1]
 
-        # Append GR embedding to each position in the sequence
+        # Append GRG embedding to each position in the sequence
         # shape -> [batch_size, seq_len, hidden_size+1]
         sequence_output_with_gr = torch.cat(
-            (sequence_output, gr_embedding.unsqueeze(-1)), dim=-1
+            (sequence_output, grg_embedding.unsqueeze(-1)), dim=-1
         )
 
         # Flatten for classifier
@@ -502,7 +502,7 @@ class VanillaClassifier(nn.Module):
         return logits, sequence_output_with_gr
 
 
-class MethylBertEmbeddedGR(BertPreTrainedModel):
+class MethylBertEmbeddedGRG(BertPreTrainedModel):
     """
     Extended MethylBERT with support for both vanilla and attention-based classifiers.
     """
@@ -519,7 +519,7 @@ class MethylBertEmbeddedGR(BertPreTrainedModel):
     def __init__(self, config, seq_len=150, classifier_implementation="vanilla"):
         super().__init__(config)
         self.num_labels = config.num_labels
-        self.num_gr_labels = config.num_gr_labels
+        self.num_grg_labels = config.num_grg_labels
         self.classifier_implementation = classifier_implementation
 
         # Ensure loss is in config
@@ -542,12 +542,12 @@ class MethylBertEmbeddedGR(BertPreTrainedModel):
 
         # Initialize the appropriate classifier based on implementation choice
         if classifier_implementation == "vanilla":
-            print("Using vanilla classifier with GR encoding and flattening")
+            print("Using vanilla classifier with GRG encoding and flattening")
             # For vanilla, we create the components directly (no VanillaClassifier wrapper)
             # This avoids tensor sharing issues
-            self.gr_encoder = nn.Sequential(
+            self.grg_encoder = nn.Sequential(
                 nn.Embedding(
-                    num_embeddings=self.num_gr_labels, embedding_dim=seq_len + 1
+                    num_embeddings=self.num_grg_labels, embedding_dim=seq_len + 1
                 ),
             )
 
@@ -560,16 +560,16 @@ class MethylBertEmbeddedGR(BertPreTrainedModel):
             )
             self.classifier = None  # No separate classifier module for vanilla
 
-        elif classifier_implementation == "gr_attention_based":
-            print("Using attention-based classifier with GR context")
-            self.classifier = GRAttentionClassificationHead(config)
+        elif classifier_implementation == "grg_attention_based":
+            print("Using attention-based classifier with GRG context")
+            self.classifier = GRGAttentionClassificationHead(config)
             # These won't be used in attention mode but set to None for clarity
             self.read_classifier = None
-            self.gr_encoder = None
+            self.grg_encoder = None
         else:
             raise ValueError(
                 f"Unknown classifier implementation: {classifier_implementation}. "
-                "Choose 'vanilla' or 'gr_attention_based'"
+                "Choose 'vanilla' or 'grg_attention_based'"
             )
 
         self.init_weights()
@@ -613,14 +613,14 @@ class MethylBertEmbeddedGR(BertPreTrainedModel):
                 "Warning: from_pretrained_read_classifier is only applicable for vanilla classifier"
             )
 
-    def from_pretrained_gr_encoder(self, pretrained_model_name_or_path, device="cpu"):
+    def from_pretrained_grg_encoder(self, pretrained_model_name_or_path, device="cpu"):
         if self.classifier_implementation == "vanilla":
-            self.classifier.gr_encoder.load_state_dict(
+            self.classifier.grg_encoder.load_state_dict(
                 torch.load(pretrained_model_name_or_path, map_location=device)
             )
         else:
             print(
-                "Warning: from_pretrained_gr_encoder is only applicable for vanilla classifier"
+                "Warning: from_pretrained_grg_encoder is only applicable for vanilla classifier"
             )
 
     def forward(
@@ -632,7 +632,7 @@ class MethylBertEmbeddedGR(BertPreTrainedModel):
         head_mask=None,
         inputs_embeds=None,
         labels=None,  # Cell Type labels
-        gr_ids=None,  # GR labels
+        grg_ids=None,  # GRG labels
         on_target_mask=None,  # Whether or not the read is on target
     ):
         outputs = self.bert(
@@ -648,27 +648,27 @@ class MethylBertEmbeddedGR(BertPreTrainedModel):
 
         # Apply the appropriate classifier
         if self.classifier_implementation == "vanilla":
-            # GR embedding
-            gr_embedding = self.gr_encoder(gr_ids.view(-1))  # [batch, seq_len+1]
+            # GRG embedding
+            grg_embedding = self.grg_encoder(grg_ids.view(-1))  # [batch, seq_len+1]
             # Append along last dimension
             # shape -> [batch, seq_len, hidden_size+1]
             sequence_output = torch.cat(
-                (sequence_output, gr_embedding.unsqueeze(-1)), dim=-1
+                (sequence_output, grg_embedding.unsqueeze(-1)), dim=-1
             )
 
-            # TODO: Think about more elegant way to incorporate gr_embeddings data before classification.
+            # TODO: Think about more elegant way to incorporate grg_embeddings data before classification.
 
             # Flatten for classifier
             batch_size = sequence_output.size(0)
             flat_seq = sequence_output.view(batch_size, -1)
             ctype_logits = self.read_classifier(flat_seq)  # shape [batch, n_classes]
-            gr_logits = sequence_output
+            grg_logits = sequence_output
             attention_weights = None
-        else:  # gr_attention_based
+        else:  # grg_attention_based
             ctype_logits, attention_weights = self.classifier(
-                sequence_output, gr_ids, attention_mask
+                sequence_output, grg_ids, attention_mask
             )
-            gr_logits = None  # Not applicable for attention-based
+            grg_logits = None  # Not applicable for attention-based
 
         # Calculate loss if labels are provided
         loss = None
@@ -710,7 +710,7 @@ class MethylBertEmbeddedGR(BertPreTrainedModel):
             loss=loss,
             loss_ce=loss_ce,
             logits=ctype_logits,
-            gr_logits=gr_logits,
+            grg_logits=grg_logits,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
             attention_weights=attention_weights,  # For interpretability in attention-based classifier
@@ -730,7 +730,7 @@ class MethylBert(AbstractReadClassifier):
         load_weights: bool = True,
         fine_tuned_model_path: Optional[str] = None,
         num_labels: int = 2,
-        num_gr_labels: int = 100,
+        num_grg_labels: int = 100,
         output_dir: str = "tmp_trainer",
         batch_size=None,
         lazy_tokenization=False,
@@ -744,7 +744,7 @@ class MethylBert(AbstractReadClassifier):
         Args:
             ... (existing parameters) ...
             classifier_implementation: str
-                Choice of classifier: "vanilla" or "gr_attention_based"
+                Choice of classifier: "vanilla" or "grg_attention_based"
             soft_labels: bool
                 If True, use soft-label collator and tokenizer for probability vectors.
         """
@@ -758,12 +758,12 @@ class MethylBert(AbstractReadClassifier):
         self.classifier_implementation = classifier_implementation
         self.soft_labels = soft_labels
         self.num_labels = num_labels
-        self.num_gr_labels = num_gr_labels
+        self.num_grg_labels = num_grg_labels
 
         # Validate classifier implementation
-        if classifier_implementation not in ["vanilla", "gr_attention_based"]:
+        if classifier_implementation not in ["vanilla", "grg_attention_based"]:
             raise ValueError(
-                f"classifier_implementation must be 'vanilla' or 'gr_attention_based', "
+                f"classifier_implementation must be 'vanilla' or 'grg_attention_based', "
                 f"got {classifier_implementation}"
             )
 
@@ -774,7 +774,7 @@ class MethylBert(AbstractReadClassifier):
             config = BertConfig.from_pretrained(foundation_model_path)
 
         config.num_labels = num_labels
-        config.num_gr_labels = num_gr_labels
+        config.num_grg_labels = num_grg_labels
         config.loss = self._config["loss"]
 
         # Validate loss type based on num_labels
@@ -796,9 +796,9 @@ class MethylBert(AbstractReadClassifier):
         # Build the model with selected classifier implementation
         if not load_weights:
             print(
-                f"Initializing MethylBertEmbeddedGR with {classifier_implementation} classifier from config only"
+                f"Initializing MethylBertEmbeddedGRG with {classifier_implementation} classifier from config only"
             )
-            self.model = MethylBertEmbeddedGR(
+            self.model = MethylBertEmbeddedGRG(
                 config,
                 seq_len=seq_len,
                 classifier_implementation=classifier_implementation,
@@ -806,12 +806,12 @@ class MethylBert(AbstractReadClassifier):
         else:
             if fine_tuned_model_path:
                 print(
-                    f"Loading MethylBertEmbeddedGR with {classifier_implementation} classifier "
+                    f"Loading MethylBertEmbeddedGRG with {classifier_implementation} classifier "
                     f"from fine-tuned path: {fine_tuned_model_path}"
                 )
                 # Note: When loading a pretrained model, you might need to handle
                 # the classifier_implementation parameter appropriately
-                self.model = MethylBertEmbeddedGR.from_pretrained(
+                self.model = MethylBertEmbeddedGRG.from_pretrained(
                     pretrained_model_name_or_path=fine_tuned_model_path,
                     config=config,
                     seq_len=seq_len,
@@ -820,10 +820,10 @@ class MethylBert(AbstractReadClassifier):
                 )
             else:
                 print(
-                    f"Loading MethylBertEmbeddedGR with {classifier_implementation} classifier "
+                    f"Loading MethylBertEmbeddedGRG with {classifier_implementation} classifier "
                     f"from foundation path: {foundation_model_path}"
                 )
-                self.model = MethylBertEmbeddedGR.from_pretrained(
+                self.model = MethylBertEmbeddedGRG.from_pretrained(
                     foundation_model_path,
                     config=config,
                     seq_len=seq_len,
@@ -1101,10 +1101,10 @@ class MethylBert(AbstractReadClassifier):
                 "foundation_model_path", "hanyangii/methylbert_hg19_12l"
             ),
             num_labels=num_labels,
-            num_gr_labels=kwargs.get("num_gr_labels", 39),
+            num_grg_labels=kwargs.get("num_grg_labels", 39),
             fine_tuned_model_path=path,
             classifier_implementation=kwargs.get(
-                "classifier_head_implementation", "gr_attention_based"
+                "classifier_head_implementation", "grg_attention_based"
             ),
             soft_labels=soft_labels,
             seq_len=kwargs.get("seq_length", 150),
@@ -1119,8 +1119,8 @@ class MethylBert(AbstractReadClassifier):
             split_df: DataFrame containing the data for a single split, with columns 'seq'
                 and 'pattern' for input sequences and methylation patterns, respectively.
             **kwargs: Additional keyword arguments for prediction, such as :
-                - gr_label_column: Name of the column in split_df that contains GR labels
-                    (default: 'gr_ctype_label')
+                - grg_label_column: Name of the column in split_df that contains GRG labels
+                    (default: 'grg_ctype_label')
                 - batch_size: Batch size for prediction (default: 2200)
         """
         # Prepare chunked input data
@@ -1130,7 +1130,7 @@ class MethylBert(AbstractReadClassifier):
 
         data_list = prepare_methylbert_list(
             input_df,
-            gr_label_column=kwargs.get("gr_label_column", "gr_ctype_label"),
+            grg_label_column=kwargs.get("grg_label_column", "grg_ctype_label"),
             seq_length=self.seq_len,
             stride=int(self.seq_len / 2),
             soft_labels=self.soft_labels,
@@ -1239,10 +1239,10 @@ def _line2tokens_finetune(l, tokenizer, max_len=150, headers=None, soft_labels=F
     Otherwise, parses 'ctype' as an integer.
     """
     # 1. Check the header
-    required_headers = {"dna_seq", "methyl_seq", "ctype", "gr_ctype", "gr_label"}
+    required_headers = {"dna_seq", "methyl_seq", "ctype", "grg_ctype", "grg_label"}
     if not required_headers.issubset(headers):
         raise ValueError(
-            "The header must contain dna_seq, methyl_seq, ctype, gr_ctype, gr_label"
+            "The header must contain dna_seq, methyl_seq, ctype, grg_ctype, grg_label"
         )
 
     # Cannot have more than 510 tokens in sequence due to positional embeddings
@@ -1279,7 +1279,7 @@ def _line2tokens_finetune(l, tokenizer, max_len=150, headers=None, soft_labels=F
     else:
         l["ctype_label"] = int(l["ctype"])
 
-    l["gr_label"] = int(l["gr_label"])
+    l["grg_label"] = int(l["grg_label"])
 
     # 5. Truncate or Pad Sequences
     if len(l["dna_seq"]) > max_len:
@@ -1546,12 +1546,12 @@ class MethylBertFinetuneDataset(MethylBertDataset):
         else:
             self.f_path = None
             self.headers = data_source[0]
-            if "gr_label" not in self.headers:
-                self.headers.append("gr_label")
+            if "grg_label" not in self.headers:
+                self.headers.append("grg_label")
                 for row in data_source[1:]:
                     row.append(0)
-            if "gr_ctype" not in self.headers:
-                self.headers.append("gr_ctype")
+            if "grg_ctype" not in self.headers:
+                self.headers.append("grg_ctype")
                 for row in data_source[1:]:
                     row.append(1)
             if "on_target_mask" not in self.headers:
@@ -1626,11 +1626,11 @@ class MethylBertFinetuneDataset(MethylBertDataset):
 
         # Compute statistics
         if not lazy_tokenization:
-            self.set_gr_labels = set([l["gr_label"] for l in self.lines])
+            self.set_grg_labels = set([l["grg_label"] for l in self.lines])
             self.ctype_label_count = self._get_cls_num()
             print("# of reads in each label:", self.ctype_label_count)
         else:
-            self.set_gr_labels = None
+            self.set_grg_labels = None
             self.ctype_label_count = None
 
     def _tokenize_single_line(self, index):
@@ -1679,16 +1679,16 @@ class MethylBertFinetuneDataset(MethylBertDataset):
         return label_count
 
     def num_grs(self):
-        """Number of possible GR classes."""
+        """Number of possible GRG classes."""
         if self.lazy_tokenization:
             # Compute on-demand if needed
-            if self.set_gr_labels is None:
-                gr_labels = set()
+            if self.set_grg_labels is None:
+                grg_labels = set()
                 for i in range(len(self)):
                     item = self._tokenize_single_line(i)
-                    gr_labels.add(item["gr_label"])
-                self.set_gr_labels = gr_labels
-        return max(len(self.set_gr_labels), max(self.set_gr_labels) + 1)
+                    grg_labels.add(item["grg_label"])
+                self.set_grg_labels = grg_labels
+        return max(len(self.set_grg_labels), max(self.set_grg_labels) + 1)
 
     def subset_data(self, n_seq):
         """Truncate dataset to n_seq samples."""
@@ -1752,7 +1752,7 @@ class MethylBertFinetuneDataset(MethylBertDataset):
             "input_ids": dna_seq,
             "token_type_ids": methyl_seq,
             "labels": labels,
-            "gr_ids": item["gr_label"],
+            "grg_ids": item["grg_label"],
             "on_target_mask": on_target_tensor,
         }
 

@@ -376,7 +376,7 @@ class InferencePipeline:
                 "foundation_model", "hanyangii/methylbert_hg19_12l"
             ),
             classifier_head_implementation=classifier_cfg.get(
-                "classifier_head_implementation", "gr_attention_based"
+                "classifier_head_implementation", "grg_attention_based"
             ),
             dmr_label_column=classifier_cfg.get("dmr_label_column", "dmr_ctype_label"),
             dismir_flavor=classifier_cfg.get("dismir_flavor", "lstm"),

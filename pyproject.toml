@@ -2,7 +2,7 @@
 name = "syto"
 version = "0.5.0"
 description = ""
-authors = ["Dmytro Rizdvanteskyi", "Nathan Roos"]
+authors = ["Dmytro Rizdvanetskyi", "Nathan Roos"]
 readme = "README.md"
 packages = [{include = "syto"}]
 

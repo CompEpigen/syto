@@ -28,7 +28,7 @@ from syto.data.dataset import *
 from safetensors.torch import load_file
 from transformers.models.bert.configuration_bert import BertConfig
 from syto.classification.classification_heads import (
-    GRAttentionClassificationHead,
+    GRGAttentionClassificationHead,
 )
 from syto.classification.loss import ConfidenceWeightedCrossEntropy
 
@@ -258,7 +258,7 @@ class BertForSequenceClassification(BertPreTrainedModel):
     """
 
     def __init__(
-        self, prertained_model, num_labels=None, num_gr_labels=None, soft_labels=False
+        self, prertained_model, num_labels=None, num_grg_labels=None, soft_labels=False
     ):
         super().__init__(prertained_model.config)
         # Overwritting num_labels if those were provided during constructio since the foundational model features classifier with 2 labels
@@ -273,14 +273,14 @@ class BertForSequenceClassification(BertPreTrainedModel):
 
         self.bert = BertModel(prertained_model.bert)  # Reconstructing original model
         self.dropout = prertained_model.dropout
-        self.num_gr_labels = num_gr_labels
+        self.num_grg_labels = num_grg_labels
         self.soft_labels = soft_labels
-        if num_gr_labels is None:
+        if num_grg_labels is None:
             self.classifier = prertained_model.classifier
         else:
-            self.config.num_gr_labels = num_gr_labels
+            self.config.num_grg_labels = num_grg_labels
             self.config.num_labels = num_labels
-            self.classifier = GRAttentionClassificationHead(self.config)
+            self.classifier = GRGAttentionClassificationHead(self.config)
         # Initialize weights and apply final processing
         self.post_init()
 
@@ -298,7 +298,7 @@ class BertForSequenceClassification(BertPreTrainedModel):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
-        gr_ids: Optional[torch.Tensor] = None,  # DMR labels
+        grg_ids: Optional[torch.Tensor] = None,  # DMR labels
     ) -> Union[Tuple[torch.Tensor], SequenceClassifierOutput]:
         # labels (`torch.LongTensor` of shape `(batch_size,)`, *optional*):
         # Labels for computing the sequence classification/regression loss.
@@ -325,14 +325,14 @@ class BertForSequenceClassification(BertPreTrainedModel):
             return_dict=return_dict,
         )
 
-        if self.num_gr_labels is None:
+        if self.num_grg_labels is None:
             pooled_output = outputs[1]
             pooled_output = self.dropout(pooled_output)
             logits = self.classifier(pooled_output)
         else:
             sequence_output = outputs[0]
             sequence_output = self.dropout(sequence_output)
-            logits, _ = self.classifier(sequence_output, gr_ids, attention_mask)
+            logits, _ = self.classifier(sequence_output, grg_ids, attention_mask)
 
         loss = None
         if labels is not None:
@@ -421,17 +421,17 @@ def initialize_model_with_custom_embeddings(
     use_cpg,
     use_m6a,
     num_labels=None,
-    num_gr_labels=None,
+    num_grg_labels=None,
     soft_labels=False,
 ):
     base_model.bert.embeddings = BertEmbeddings(base_model.bert, use_cpg, use_m6a)
     model = BertForSequenceClassification(
         base_model,
         num_labels=num_labels,
-        num_gr_labels=num_gr_labels,
+        num_grg_labels=num_grg_labels,
         soft_labels=soft_labels,
     )
-    if num_gr_labels is None:
+    if num_grg_labels is None:
         model.classifier = nn.Linear(768, out_features=num_labels, bias=True)
     return model
 
@@ -449,14 +449,14 @@ class EpigenDnabert2:
         trust_remote_code=True,
         use_triton=True,
         training_args=None,
-        num_gr_labels=None,
+        num_grg_labels=None,
         soft_labels=False,
     ):
 
         assert len(
             foundation_model_huggingface
         ), "Must specify foundation model path hosted on Hugging Face"
-        self.num_gr_labels = num_gr_labels
+        self.num_grg_labels = num_grg_labels
         self.soft_labels = soft_labels
 
         config = BertForSequenceClassification.config_class.from_pretrained(
@@ -477,7 +477,7 @@ class EpigenDnabert2:
             use_cpg_methylation,
             use_m6a_methylation,
             num_labels=num_labels,
-            num_gr_labels=num_gr_labels,
+            num_grg_labels=num_grg_labels,
             soft_labels=soft_labels,
         )
 
@@ -508,7 +508,7 @@ class EpigenDnabert2:
                 use_cpg_methylation,
                 use_m6a_methylation,
                 num_labels=num_labels,
-                num_gr_labels=num_gr_labels,
+                num_grg_labels=num_grg_labels,
                 soft_labels=soft_labels,
             )
         self.model = model

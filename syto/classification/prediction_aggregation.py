@@ -101,8 +101,8 @@ def _fill_in_missing_labels(
 
 def fill_in_missing_gr_groups(
     df: pd.DataFrame,
-    expected_gr_ids: List[int],
-    gr_label_column: str = "dmr_ctype_label",
+    expected_grg_ids: List[int],
+    grg_label_column: str = "dmr_ctype_label",
     n_classes: int = 39,
     substitution_strategy: str = "uniform_number",
     uniform_prior: Optional[pd.DataFrame] = None,
@@ -113,26 +113,26 @@ def fill_in_missing_gr_groups(
     This is a simplified v2 of ``_fill_in_missing_labels`` that takes a list
     of expected GR group IDs instead of a labels dict.
 
-    After inserting synthetic zero rows for any GR IDs in *expected_gr_ids*
+    After inserting synthetic zero rows for any GR IDs in *expected_grg_ids*
     that are absent from *df*, a post-processing step is applied depending
     on *substitution_strategy*:
 
-    * ``"prior_blending"`` – blend **every** row with the uniform prior
+    * ``"prior_blending"`` - blend **every** row with the uniform prior
       using the per-row ``n_reads`` count:
       ``blended = (n / (n + w)) * observed + (w / (n + w)) * prior``
       where *w* = *prior_weight*.  Rows with ``n_reads == 0`` collapse
       entirely to the prior.
-    * ``"prior_imputation"`` – replace only rows with ``n_reads == 0``
+    * ``"prior_imputation"`` - replace only rows with ``n_reads == 0``
       with the corresponding prior row; all other rows are untouched.
-    * ``"uniform_number"`` – assigns each cell a probability of 1/n_classes.
+    * ``"uniform_number"`` - assigns each cell a probability of 1/n_classes.
 
     Parameters
     ----------
     df : pd.DataFrame
         GR-aggregated predictions (output of ``aggregate_predictions_by_grg``).
-    expected_gr_ids : List[int]
+    expected_grg_ids : List[int]
         List of GR group IDs that should be present in the output.
-    gr_label_column : str
+    grg_label_column : str
         Column name containing the GR group labels. Default: "dmr_ctype_label".
     n_classes : int
         Number of classes for uniform_number substitution. Default: 39.
@@ -163,24 +163,24 @@ def fill_in_missing_gr_groups(
     df = df.copy()
 
     # Find missing GR IDs
-    present_gr_ids = set(df[gr_label_column].unique())
-    expected_gr_ids_set = set(expected_gr_ids)
-    missing_gr_ids = expected_gr_ids_set - present_gr_ids
+    present_grg_ids = set(df[grg_label_column].unique())
+    expected_grg_ids_set = set(expected_grg_ids)
+    missing_grg_ids = expected_grg_ids_set - present_grg_ids
 
-    if missing_gr_ids:
+    if missing_grg_ids:
         # Create synthetic rows for missing GR IDs
         # Identify columns to fill
-        non_group_cols = [col for col in df.columns if col != gr_label_column]
+        non_group_cols = [col for col in df.columns if col != grg_label_column]
         prediction_cols = [col for col in non_group_cols if "prediction" in col]
         numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
         string_cols = df.select_dtypes(include=[object]).columns.tolist()
 
         synthetic_rows = []
-        for gr_id in missing_gr_ids:
-            row = {gr_label_column: gr_id}
+        for grg_id in missing_grg_ids:
+            row = {grg_label_column: grg_id}
             # Fill numeric columns with appropriate defaults
             for col in numeric_cols:
-                if col == gr_label_column:
+                if col == grg_label_column:
                     continue
                 if col in prediction_cols:
                     if substitution_strategy == "uniform_number":
@@ -202,7 +202,7 @@ def fill_in_missing_gr_groups(
         df = pd.concat([df, synthetic_df], ignore_index=True)
 
     # Sort by GR label for consistent ordering
-    df = df.sort_values(gr_label_column).reset_index(drop=True)
+    df = df.sort_values(grg_label_column).reset_index(drop=True)
 
     # ── Apply substitution strategy ─────────────────────────────────────
     if substitution_strategy in ("prior_blending", "prior_imputation"):
