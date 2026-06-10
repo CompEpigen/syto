@@ -117,14 +117,14 @@ def fill_in_missing_gr_groups(
     that are absent from *df*, a post-processing step is applied depending
     on *substitution_strategy*:
 
-    * ``"prior_blending"`` – blend **every** row with the uniform prior
+    * ``"prior_blending"`` - blend **every** row with the uniform prior
       using the per-row ``n_reads`` count:
       ``blended = (n / (n + w)) * observed + (w / (n + w)) * prior``
       where *w* = *prior_weight*.  Rows with ``n_reads == 0`` collapse
       entirely to the prior.
-    * ``"prior_imputation"`` – replace only rows with ``n_reads == 0``
+    * ``"prior_imputation"`` - replace only rows with ``n_reads == 0``
       with the corresponding prior row; all other rows are untouched.
-    * ``"uniform_number"`` – assigns each cell a probability of 1/n_classes.
+    * ``"uniform_number"`` - assigns each cell a probability of 1/n_classes.
 
     Parameters
     ----------

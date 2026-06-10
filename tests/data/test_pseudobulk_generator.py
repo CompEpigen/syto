@@ -21,9 +21,6 @@ from syto.data.hdf5_utils import (
     GenerationParameters,
     HDF5BatchWriter,
 )
-from syto.classification.prediction_aggregation import (
-    aggregate_predictions_by_grg_optimized,
-)
 
 # pylint: disable=protected-access
 

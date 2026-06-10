@@ -7,7 +7,7 @@ read-level prediction dataframes. It supports:
 - HDF5 output format with full reproducibility metadata
 """
 
-from typing import Literal, Dict, Tuple, Any, Union, List
+from typing import Literal, Dict, Tuple, Any, Union, List, Optional
 from pathlib import Path
 import logging
 
@@ -340,18 +340,21 @@ class PseudobulkGenerator:
         for split_name in config.splits_order:
             if split_name in config.splits_completed:
                 self.logger.info("Skipping completed split: %s", split_name)
-                # Load pure profiles if they exist
-                # TODO: Load from batch files during consolidation
+                # Pure profiles are not persisted to intermediate batch files, so
+                # regenerate them here to make them available for consolidation.
+                pure_profiles[split_name] = self._generate_pure_profiles(split_name)
                 continue
 
             self.logger.info("Generating pseudobulk for split: %s", split_name)
 
-            # Generate pseudobulks for this split
-            self._generate_single_split(split_name)
-
             # Generate pure profiles for this split
             pure_profile = self._generate_pure_profiles(split_name)
             pure_profiles[split_name] = pure_profile
+
+            # Generate pseudobulks for this split
+            self._generate_single_split(
+                split_name, uniform_prior_matrix=pure_profile.uniform_prior
+            )
 
             # Mark split as completed
             self.checkpoint_manager.mark_split_completed(split_name)
@@ -376,11 +379,19 @@ class PseudobulkGenerator:
         self.logger.info("Generation complete: %s", final_path)
         return final_path
 
-    def _generate_single_split(self, split_name: str) -> None:
+    def _generate_single_split(
+        self,
+        split_name: str,
+        uniform_prior_matrix: Optional[np.ndarray] = None,
+    ) -> None:
         """Generate all pseudobulk batches for a single split using Dask.
 
         Args:
             split_name: Name of the split to generate (e.g., 'train', 'valid', 'test').
+            uniform_prior_matrix: Pre-computed uniform prior (from
+                ``_generate_pure_profiles``) used by the substitution strategy when
+                filling missing GR groups. Required for "prior_blending" and
+                "prior_imputation" substitution methods.
         """
         target_proportions = self.target_proportions_per_split[split_name]
         n_pseudobulks = len(target_proportions)
@@ -438,6 +449,8 @@ class PseudobulkGenerator:
                     grg_label_column=self.grg_label_column,
                     columns_to_keep=self.columns_to_keep,
                     grg_sampling_type=self.parameters.grg_sampling_method,
+                    substitution_strategy=self.parameters.substitution_method,
+                    uniform_prior_matrix=uniform_prior_matrix,
                     index=idx,
                 )
                 delayed_results.append(result)
@@ -507,8 +520,7 @@ class PseudobulkGenerator:
                 expected_grg_ids=expected_grg_ids,
                 grg_label_column=self.grg_label_column,
                 n_classes=n_classes,
-                substitution_strategy=self.parameters.substitution_method,
-                uniform_prior=None,  # Will be computed after first pass if needed
+                substitution_strategy="uniform_number",
             )
             result.aggregated_features = filled_features
             pure_results.append(result)
@@ -577,6 +589,10 @@ class PseudobulkGenerator:
         grg_label_column: str,
         columns_to_keep: list[str] = None,
         grg_sampling_type: Literal["uniform_multinomial"] = "uniform_multinomial",
+        substitution_strategy: Optional[
+            Literal["uniform_number", "prior_blending", "prior_imputation"]
+        ] = None,
+        uniform_prior_matrix: Optional[np.ndarray] = None,
         index: int = 0,
     ) -> PseudobulkResult:
         """Generate a single pseudobulk sample by sampling and aggregating reads.
@@ -601,6 +617,15 @@ class PseudobulkGenerator:
             columns_to_keep: Columns to keep in aggregated output. If None, keeps all.
             grg_sampling_type: The method to use for sampling reads across GR groups.
                 Currently only supports "uniform_multinomial".
+            substitution_strategy: Strategy for filling missing GR groups. One of
+                "uniform_number", "prior_blending", "prior_imputation", or None.
+                If None, no filling of missing GR groups is performed. If
+                "prior_blending" or "prior_imputation", ``uniform_prior_matrix``
+                must be provided.
+            uniform_prior_matrix: Pre-computed uniform prior as a numpy array of
+                shape (n_gr_groups, n_numeric_features) whose columns align with the
+                numeric columns of the aggregated output. Required when
+                ``substitution_strategy`` is "prior_blending" or "prior_imputation".
             index: Index to assign to this pseudobulk result.
 
         Returns:
@@ -612,6 +637,13 @@ class PseudobulkGenerator:
         assert grg_sampling_type in [
             "uniform_multinomial"
         ], f"Unsupported grg_sampling_type: {grg_sampling_type}"
+        if substitution_strategy in ("prior_blending", "prior_imputation") and (
+            uniform_prior_matrix is None
+        ):
+            raise ValueError(
+                "uniform_prior_matrix must be provided when substitution_strategy "
+                f"is '{substitution_strategy}'."
+            )
         target_proportions = np.asarray(target_proportions, dtype=np.float64)
 
         # Compute the number of reads to sample from each class
@@ -687,6 +719,29 @@ class PseudobulkGenerator:
                 col for col in columns_to_keep if col in aggregated_features.columns
             ]
             aggregated_features = aggregated_features[columns_to_keep]
+
+        # Optionally fill in missing GR groups and apply the substitution strategy
+        if substitution_strategy is not None:
+            expected_grg_ids = list(range(n_gr_groups))
+            uniform_prior_df = None
+            if uniform_prior_matrix is not None:
+                numeric_prior_cols = [
+                    col
+                    for col in aggregated_features.columns
+                    if pd.api.types.is_numeric_dtype(aggregated_features[col].dtype)
+                ]
+                uniform_prior_df = pd.DataFrame(
+                    np.asarray(uniform_prior_matrix),
+                    columns=numeric_prior_cols,
+                )
+            aggregated_features = fill_in_missing_gr_groups(
+                df=aggregated_features,
+                expected_grg_ids=expected_grg_ids,
+                grg_label_column=grg_label_column,
+                n_classes=n_classes,
+                substitution_strategy=substitution_strategy,
+                uniform_prior=uniform_prior_df,
+            )
 
         return PseudobulkResult(
             index=index,
