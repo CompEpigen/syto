@@ -366,7 +366,6 @@ class TestBuildTargetColumns(unittest.TestCase):
         self.assertIn("total_weight", cols)
         self.assertIn("n_reads", cols)
 
-
     def test_custom_num_classes(self):
         """Verify prediction columns match num_prediction_classes."""
         cols = build_target_columns(num_prediction_classes=5)

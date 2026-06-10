@@ -688,9 +688,13 @@ class PseudobulkHDF5ConsolidationWriter:
         # Metadata subgroup
         meta_grp = inputs_grp.create_group("metadata")
         meta_grp.attrs[PseudobulkHDF5Schema.ATTR_GR_ID_COLUMN] = metadata.grg_id_column
-        meta_grp.attrs[PseudobulkHDF5Schema.ATTR_LABELING_SCHEME] = metadata.labeling_scheme
+        meta_grp.attrs[PseudobulkHDF5Schema.ATTR_LABELING_SCHEME] = (
+            metadata.labeling_scheme
+        )
         meta_grp.attrs[PseudobulkHDF5Schema.ATTR_CLASSIFIER] = metadata.classifier
-        meta_grp.attrs[PseudobulkHDF5Schema.ATTR_DATA_WATERMARK] = metadata.data_watermark
+        meta_grp.attrs[PseudobulkHDF5Schema.ATTR_DATA_WATERMARK] = (
+            metadata.data_watermark
+        )
         if metadata.data_stats:
             meta_grp.create_dataset(
                 PseudobulkHDF5Schema.DATASET_DATA_STATS,

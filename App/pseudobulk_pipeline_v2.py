@@ -84,7 +84,7 @@ class PseudoBulkPipelineV2:
         self.grg_label_column = config["grg_label_column"]
         self.columns_to_keep = config.get("columns_to_keep")
 
-        # [for Debug] parameter to generate n pseudobulks by sampling first n from the target proportions 
+        # [for Debug] parameter to generate n pseudobulks by sampling first n from the target proportions
         self.n_pseudobulks_to_sample = config.get("n_pseudobulks_to_sample", None)
 
     # ═══════════════════════════════════════════════════════════════
@@ -345,9 +345,10 @@ class PseudoBulkPipelineV2:
             proportions = tp_data["proportions"]
             if self.n_pseudobulks_to_sample is not None:
                 self.logger.info(
-                "  n_pseudobulks_to_sample was set in config. Sampling first %d pseudobulks", self.n_pseudobulks_to_sample
+                    "  n_pseudobulks_to_sample was set in config. Sampling first %d pseudobulks",
+                    self.n_pseudobulks_to_sample,
                 )
-                proportions = proportions[:self.n_pseudobulks_to_sample]
+                proportions = proportions[: self.n_pseudobulks_to_sample]
 
             self.logger.info(
                 "  Loaded %d proportions for %s", len(proportions), split_name

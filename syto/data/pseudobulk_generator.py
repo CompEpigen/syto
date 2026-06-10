@@ -202,8 +202,9 @@ class PseudobulkGenerator:
         self.checkpoint_manager = CheckpointManager(self.output_directory, self.logger)
         # Pre-heating checkpoints for target splits
         for split_name, proportions in self.target_proportions_per_split.items():
-            _ = self.checkpoint_manager.create_split_checkpoint(split_name, len(proportions), batch_size)
-
+            _ = self.checkpoint_manager.create_split_checkpoint(
+                split_name, len(proportions), batch_size
+            )
 
         # Pre-compute indices and numpy arrays for each split
         self._precompute_group_indices()
@@ -341,7 +342,7 @@ class PseudobulkGenerator:
         pure_profiles: Dict[str, PureProfileResult] = {}
 
         # Generate pseudobulk for each split
-        for split_name in config.splits_order:        
+        for split_name in config.splits_order:
             self.logger.info("Generating pseudobulk for split: %s", split_name)
 
             # Generate pure profiles for this split
@@ -564,8 +565,6 @@ class PseudobulkGenerator:
 
         # Mark pure profiles as done
         self.checkpoint_manager.mark_pure_profiles_done(split_name)
-
-        
 
         return PureProfileResult(
             split_name=split_name,
