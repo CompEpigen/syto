@@ -32,7 +32,7 @@ from syto.classification.prediction_aggregation import (
 from syto.classification.classifiers.lazy_classifier_factory import (
     read_classifier_factory,
 )
-from syto.deconvolution.uxm import (
+from baselines.uxm.uxm import (
     prepare_reads_for_uxm,
     uxm_deconvolution,
     rearange_uxm_deconvolution_results,

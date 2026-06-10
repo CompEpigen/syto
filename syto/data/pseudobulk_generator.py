@@ -7,7 +7,7 @@ read-level prediction dataframes. It supports:
 - HDF5 output format with full reproducibility metadata
 """
 
-from typing import Literal, Dict, Tuple, Any, Union, List, Optional
+from typing import Literal, Dict, Tuple, Union, List, Optional
 from pathlib import Path
 import logging
 

@@ -6,7 +6,7 @@ from unittest import mock
 import numpy as np
 import pandas as pd
 
-from syto.deconvolution import uxm
+from baselines.uxm import uxm
 
 
 def _make_valid_atlas_df():

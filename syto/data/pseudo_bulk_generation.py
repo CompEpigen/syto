@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
-from syto.deconvolution.uxm import (
+from baselines.uxm.uxm import (
     rearange_uxm_deconvolution_results,
     uxm_deconvolution,
 )

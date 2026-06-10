@@ -108,7 +108,7 @@ def prepare_splits_for_pseudobulk(
                 "cell_type_match_dict is required when generate_uxm_inputs=True"
             )
 
-        from syto.deconvolution.uxm import load_atlas, prepare_reads_for_uxm
+        from baselines.uxm.uxm import load_atlas, prepare_reads_for_uxm
 
         atlas, _ref_cells = load_atlas(atlas_path)
         atlas = atlas.sort_values(
