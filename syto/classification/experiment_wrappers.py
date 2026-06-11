@@ -614,7 +614,7 @@ class AbstractMLFlowExperiment:
                 continue
 
 
-class TransformersMLFLowExperiment(AbstractMLFlowExperiment):
+class TransformersMLFlowExperiment(AbstractMLFlowExperiment):
     def __init__(
         self,
         data_path,
@@ -943,7 +943,7 @@ class DismirMLflowExperiment(AbstractMLFlowExperiment):
             return results
 
 
-class EpigenBERT2MLflowExperiment(TransformersMLFLowExperiment):
+class EpigenBERT2MLflowExperiment(TransformersMLFlowExperiment):
     """
     MLflow wrapper for training EpigenBERT2 models across multiple datasets.
     """
@@ -1489,7 +1489,7 @@ class EpigenBERT2MLflowExperiment(TransformersMLFLowExperiment):
             return results
 
 
-class MethylBertMLflowExperiment(TransformersMLFLowExperiment):
+class MethylBertMLflowExperiment(TransformersMLFlowExperiment):
     """
     MLflow wrapper for training  MethylBert model across multiple chromosomes.
     """

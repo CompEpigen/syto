@@ -441,6 +441,9 @@ class DeconvolutionFittingPipeline:
                 model = MLPDeconvolver.load(path=save_path, metadata_path=meta_path)
         else:
 
+            X_train = features["train"]
+            y_train = proportions["train"]
+
             n_input_features = X_train.shape[1]
 
             if name == "swn":
@@ -451,9 +454,6 @@ class DeconvolutionFittingPipeline:
                 model = MLPDeconvolver(
                     n_input_features, self.num_output_labels, logger=self.logger
                 )
-
-            X_train = features["train"]
-            y_train = proportions["train"]
 
             model.fit(
                 X=X_train,
@@ -583,7 +583,7 @@ class DeconvolutionFittingPipeline:
                 m = data["metrics"]
                 self.logger.info(
                     f"  {model_name:30s}  "
-                    f"R2={m.get('overall_r2', 0.0):.6f}  "
+                    f"R2={m.get('r2', 0.0):.6f}  "
                     f"LoA=[{m.get('loa_lower', 0.0):.6f}, {m.get('loa_upper', 0.0):.6f}]  "
                     f"LoA(worst)=[{m.get('worst_class_loa_lower', 0.0):.6f}, "
                     f"{m.get('worst_class_loa_upper', 0.0):.6f}]  "
@@ -607,7 +607,7 @@ class DeconvolutionFittingPipeline:
             rows.append(
                 {
                     "model": model_name,
-                    "overall_r2": m.get("overall_r2"),
+                    "r2": m.get("r2"),
                     "loa_lower": m.get("loa_lower"),
                     "loa_upper": m.get("loa_upper"),
                     "worst_class_loa_lower": m.get("worst_class_loa_lower"),

@@ -14,8 +14,10 @@ from typing import Dict, Any
 import yaml
 from syto.classification.experiment_wrappers import (
     AbstractMLFlowExperiment,
-    TransformersMLFLowExperiment,
+    TransformersMLFlowExperiment,
 )
+
+# pylint: disable=import-outside-toplevel
 
 # Add parent directory to path for imports
 sys.path.append(str(Path(__file__).parent.parent))
@@ -78,7 +80,8 @@ def validate_config(config: Dict[str, Any], task: str) -> None:
             "labels_dict_path",
         ],
         "fit_calibration": [
-            "ios_feature_selected_path",
+            "pseudobulk_h5_path",
+            "features_mask_path",
             "deconvolvers_dir",
             "output_dir",
             "labels_dict_path",
@@ -96,7 +99,8 @@ def validate_config(config: Dict[str, Any], task: str) -> None:
         if field not in config:
             raise ValueError(f"Missing required field '{field}' for task '{task}'")
 
-    # Validate model-specific configuration (not needed for generate_pseudobulk or fit_deconvolution)
+    # Validate model-specific configuration
+    # (not needed for generate_pseudobulk or fit_deconvolution)
     if task not in (
         "generate_pseudobulk",
         "fit_deconvolution",
@@ -144,8 +148,7 @@ def create_experiment(
             model_flavor=model_config.get("flavor", "lstm"),
             splits=config.get("splits", ["train", "valid", "test"]),
         )
-
-    elif model_arch == "epigenbert2":
+    if model_arch == "epigenbert2":
         return EpigenBERT2MLflowExperiment(
             data_path=data_path,
             experiment_name=experiment_name,
@@ -159,8 +162,7 @@ def create_experiment(
             splits=config.get("splits", ["train", "valid", "test"]),
             use_triton=model_config.get("use_triton", False),
         )
-
-    elif model_arch == "methylbert":
+    if model_arch == "methylbert":
         return MethylBertMLflowExperiment(
             data_path=data_path,
             experiment_name=experiment_name,
@@ -172,8 +174,7 @@ def create_experiment(
             splits=config.get("splits", ["train", "valid", "test"]),
         )
 
-    else:
-        raise ValueError(f"Unknown model architecture: {model_arch}")
+    raise ValueError(f"Unknown model architecture: {model_arch}")
 
 
 def run_fine_tuning(config: Dict[str, Any], logger: logging.Logger) -> None:
@@ -215,12 +216,12 @@ def run_fine_tuning(config: Dict[str, Any], logger: logging.Logger) -> None:
             else:
                 # For transformer models
                 assert isinstance(
-                    experiment, TransformersMLFLowExperiment
+                    experiment, TransformersMLFlowExperiment
                 ), "Expected a transformer experiment instance"
                 if "training_arguments" in training_config:
                     args_dict = training_config["training_arguments"]
                     training_args = TrainingArguments(**args_dict)
-                    # pylint: disable-next:unexpected-keyword-arg
+                    # pylint: disable-next=unexpected-keyword-arg
                     experiment.train_dataset(dataset_name, training_args=training_args)
                 else:
                     experiment.train_dataset(dataset_name, **training_config)
@@ -263,26 +264,6 @@ def run_pretraining(config: Dict[str, Any], logger: logging.Logger) -> None:
     logger.info("Pretraining mode not yet implemented")
     # TODO: Implement pretraining logic
     raise NotImplementedError("Pretraining mode is not yet implemented")
-
-
-def run_pseudobulk_generation(config: Dict[str, Any], logger: logging.Logger) -> None:
-    """Run pseudo-bulk mixture generation based on configuration."""
-    from App.pseudobulk_pipeline import PseudoBulkPipeline
-
-    logger.info("Starting pseudo-bulk generation pipeline")
-    pipeline = PseudoBulkPipeline(config=config, logger=logger)
-    result = pipeline.run()
-
-    # Log summary
-    logger.info("=" * 60)
-    logger.info("PSEUDO-BULK GENERATION SUMMARY")
-    logger.info("=" * 60)
-    logger.info(f"  Total examples: {result[list(result.keys())[0]].shape[0]}")
-    # splits_cfg = config.get("splits", ["train", "valid", "test"])
-    # for split_name in splits_cfg:
-    #     logger.info(f"Features shape {split_name}: {result[f'features_{split_name}'].shape}")
-    logger.info(f"  Output saved to: {config['output_dir']}")
-    logger.info("=" * 60)
 
 
 def run_pseudobulk_generation(config: Dict[str, Any], logger: logging.Logger) -> None:
@@ -419,31 +400,31 @@ Examples:
 
     # Setup logging
     logger = setup_logging(args.verbose, args.log_file)
-    logger.info(f"Starting MethylDL application - Task: {args.task}")
+    logger.info("Starting MethylDL application - Task: %s", args.task)
 
     try:
         # Load configuration
         config = load_config(args.config)
-        logger.info(f"Loaded configuration from {args.config}")
+        logger.info("Loaded configuration from %s", args.config)
 
         # Apply command-line overrides
         if args.model:
             if "model" not in config:
                 config["model"] = {}
             config["model"]["architecture"] = args.model
-            logger.info(f"Override: model = {args.model}")
+            logger.info("Override: model = %s", args.model)
 
         if args.data_path:
             config["data_path"] = args.data_path
-            logger.info(f"Override: data_path = {args.data_path}")
+            logger.info("Override: data_path = %s", args.data_path)
 
         if args.max_seq_length:
             config["max_sequence_length"] = args.max_seq_length
-            logger.info(f"Override: max_sequence_length = {args.max_seq_length}")
+            logger.info("Override: max_sequence_length = %s", args.max_seq_length)
 
         if args.checkpoint:
             config["checkpoint_path"] = args.checkpoint
-            logger.info(f"Override: checkpoint_path = {args.checkpoint}")
+            logger.info("Override: checkpoint_path = %s", args.checkpoint)
 
         # Inference-specific overrides
         if hasattr(args, "bam") and args.bam:
@@ -451,37 +432,37 @@ Examples:
                 config["input"] = {}
             config["input"]["type"] = "bam"
             config["input"]["bam_path"] = args.bam
-            logger.info(f"Override: input.bam_path = {args.bam}")
+            logger.info("Override: input.bam_path = %s", args.bam)
 
         if hasattr(args, "atlas") and args.atlas:
             config["atlas_path"] = args.atlas
-            logger.info(f"Override: atlas_path = {args.atlas}")
+            logger.info("Override: atlas_path = %s", args.atlas)
 
         if hasattr(args, "labels_dict") and args.labels_dict:
             config["labels_dict_path"] = args.labels_dict
-            logger.info(f"Override: labels_dict_path = {args.labels_dict}")
+            logger.info("Override: labels_dict_path = %s", args.labels_dict)
 
         if hasattr(args, "output_dir") and args.output_dir:
             if "output" not in config:
                 config["output"] = {}
             config["output"]["output_dir"] = args.output_dir
-            logger.info(f"Override: output.output_dir = {args.output_dir}")
+            logger.info("Override: output.output_dir = %s", args.output_dir)
 
         if args.datasets:
             config["datasets"] = args.datasets
-            logger.info(f"Override: datasets = {args.datasets}")
+            logger.info("Override: datasets = %s", args.datasets)
 
         if args.mlflow_uri:
             if "mlflow" not in config:
                 config["mlflow"] = {}
             config["mlflow"]["tracking_uri"] = args.mlflow_uri
-            logger.info(f"Override: MLflow URI = {args.mlflow_uri}")
+            logger.info("Override: MLflow URI = %s", args.mlflow_uri)
 
         if args.experiment_name:
             if "mlflow" not in config:
                 config["mlflow"] = {}
             config["mlflow"]["experiment_name"] = args.experiment_name
-            logger.info(f"Override: experiment_name = {args.experiment_name}")
+            logger.info("Override: experiment_name = %s", args.experiment_name)
 
         # Validate configuration
         validate_config(config, args.task)
@@ -512,8 +493,8 @@ Examples:
         logger.info("Task completed successfully")
         return 0
 
-    except Exception as e:
-        logger.error(f"Error: {e}", exc_info=True)
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        logger.error("Error: %s", e, exc_info=True)
         return 1
 
 
