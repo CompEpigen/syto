@@ -23,7 +23,7 @@ import pandas as pd
 from syto.classification.evaluation import (
     compute_metrics,
     preprocess_logits_for_prediction,
-    keep_logits_only,
+
 )
 from syto.classification.utils import calculate_batch_size
 from syto.data.dataset import (
@@ -851,32 +851,19 @@ class EpigenDnabert2:
             None,
         ),
     ):
-        if self.num_labels == 2:
-            return transformers.Trainer(
-                model=self.model,
-                args=args,
-                data_collator=self.data_collator,
-                train_dataset=train_dataset,
-                eval_dataset=eval_dataset,
-                model_init=model_init,
-                callbacks=callbacks,
-                optimizers=optimizers,
-                tokenizer=self.tokenizer,
-                preprocess_logits_for_metrics=preprocess_logits_for_prediction,
-                compute_metrics=compute_metrics,
-            )
-        elif self.num_labels > 2:
-            return transformers.Trainer(
-                model=self.model,
-                args=args,
-                data_collator=self.data_collator,
-                train_dataset=train_dataset,
-                eval_dataset=eval_dataset,
-                model_init=model_init,
-                callbacks=callbacks,
-                optimizers=optimizers,
-                tokenizer=self.tokenizer,
-            )
+        return transformers.Trainer(
+            model=self.model,
+            args=args,
+            data_collator=self.data_collator,
+            train_dataset=train_dataset,
+            eval_dataset=eval_dataset,
+            model_init=model_init,
+            callbacks=callbacks,
+            optimizers=optimizers,
+            tokenizer=self.tokenizer,
+            preprocess_logits_for_metrics=preprocess_logits_for_prediction,
+            compute_metrics=compute_metrics,
+        )
 
     def predict(self, test_dataset, batch_size=None, clear_cache=True):
         if batch_size is not None:
@@ -931,25 +918,14 @@ class EpigenDnabert2:
                     auto_find_batch_size=True,
                     output_dir=self.training_args.output_dir,
                 )
-        if self.num_labels == 2:
-            prediction_trainer = transformers.Trainer(
-                model=self.model,
-                args=training_args,
-                data_collator=self.data_collator,
-                tokenizer=self.tokenizer,
-                preprocess_logits_for_metrics=preprocess_logits_for_prediction,
-                compute_metrics=None,
-            )
-
-        elif self.num_labels > 2:
-            prediction_trainer = transformers.Trainer(
-                model=self.model,
-                args=training_args,
-                data_collator=self.data_collator,
-                tokenizer=self.tokenizer,
-                compute_metrics=None,
-                preprocess_logits_for_metrics=keep_logits_only,
-            )
+        prediction_trainer = transformers.Trainer(
+            model=self.model,
+            args=training_args,
+            data_collator=self.data_collator,
+            tokenizer=self.tokenizer,
+            preprocess_logits_for_metrics=preprocess_logits_for_prediction,
+            compute_metrics=None,
+        )
 
         prediction = prediction_trainer.predict(test_dataset)
         if clear_cache:

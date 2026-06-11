@@ -133,17 +133,6 @@ def preprocess_logits_for_prediction(
         return torch.softmax(logits, dim=-1)
 
 
-def keep_logits_only(raw_model_output, labels):
-    """
-    We want to keep only the first item so that the Trainer
-    concatenates an (N, num_labels) tensor nothing else.
-    """
-    if isinstance(raw_model_output, tuple):
-        raw_model_output = raw_model_output[0]  # grab logits
-    # (if it is already a Tensor, we just fall through)
-    return raw_model_output
-
-
 def make_compute_metrics(
     background_threshold_func: Optional[Callable[[int], float]] = None,
 ):

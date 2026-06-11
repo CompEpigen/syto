@@ -5,7 +5,6 @@ import torch
 from syto.classification.evaluation import (
     calculate_metric_with_sklearn,
     preprocess_logits_for_prediction,
-    keep_logits_only,
     compute_metrics,
     compute_metrics_soft_labels,
     make_compute_metrics,
@@ -95,24 +94,6 @@ class TestPreprocessLogitsForPrediction(unittest.TestCase):
         result = preprocess_logits_for_prediction((logits, extra), None)
         expected = torch.softmax(logits, dim=-1)
         self.assertTrue(torch.allclose(result, expected))
-
-
-class TestKeepLogitsOnly(unittest.TestCase):
-    """Test suite for keep_logits_only."""
-
-    def test_tuple_input_returns_first_element(self):
-        """Tuple input should return only the first element (logits)."""
-        logits = torch.randn(3, 5)
-        extra = torch.randn(3, 5)
-        result = keep_logits_only((logits, extra), labels=None)
-        self.assertTrue(torch.equal(result, logits))
-
-    def test_tensor_input_passes_through(self):
-        """Plain tensor input should pass through unchanged."""
-        logits = torch.randn(3, 5)
-        result = keep_logits_only(logits, labels=None)
-        self.assertTrue(torch.equal(result, logits))
-
 
 class TestComputeMetrics(unittest.TestCase):
     """Test suite for compute_metrics (backward-compat alias)."""
