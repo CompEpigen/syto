@@ -11,24 +11,10 @@ import os
 from pathlib import Path
 from typing import Dict, Any
 
+import pandas as pd
 import yaml
-from syto.classification.experiment_wrappers import (
-    AbstractMLFlowExperiment,
-    TransformersMLFLowExperiment,
-)
-
-# Add parent directory to path for imports
-sys.path.append(str(Path(__file__).parent.parent))
-
-# pylint: disable=wrong-import-position
-from syto.classification.experiment_wrappers import (
-    DismirMLflowExperiment,
-    EpigenBERT2MLflowExperiment,
-    MethylBertMLflowExperiment,
-)
-from syto.classification.classifiers.dnabert2 import (
-    TrainingArguments,
-)  # TODO - must be different for MethylBERT
+from syto.classification.classifiers.lazy_classifier_factory import read_classifier_factory
+from syto.classification.classifiers.dnabert2 import TrainingArguments
 
 
 def setup_logging(verbose: bool = False, log_file: str = None):
@@ -59,7 +45,7 @@ def load_config(config_path: str) -> Dict[str, Any]:
 def validate_config(config: Dict[str, Any], task: str) -> None:
     """Validate configuration for the specified task."""
     required_fields = {
-        "fine_tune": ["model", "data_path", "max_sequence_length"],
+        "classifier_fit": ["model", "data_path", "max_sequence_length"],
         "pretrain": ["model", "data_path"],  # Add pretrain requirements
         "inference": [
             "classifier",
@@ -110,127 +96,106 @@ def validate_config(config: Dict[str, Any], task: str) -> None:
         "fit_calibration",
         "confidence_intervals",
     ):
-        model = config["classifier"]["classifier_type"].lower()
-        if model not in ["methylbert", "dismir", "cancer_detector", "lookup"]:
+        if task in ("classifier_fit", "pretrain"):
+            model = config["model"]["architecture"].lower()
+        else:
+            model = config["classifier"]["classifier_type"].lower()
+        if model not in ["methylbert", "dismir", "cancer_detector", "lookup", "epigenbert2"]:
             raise ValueError(f"Unknown model architecture: {model}")
 
 
-def create_experiment(
-    config: Dict[str, Any], logger: logging.Logger
-) -> AbstractMLFlowExperiment:
-    """Create the appropriate experiment based on configuration."""
+def load_split(base_path: Path, split: str) -> pd.DataFrame:
+    """Load a split data file (try parquet, csv, txt)."""
+    import pandas as pd
+    
+    if (base_path / f"{split}.parquet").exists():
+        return pd.read_parquet(base_path / f"{split}.parquet")
+    if (base_path / f"{split}.csv").exists():
+        return pd.read_csv(base_path / f"{split}.csv")
+    if (base_path / f"{split}.txt").exists():
+        return pd.read_csv(base_path / f"{split}.txt", sep="\t")
+    
+    raise FileNotFoundError(f"Could not find {split} split in {base_path}")
+
+
+def run_classifier_fit(config: Dict[str, Any], logger: logging.Logger) -> None:
+    """Run classifier fitting workflow."""
+    from pathlib import Path
+    
     model_arch = config["model"]["architecture"].lower()
-    data_path = config["data_path"]
-    max_seq_length = config["max_sequence_length"]
-
-    # MLflow configuration
-    mlflow_config = config.get("mlflow", {})
-
-    experiment_name = None
-    tracking_uri = None
-
-    experiment_name = mlflow_config.get("experiment_name")
-    tracking_uri = mlflow_config.get("tracking_uri")
-
-    if not experiment_name:
-        raise ValueError("MLflow is enabled but 'experiment_name' is not provided")
-
-    logger.info(f"MLflow enabled - Experiment: {experiment_name}")
-    if tracking_uri:
-        logger.info(f"MLflow tracking URI: {tracking_uri}")
-
-    # Model-specific parameters
-    model_config = config["model"]
-
-    if model_arch == "dismir":
-        return DismirMLflowExperiment(
-            data_path=data_path,
-            experiment_name=experiment_name,
-            tracking_uri=tracking_uri,
-            max_sequence_length=max_seq_length,
-            model_flavor=model_config.get("flavor", "lstm"),
-            splits=config.get("splits", ["train", "valid", "test"]),
-        )
-
-    elif model_arch == "epigenbert2":
-        return EpigenBERT2MLflowExperiment(
-            data_path=data_path,
-            experiment_name=experiment_name,
-            tracking_uri=tracking_uri,
-            max_sequence_length=max_seq_length,
-            use_cpg_methylation=model_config.get("use_cpg_methylation", True),
-            use_m6a_methylation=model_config.get("use_m6a_methylation", False),
-            foundation_model_huggingface=model_config.get(
-                "foundation_model", "zhihan1996/DNABERT-2-117M"
-            ),
-            splits=config.get("splits", ["train", "valid", "test"]),
-            use_triton=model_config.get("use_triton", False),
-        )
-
-    elif model_arch == "methylbert":
-        return MethylBertMLflowExperiment(
-            data_path=data_path,
-            experiment_name=experiment_name,
-            tracking_uri=tracking_uri,
-            max_sequence_length=max_seq_length,
-            foundation_model_huggingface=model_config.get(
-                "foundation_model", "hanyangii/methylbert_hg19_12l"
-            ),
-            splits=config.get("splits", ["train", "valid", "test"]),
-        )
-
-    else:
-        raise ValueError(f"Unknown model architecture: {model_arch}")
-
-
-def run_fine_tuning(config: Dict[str, Any], logger: logging.Logger) -> None:
-    """Run fine-tuning based on configuration."""
-
-    # Create experiment
-    experiment = create_experiment(config, logger)
-
-    # Get training configuration
-    training_config = config.get("training", {})
-    model_arch = config["model"]["architecture"].lower()
-
-    # Dataset selection
-    datasets = config.get("datasets", "all")
-
-    if datasets == "all":
-        # Train on all available datasets
-        logger.info("Training on all available datasets")
-        if model_arch == "dismir":
-            experiment.run_full_experiment(**training_config)
+    data_path = Path(config["data_path"])
+    datasets = config.get("datasets", ["all"])
+    
+    if isinstance(datasets, str):
+        if datasets == "all":
+            # Just use data_path as the single dataset
+            datasets = ["all"]
         else:
-            # For transformer models, check if custom TrainingArguments provided
-            if "training_arguments" in training_config:
-                args_dict = training_config["training_arguments"]
-                training_args = TrainingArguments(**args_dict)
-                experiment.run_full_experiment(training_args=training_args)
-            else:
-                experiment.run_full_experiment(**training_config)
-    else:
-        # Train on specific datasets
-        if isinstance(datasets, str):
             datasets = [datasets]
 
-        for dataset_name in datasets:
-            logger.info(f"Training on dataset: {dataset_name}")
+    model_cfg = config.get("model", {})
+    training_cfg = config.get("training", {})
+    output_cfg = config.get("output", {})
+    
+    base_output_dir = Path(output_cfg.get("output_dir", "output"))
+    
+    logger.info(f"Starting classifier fit workflow for architecture: {model_arch}")
+    
+    for dataset_name in datasets:
+        if dataset_name == "all":
+            dataset_path = data_path
+            out_dir = base_output_dir / "all"
+        else:
+            dataset_path = data_path / dataset_name
+            out_dir = base_output_dir / dataset_name
+            
+        logger.info(f"Processing dataset: {dataset_name} at {dataset_path}")
+        
+        # Load splits
+        try:
+            train_df = load_split(dataset_path, "train")
+            logger.info(f"Loaded train split: {len(train_df)} rows")
+        except FileNotFoundError as e:
+            logger.error(f"Error loading train data: {e}")
+            continue
+            
+        try:
+            val_df = load_split(dataset_path, "valid")
+            logger.info(f"Loaded valid split: {len(val_df)} rows")
+        except FileNotFoundError:
+            logger.warning("No valid split found, continuing without validation data")
+            val_df = None
 
-            if model_arch == "dismir":
-                experiment.train_dataset(dataset_name, **training_config)
-            else:
-                # For transformer models
-                assert isinstance(
-                    experiment, TransformersMLFLowExperiment
-                ), "Expected a transformer experiment instance"
-                if "training_arguments" in training_config:
-                    args_dict = training_config["training_arguments"]
-                    training_args = TrainingArguments(**args_dict)
-                    # pylint: disable-next:unexpected-keyword-arg
-                    experiment.train_dataset(dataset_name, training_args=training_args)
-                else:
-                    experiment.train_dataset(dataset_name, **training_config)
+        # Build classifier
+        num_labels = model_cfg.get("num_labels", 2)
+        classifier_kwargs = {
+            "num_labels": num_labels,
+            "seq_length": config.get("max_sequence_length", 150),
+            "foundation_model_path": model_cfg.get("foundation_model"),
+            "classifier_head_implementation": model_cfg.get("classifier_head_implementation", "grg_attention_based"),
+            "dmr_label_column": model_cfg.get("dmr_label_column", "dmr_ctype_label"),
+            "dismir_flavor": model_cfg.get("flavor", "lstm"),
+            "cancer_detector_prior_type": model_cfg.get("cancer_detector_prior_type", "uniform"),
+            "soft_labels": model_cfg.get("soft_labels", False),
+            "batch_size": config.get("prediction_batch_size", 2200),
+        }
+        
+        logger.info("Initializing classifier...")
+        classifier = read_classifier_factory(
+            name=model_arch,
+            path=None,  # Start fresh
+            **classifier_kwargs
+        )
+        
+        logger.info("Fitting classifier...")
+        classifier.fit_split(
+            train_df=train_df,
+            val_df=val_df,
+            output_dir=out_dir,
+            **training_cfg
+        )
+        
+        logger.info(f"Finished processing {dataset_name}")
 
 
 def run_inference(config: Dict[str, Any], logger: logging.Logger) -> None:
@@ -345,10 +310,10 @@ def main():
         epilog="""
 Examples:
   # Fine-tune using configuration file
-  python main.py --task fine_tune --config config/fine_tune_epigenbert2.yaml
+  python main.py --task classifier_fit --config config/classifier_fit_epigenbert2.yaml
   
   # Fine-tune with command-line overrides
-  python main.py --task fine_tune --config config/base.yaml \\
+  python main.py --task classifier_fit --config config/base.yaml \\
     --model epigenbert2 --max-seq-length 1000 --data-path /data/methylation
   
   # Run inference
@@ -361,7 +326,7 @@ Examples:
         "--task",
         choices=[
             "pretrain",
-            "fine_tune",
+            "classifier_fit",
             "inference",
             "generate_pseudobulk",
             "generate_pseudobulk_v2",
@@ -504,8 +469,8 @@ Examples:
             return 0
 
         # Execute task
-        if args.task == "fine_tune":
-            run_fine_tuning(config, logger)
+        if args.task == "classifier_fit":
+            run_classifier_fit(config, logger)
         elif args.task == "inference":
             run_inference(config, logger)
         elif args.task == "pretrain":

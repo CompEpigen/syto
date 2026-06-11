@@ -2,6 +2,7 @@
 
 import os
 import gc
+import logging
 from typing import Optional, Tuple, Union, List
 from collections import OrderedDict
 import itertools
@@ -43,6 +44,8 @@ from syto.classification.prediction_aggregation import (
 )
 
 from syto.data.dataset import resolve_column
+
+_module_logger = logging.getLogger(__name__)
 
 default_methylbert_config = OrderedDict(
     [
@@ -1160,6 +1163,90 @@ class MethylBert(AbstractReadClassifier):
         # Merge back with original split
         result = pd.merge(split_df, pred_df, on="read_name")
         return result
+
+    def fit_split(
+        self,
+        train_df: pd.DataFrame,
+        val_df: Union[pd.DataFrame, None] = None,
+        output_dir: Union[str, Path, None] = None,
+        **kwargs,
+    ) -> "MethylBert":
+        """Fit the classifier on training data for compatibility with AbstractReadClassifier."""
+        from transformers import TrainingArguments
+
+        # Prepare train dataset
+        train_df_renamed = train_df.rename(
+            columns={"seq": "input_ids", "pattern": "methylation_ids"}
+        )
+        train_data_list = prepare_methylbert_list(
+            train_df_renamed,
+            grg_label_column=kwargs.get("grg_label_column", "grg_ctype_label"),
+            seq_length=self.seq_len,
+            stride=int(self.seq_len / 2),
+            soft_labels=self.soft_labels,
+            is_binary=True if self.num_labels == 2 else False,
+        )
+        train_dataset = MethylBertFinetuneDataset(
+            data_source=train_data_list,
+            vocab=MethylVocab(k=3),
+            seq_len=self.seq_len,
+            lazy_tokenization=True,
+            soft_labels=self.soft_labels,
+        )
+
+        # Prepare validation dataset
+        # fine_tune() requires a non-None val_dataset when no data_path is given;
+        # fall back to the training set when no validation split is provided.
+        val_dataset = train_dataset
+        if val_df is not None:
+            val_df_renamed = val_df.rename(
+                columns={"seq": "input_ids", "pattern": "methylation_ids"}
+            )
+            val_data_list = prepare_methylbert_list(
+                val_df_renamed,
+                grg_label_column=kwargs.get("grg_label_column", "grg_ctype_label"),
+                seq_length=self.seq_len,
+                stride=int(self.seq_len / 2),
+                soft_labels=self.soft_labels,
+                is_binary=True if self.num_labels == 2 else False,
+            )
+            val_dataset = MethylBertFinetuneDataset(
+                data_source=val_data_list,
+                vocab=MethylVocab(k=3),
+                seq_len=self.seq_len,
+                lazy_tokenization=True,
+                soft_labels=self.soft_labels,
+            )
+
+        # Build training arguments
+        training_args_dict = kwargs.get("training_args", {})
+        if "output_dir" not in training_args_dict:
+            training_args_dict["output_dir"] = str(output_dir) if output_dir else "./methylbert_output"
+            
+        training_args = TrainingArguments(**training_args_dict)
+
+        self.fine_tune(
+            data_path=None,
+            train_dataset=train_dataset,
+            val_dataset=val_dataset,
+            training_args=training_args,
+            callbacks=kwargs.get("callbacks", None),
+            resume_from_checkpoint=kwargs.get("resume_from_checkpoint", None),
+            signal_mask=kwargs.get("signal_mask", None),
+            bg_ratio=kwargs.get("bg_ratio", 0.3),
+        )
+
+        if output_dir:
+            self.save(output_dir)
+
+        return self
+
+    def save(self, path: Union[str, Path]) -> None:
+        """Persist the fitted classifier to disk."""
+        path = Path(path)
+        path.mkdir(parents=True, exist_ok=True)
+        if self.trainer is not None:
+            self.safe_save_model_for_hf_trainer(str(path))
 
 
 class MethylVocab(object):

@@ -4,6 +4,7 @@ import json
 import gc
 import random
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Optional, Dict, Sequence, Tuple, List, Union, Callable
 from transformers.models.bert.modeling_bert import BertPreTrainedModel
 from transformers.modeling_outputs import SequenceClassifierOutput
@@ -39,6 +40,13 @@ from syto.classification.classification_heads import (
     GRGAttentionClassificationHead,
 )
 from syto.classification.loss import ConfidenceWeightedCrossEntropy
+from syto.classification.classifiers.abstract_read_classifier import (
+    AbstractReadClassifier,
+)
+from syto.classification.prediction_aggregation import (
+    aggregate_chuncked_predictions_weighted,
+)
+from pathlib import Path
 
 
 class DNABERT2FineTuneDataset(Dataset):
@@ -705,7 +713,7 @@ def initialize_model_with_custom_embeddings(
     return model
 
 
-class EpigenDnabert2:
+class EpigenDnabert2(AbstractReadClassifier):
     def __init__(
         self,
         foundation_model_huggingface: str = "zhihan1996/DNABERT-2-117M",
@@ -1006,3 +1014,115 @@ class EpigenDnabert2:
         if self.training_args.save_model:
             self.trainer.save_state()
             self.safe_save_model_for_hf_trainer(output_dir=training_args.output_dir)
+
+    def fit_split(
+        self,
+        train_df: pd.DataFrame,
+        val_df: Union[pd.DataFrame, None] = None,
+        output_dir: Union[str, Path, None] = None,
+        **kwargs,
+    ) -> "EpigenDnabert2":
+        """Fit the classifier on training data for compatibility with AbstractReadClassifier."""
+        train_dataset = DNABERT2FineTuneDataset(
+            data_path_or_list=train_df,
+            tokenizer=self.tokenizer,
+            kmer=-1,
+            data_interface="pandas",
+            lazy_tokenization=True,
+            include_grg_ids=self.num_grg_labels is not None,
+            dmr_label_column=kwargs.get("dmr_label_column", "dmr_ctype_label"),
+            soft_labels=self.soft_labels,
+        )
+
+        # fine_tune() requires non-None train/val/test datasets when no data_path is
+        # given; fall back to the training set when no validation split is provided.
+        val_dataset = train_dataset
+        if val_df is not None:
+            val_dataset = DNABERT2FineTuneDataset(
+                data_path_or_list=val_df,
+                tokenizer=self.tokenizer,
+                kmer=-1,
+                data_interface="pandas",
+                lazy_tokenization=True,
+                include_grg_ids=self.num_grg_labels is not None,
+                dmr_label_column=kwargs.get("dmr_label_column", "dmr_ctype_label"),
+                soft_labels=self.soft_labels,
+            )
+
+        if "training_args" in kwargs:
+            self.training_args = kwargs["training_args"]
+
+        self.fine_tune(
+            data_path=None,
+            train_dataset=train_dataset,
+            val_dataset=val_dataset,
+            test_dataset=val_dataset,
+            training_args=self.training_args,
+            callbacks=kwargs.get("callbacks", None),
+            data_interface="pandas",
+            resume_from_checkpoint=kwargs.get("resume_from_checkpoint", None),
+        )
+
+        if output_dir:
+            self.save(output_dir)
+
+        return self
+
+    def save(self, path: Union[str, Path]) -> None:
+        """Persist the fitted classifier to disk."""
+        path = Path(path)
+        path.mkdir(parents=True, exist_ok=True)
+        if self.trainer is not None:
+            self.safe_save_model_for_hf_trainer(str(path))
+
+
+    def predict_split(self, split_df: pd.DataFrame, **kwargs) -> pd.DataFrame:
+        """Run DNABERT2 prediction on a single split."""
+        dataset = DNABERT2FineTuneDataset(
+            data_path_or_list=split_df,
+            tokenizer=self.tokenizer,
+            kmer=-1,
+            data_interface="pandas",
+            lazy_tokenization=True,
+            include_grg_ids=self.num_grg_labels is not None,
+            dmr_label_column=kwargs.get("dmr_label_column", "dmr_ctype_label"),
+            soft_labels=self.soft_labels,
+        )
+
+        prediction_output = self.predict(dataset, batch_size=kwargs.get("batch_size", None))
+        probabilities = prediction_output.predictions
+
+        # Apply softmax or sigmoid
+        if self.num_labels == 1:
+            probabilities = 1 / (1 + np.exp(-probabilities))
+        else:
+            exp_preds = np.exp(probabilities - np.max(probabilities, axis=1, keepdims=True))
+            probabilities = exp_preds / np.sum(exp_preds, axis=1, keepdims=True)
+
+        pred_cols = [f"prediction_{i}" for i in range(self.num_labels)]
+        pred_df = pd.DataFrame(probabilities, columns=pred_cols)
+
+        result = split_df.copy()
+        for col in pred_cols:
+            result[col] = pred_df[col].values
+
+        return result
+
+    @classmethod
+    def load(cls, path: Union[str, Path, None] = None, **kwargs) -> "EpigenDnabert2":
+        """Load EpigenDnabert2 from a checkpoint, or build a fresh instance if path is None."""
+        classifier_head_implementation = kwargs.get("classifier_head_implementation", "grg_attention_based")
+        num_grg_labels = kwargs.get("num_grg_labels")
+        if num_grg_labels is None and classifier_head_implementation == "grg_attention_based":
+            num_grg_labels = 39
+        return cls(
+            foundation_model_huggingface=kwargs.get("foundation_model_path") or "zhihan1996/DNABERT-2-117M",
+            fine_tuned_model_path=str(path) if path else None,
+            max_sequence_length=kwargs.get("seq_length", 150),
+            num_labels=kwargs.get("num_labels", 2),
+            use_cpg_methylation=kwargs.get("use_cpg_methylation", True),
+            use_m6a_methylation=kwargs.get("use_m6a_methylation", False),
+            num_grg_labels=num_grg_labels,
+            soft_labels=kwargs.get("soft_labels", False),
+        )
+

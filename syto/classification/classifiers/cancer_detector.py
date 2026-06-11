@@ -514,8 +514,8 @@ class CancerDetectorClassifier(AbstractReadClassifier):
             )
 
     @classmethod
-    def load(cls, path: str, **kwargs) -> "CancerDetectorClassifier":
-        """Load model parameters from a .pkl file.
+    def load(cls, path: Union[str, None] = None, **kwargs) -> "CancerDetectorClassifier":
+        """Load model parameters from a .pkl file, or build a fresh instance if path is None.
 
         Args:
             path: Path to the .pkl file from which to load the model parameters.
@@ -523,6 +523,8 @@ class CancerDetectorClassifier(AbstractReadClassifier):
         Returns:
             An instance of ``CancerDetectorClassifier`` with the loaded parameters.
         """
+        if path is None:
+            return cls()
 
         file_extension = Path(path).suffix
 
@@ -605,3 +607,17 @@ class CancerDetectorClassifier(AbstractReadClassifier):
         for col in pred_cols:
             result[col] = pred_df[col].values
         return result
+
+    def fit_split(
+        self,
+        train_df: pd.DataFrame,
+        val_df: Union[pd.DataFrame, None] = None,
+        output_dir: Union[str, Path, None] = None,
+        **kwargs,
+    ) -> "CancerDetectorClassifier":
+        """Fit the classifier on training data for compatibility with AbstractReadClassifier."""
+        self.fit(train_data=train_df, val_data=val_df, **kwargs)
+        if output_dir:
+            self.save(Path(output_dir) / "cancer_detector.joblib")
+        return self
+

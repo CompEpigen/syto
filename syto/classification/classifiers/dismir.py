@@ -151,7 +151,7 @@ class DISMIRNet(nn.Module):
             self.dmr_classifier = None
 
         elif classifier_type == "grg_attention_based":
-            print("Using attention-based classifier with DMR context")
+            print("Using attention-based classifier with GRG context")
             if num_grg_labels is None:
                 raise ValueError(
                     "num_grg_labels must be provided for grg_attention_based classifier"
@@ -181,7 +181,7 @@ class DISMIRNet(nn.Module):
         self.sigmoid = nn.Sigmoid()
 
     def _init_dmr_attention_classifier(self, num_labels, num_grg_labels, dropout_prob):
-        """Initialize DMR attention-based classifier."""
+        """Initialize GRG attention-based classifier."""
         # After encoder: shape is (batch, 100, seq_len/4)
         # Permuted for attention: (batch, seq_len/4, 100)
         # So hidden_size = 100 (conv2 output channels)
@@ -237,7 +237,7 @@ class DISMIRNet(nn.Module):
         Args:
             x: Input tensor of shape (batch_size, max_sequence_length, 5)
             parallel_scan: Whether to use parallel scan for MinGRU (only relevant for minigru flavor)
-            grg_ids: [batch_size] - DMR labels for each sequence (required for grg_attention_based)
+            grg_ids: [batch_size] - GRG labels for each sequence (required for grg_attention_based)
             attention_mask: [batch_size, seq_len] - attention mask for padding (optional, for grg_attention_based)
 
         Returns:
@@ -268,7 +268,7 @@ class DISMIRNet(nn.Module):
         return x
 
     def _forward_dmr_attention(self, x, grg_ids, attention_mask):
-        """Forward pass for DMR attention-based classifier."""
+        """Forward pass for GRG attention-based classifier."""
         if grg_ids is None:
             raise ValueError(
                 "grg_ids must be provided when using grg_attention_based classifier"
@@ -289,10 +289,14 @@ class VariableLengthDataset(Dataset):
     TODO: Initialization via providing dataset from RAM instead of from disk
     """
 
-    def __init__(self, data_path, max_sequence_length, conv_onehot_func):
+    def __init__(self, data_path_or_df, max_sequence_length, conv_onehot_func):
         self.max_sequence_length = max_sequence_length
         self.conv_onehot = conv_onehot_func
-        self.data = pd.read_parquet(data_path)
+        if isinstance(data_path_or_df, (str, Path)):
+            self.data = pd.read_parquet(data_path_or_df)
+        else:
+            self.data = data_path_or_df
+
 
         # Create mapping from read_id to chunks
         self.read_chunks = defaultdict(list)
@@ -461,7 +465,7 @@ def variable_length_collate_fn(batch):
 class Dismir(AbstractReadClassifier):
     """
     Equivalent class to the Keras-based Dismir, but using PyTorch internally.
-    Supports both vanilla and DMR attention-based classifiers.
+    Supports both vanilla and GRG attention-based classifiers.
     """
 
     def __init__(
@@ -489,7 +493,7 @@ class Dismir(AbstractReadClassifier):
         self.methylation_column = methylation_column
         self.soft_labels = soft_labels
 
-        # Validate DMR parameters
+        # Validate GRG parameters
         if classifier_type == "grg_attention_based":
             if num_grg_labels is None:
                 raise ValueError(
@@ -577,13 +581,17 @@ class Dismir(AbstractReadClassifier):
 
         Args:
             data_path: Path to parquet file
-            return_dmr_labels: If True, also return DMR labels
+            return_dmr_labels: If True, also return GRG labels
 
         Returns:
             If return_dmr_labels is False: (features, labels)
             If return_dmr_labels is True: (features, labels, dmr_labels)
         """
         data = pd.read_parquet(data_path)
+        return self._transform_input_df(data, return_dmr_labels, soft_labels)
+
+    def _transform_input_df(self, data: pd.DataFrame, return_dmr_labels=False, soft_labels=False):
+        """Transform dataframe into one-hot + methylation."""
         dna = data[self.dna_column]
         methylation = data[self.methylation_column]
         if soft_labels:
@@ -594,10 +602,10 @@ class Dismir(AbstractReadClassifier):
 
         if return_dmr_labels:
             if self.dmr_label_col is None:
-                raise ValueError("dmr_label_col must be set to return DMR labels")
+                raise ValueError("dmr_label_col must be set to return GRG labels")
             if self.dmr_label_col not in data.columns:
                 raise ValueError(
-                    f"DMR label column '{self.dmr_label_col}' not found in data"
+                    f"GRG label column '{self.dmr_label_col}' not found in data"
                 )
             dmr_labels = data[self.dmr_label_col]
             return features, labels, dmr_labels
@@ -618,6 +626,8 @@ class Dismir(AbstractReadClassifier):
         nesterov=True,
         variable_length=False,
         reset_history=False,
+        train_df=None,
+        valid_df=None,
     ):
         """
         Enhanced training method with support for variable-length sequences.
@@ -636,6 +646,8 @@ class Dismir(AbstractReadClassifier):
                 weight_decay,
                 momentum,
                 nesterov,
+                train_df,
+                valid_df,
             )
         else:
             return self._train_fixed_length(
@@ -649,6 +661,8 @@ class Dismir(AbstractReadClassifier):
                 weight_decay,
                 momentum,
                 nesterov,
+                train_df,
+                valid_df,
             )
 
     def _train_fixed_length(
@@ -663,38 +677,34 @@ class Dismir(AbstractReadClassifier):
         weight_decay,
         momentum,
         nesterov,
+        train_df=None,
+        valid_df=None,
     ):
         """
-        Fixed-length training method with DMR support.
+        Fixed-length training method with GRG support.
         """
         if verbose > 0:
             print("Preparing data for fixed-length training...")
 
-        # Load data - with or without DMR labels
-        use_dmr = self.classifier_type == "grg_attention_based"
+        # Load data - with or without GRG labels
+        use_grg = self.classifier_type == "grg_attention_based"
 
-        if use_dmr:
-            self.train_x, self.train_y, self.train_dmr = self.load_and_transform_input(
-                self.train_data_path,
-                return_dmr_labels=True,
-                soft_labels=self.soft_labels,
-            )
+        def _get_data(df, path):
+            if df is not None:
+                return self._transform_input_df(df, return_dmr_labels=use_grg, soft_labels=self.soft_labels)
+            return self.load_and_transform_input(path, return_dmr_labels=use_grg, soft_labels=self.soft_labels)
+
+        if use_grg:
+            self.train_x, self.train_y, self.train_dmr = _get_data(train_df, self.train_data_path)
             print(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}... Train is ready")
-            self.valid_x, self.valid_y, self.valid_dmr = self.load_and_transform_input(
-                self.valid_data_path,
-                return_dmr_labels=True,
-                soft_labels=self.soft_labels,
-            )
+            self.valid_x, self.valid_y, self.valid_dmr = _get_data(valid_df, self.valid_data_path)
             print(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}... Valid is ready")
         else:
-            self.train_x, self.train_y = self.load_and_transform_input(
-                self.train_data_path, soft_labels=self.soft_labels
-            )
+            self.train_x, self.train_y = _get_data(train_df, self.train_data_path)
             print(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}... Train is ready")
-            self.valid_x, self.valid_y = self.load_and_transform_input(
-                self.valid_data_path, soft_labels=self.soft_labels
-            )
+            self.valid_x, self.valid_y = _get_data(valid_df, self.valid_data_path)
             print(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}... Valid is ready")
+
 
         # Convert features to torch.Tensor
         self.train_x = torch.tensor(self.train_x, dtype=torch.float32)
@@ -713,8 +723,8 @@ class Dismir(AbstractReadClassifier):
                 self.train_y = torch.tensor(self.train_y, dtype=dtype)
                 self.valid_y = torch.tensor(self.valid_y, dtype=dtype)
 
-        # Convert DMR labels if needed
-        if use_dmr:
+        # Convert GRG labels if needed
+        if use_grg:
             self.train_dmr = torch.tensor(self.train_dmr.values, dtype=torch.long)
             self.valid_dmr = torch.tensor(self.valid_dmr.values, dtype=torch.long)
 
@@ -724,7 +734,7 @@ class Dismir(AbstractReadClassifier):
         )
 
         # DataLoaders
-        if use_dmr:
+        if use_grg:
             train_dataset = torch.utils.data.TensorDataset(
                 self.train_x, self.train_y, self.train_dmr
             )
@@ -762,6 +772,8 @@ class Dismir(AbstractReadClassifier):
         weight_decay,
         momentum,
         nesterov,
+        train_df=None,
+        valid_df=None,
     ):
         """
         Variable-length training method with chunk-based weighted loss.
@@ -769,7 +781,7 @@ class Dismir(AbstractReadClassifier):
         if self.classifier_type == "grg_attention_based":
             raise NotImplementedError(
                 "Variable-length training is not yet supported for grg_attention_based classifier. "
-                "Please use fixed-length training or implement VariableLengthDataset with DMR support."
+                "Please use fixed-length training or implement VariableLengthDataset with GRG support."
             )
 
         if verbose > 0:
@@ -777,10 +789,12 @@ class Dismir(AbstractReadClassifier):
 
         # Create variable-length datasets
         train_dataset = VariableLengthDataset(
-            self.train_data_path, self.max_sequence_length, self.conv_onehot
+            train_df if train_df is not None else self.train_data_path, 
+            self.max_sequence_length, self.conv_onehot
         )
         valid_dataset = VariableLengthDataset(
-            self.valid_data_path, self.max_sequence_length, self.conv_onehot
+            valid_df if valid_df is not None else self.valid_data_path, 
+            self.max_sequence_length, self.conv_onehot
         )
 
         max_chunks_per_batch = batch_size
@@ -955,11 +969,11 @@ class Dismir(AbstractReadClassifier):
         train_dir,
         mode,
     ):
-        """Standard training loop for fixed-length sequences with DMR support."""
+        """Standard training loop for fixed-length sequences with GRG support."""
         best_val_loss = float("inf")
         patience_counter = 0
         session_start_time = time.time()
-        use_dmr = self.classifier_type == "grg_attention_based"
+        use_grg = self.classifier_type == "grg_attention_based"
 
         if verbose > 0:
             print(f"Start {mode}-length training...")
@@ -983,7 +997,7 @@ class Dismir(AbstractReadClassifier):
             train_all_labels = []
 
             for batch in train_loader:
-                if use_dmr:
+                if use_grg:
                     X_batch, y_batch, dmr_batch = batch
                     X_batch = X_batch.to(self.device)
                     y_batch = y_batch.to(self.device)
@@ -995,7 +1009,7 @@ class Dismir(AbstractReadClassifier):
 
                 optimizer.zero_grad()
 
-                if use_dmr:
+                if use_grg:
                     outputs, _ = self.model(X_batch, grg_ids=dmr_batch)
                 else:
                     outputs = self.model(X_batch)
@@ -1008,16 +1022,16 @@ class Dismir(AbstractReadClassifier):
 
                 # Collect outputs for metrics
                 batch_outputs = outputs.detach()
-                if use_dmr and self.num_labels == 1:
+                if use_grg and self.num_labels == 1:
                     batch_outputs = torch.sigmoid(batch_outputs)
-                elif use_dmr and self.num_labels > 1:
+                elif use_grg and self.num_labels > 1:
                     batch_outputs = torch.softmax(batch_outputs, dim=-1)
                 train_all_outputs.append(batch_outputs.cpu().numpy())
                 train_all_labels.append(y_batch.detach().cpu().numpy())
 
                 # Prediction logic
                 if self.num_labels == 1:
-                    if use_dmr:
+                    if use_grg:
                         preds = (
                             (torch.sigmoid(outputs.detach()) >= 0.5).float().squeeze()
                         )
@@ -1046,7 +1060,7 @@ class Dismir(AbstractReadClassifier):
 
             with torch.no_grad():
                 for batch in valid_loader:
-                    if use_dmr:
+                    if use_grg:
                         X_val, y_val, dmr_val = batch
                         X_val = X_val.to(self.device)
                         y_val = y_val.to(self.device)
@@ -1063,15 +1077,15 @@ class Dismir(AbstractReadClassifier):
 
                     # Collect outputs for metrics
                     batch_val_outputs = val_outputs.detach()
-                    if use_dmr and self.num_labels == 1:
+                    if use_grg and self.num_labels == 1:
                         batch_val_outputs = torch.sigmoid(batch_val_outputs)
-                    elif use_dmr and self.num_labels > 1:
+                    elif use_grg and self.num_labels > 1:
                         batch_val_outputs = torch.softmax(batch_val_outputs, dim=-1)
                     val_all_outputs.append(batch_val_outputs.cpu().numpy())
                     val_all_labels.append(y_val.detach().cpu().numpy())
 
                     if self.num_labels == 1:
-                        if use_dmr:
+                        if use_grg:
                             val_preds = (
                                 (torch.sigmoid(val_outputs) >= 0.5).float().squeeze()
                             )
@@ -1143,7 +1157,7 @@ class Dismir(AbstractReadClassifier):
         train_dir,
     ):
         """Training loop for variable-length sequences with weighted chunk averaging."""
-        # Note: DMR support not implemented for variable length yet
+        # Note: GRG support not implemented for variable length yet
         best_val_loss = float("inf")
         patience_counter = 0
         session_start_time = time.time()
@@ -1410,7 +1424,7 @@ class Dismir(AbstractReadClassifier):
         Args:
             dna_sequences: list (or array-like) of DNA strings
             methylation_sequences: list (or array-like) of methylation strings ("0"/"1")
-            grg_ids: array-like of DMR labels (required for grg_attention_based classifier)
+            grg_ids: array-like of GRG labels (required for grg_attention_based classifier)
             batch_size: batch size for inference
             threshold: classification threshold for 'positive' label
             parallel_scan: whether to use parallel scan for MinGRU
@@ -1423,7 +1437,7 @@ class Dismir(AbstractReadClassifier):
         """
         self.model.eval()
 
-        # Validate DMR IDs for attention-based classifier
+        # Validate GRG IDs for attention-based classifier
         if self.classifier_type == "grg_attention_based":
             if grg_ids is None:
                 raise ValueError(
@@ -1509,16 +1523,16 @@ class Dismir(AbstractReadClassifier):
                 - num_labels: number of output labels (required)
                 - classifier_head_implementation: type of classifier head
                     (default: "grg_attention_based")
-                - num_grg_labels: number of DMR labels (default: 39, only used if
+                - num_grg_labels: number of GRG labels (default: 39, only used if
                     classifier_head_implementation is "grg_attention_based")
-                - grg_label_column: name of the DMR label column in the dataset
+                - grg_label_column: name of the GRG label column in the dataset
                     (required if classifier_head_implementation is "grg_attention_based")
         """
         classifier_head_implementation = kwargs.get(
             "classifier_head_implementation", "grg_attention_based"
         )
         grg_label_column = (
-            kwargs["grg_label_column"]
+            kwargs.get("grg_label_column") or kwargs.get("dmr_label_column", "dmr_ctype_label")
             if classifier_head_implementation == "grg_attention_based"
             else None
         )
@@ -1535,9 +1549,10 @@ class Dismir(AbstractReadClassifier):
             num_grg_labels=kwargs.get("num_grg_labels", 39),
             dmr_label_col=grg_label_column,
         )
-        # Load pre-trained weights
-        instance.model.load_state_dict(torch.load(path, weights_only=True))
-        _module_logger.info("Dismir model loaded from checkpoint: %s", path)
+        # Load pre-trained weights, if a checkpoint path was provided
+        if path is not None:
+            instance.model.load_state_dict(torch.load(path, weights_only=True))
+            _module_logger.info("Dismir model loaded from checkpoint: %s", path)
         return instance
 
     def predict_split(self, split_df: pd.DataFrame, **kwargs) -> pd.DataFrame:
@@ -1547,7 +1562,7 @@ class Dismir(AbstractReadClassifier):
         Args:
             split_df: DataFrame containing the data for the split.
                       Must contain columns for DNA sequences, methylation patterns, and
-                      DMR labels (if using attention-based classifier).
+                      GRG labels (if using attention-based classifier).
             **kwargs: additional parameters for prediction, such as:
                 - batch_size: batch size for prediction (default: 2200)
         """
@@ -1561,7 +1576,7 @@ class Dismir(AbstractReadClassifier):
         dna_sequences = split_df[dna_col].tolist()
         methylation_sequences = split_df[meth_col].tolist()
 
-        # DMR ids if using attention-based classifier
+        # GRG ids if using attention-based classifier
         grg_ids = None
         if self.classifier_type == "grg_attention_based":
             grg_ids = split_df[self.dmr_label_col].values
@@ -1584,3 +1599,42 @@ class Dismir(AbstractReadClassifier):
             result[col] = pred_df[col].values
 
         return result
+
+    def fit_split(
+        self,
+        train_df: pd.DataFrame,
+        val_df: Union[pd.DataFrame, None] = None,
+        output_dir: Union[str, Path, None] = None,
+        **kwargs,
+    ) -> "Dismir":
+        """Fit the classifier on training data for compatibility with AbstractReadClassifier."""
+        # Use kwargs or fall back to some defaults if not provided.
+        # This matches train() signature defaults where possible
+        train_dir = output_dir if output_dir else "./"
+        if output_dir:
+            Path(output_dir).mkdir(parents=True, exist_ok=True)
+            
+        self.train(
+            train_dir=str(train_dir),
+            train_df=train_df,
+            valid_df=val_df,
+            epochs=kwargs.get("epochs", 50),
+            batch_size=kwargs.get("batch_size", 32),
+            patience=kwargs.get("patience", 10),
+            optimizer_type=kwargs.get("optimizer_type", "SGD"),
+            lr=kwargs.get("lr", 0.05),
+            weight_decay=kwargs.get("weight_decay", 1e-6),
+            momentum=kwargs.get("momentum", 0.9),
+            nesterov=kwargs.get("nesterov", True),
+            variable_length=kwargs.get("variable_length", False),
+            reset_history=kwargs.get("reset_history", False),
+            verbose=kwargs.get("verbose", 1),
+        )
+        return self
+
+    def save(self, path: Union[str, Path]) -> None:
+        """Persist the fitted classifier to disk."""
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        torch.save(self.model.state_dict(), path)
+        _module_logger.info("Saved Dismir model to %s", path)

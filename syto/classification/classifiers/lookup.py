@@ -309,8 +309,11 @@ class LookupClassifier(AbstractReadClassifier):
         _module_logger.info("Saved LookupClassifier to %s", path)
 
     @classmethod
-    def load(cls, path: Union[str, Path], **kwargs) -> "LookupClassifier":
-        """Load a previously saved classifier."""
+    def load(cls, path: Union[str, Path, None] = None, **kwargs) -> "LookupClassifier":
+        """Load a previously saved classifier, or build a fresh instance if path is None."""
+        if path is None:
+            return cls()
+
         path = Path(path)
         file_extension = path.suffix.lower()
 
@@ -556,3 +559,17 @@ class LookupClassifier(AbstractReadClassifier):
     def predict_split(self, split_df: pd.DataFrame, **kwargs) -> pd.DataFrame:
         """Predict method for compatibility with AbstractReadClassifier interface."""
         return self.predict(split_df)
+
+    def fit_split(
+        self,
+        train_df: pd.DataFrame,
+        val_df: Union[pd.DataFrame, None] = None,
+        output_dir: Union[str, Path, None] = None,
+        **kwargs,
+    ) -> "LookupClassifier":
+        """Fit the classifier on training data for compatibility with AbstractReadClassifier."""
+        self.fit(df=train_df, val_data=val_df, **kwargs)
+        if output_dir:
+            self.save(Path(output_dir) / "lookup_classifier.joblib")
+        return self
+

@@ -15,6 +15,7 @@ _CLF_REGISTRY = {
     "dismir": "syto.classification.classifiers.dismir:Dismir",
     "lookup": "syto.classification.classifiers.lookup:LookupClassifier",
     "cancer_detector": "syto.classification.classifiers.cancer_detector:CancerDetectorClassifier",
+    "epigenbert2": "syto.classification.classifiers.dnabert2:EpigenDnabert2",
 }
 
 
