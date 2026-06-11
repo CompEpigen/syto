@@ -860,3 +860,146 @@ class PseudobulkHDF5ConsolidationWriter:
                     dtype=str_dtype,
                 )
                 pp_grp.attrs["string_columns"] = pure_profile.string_columns
+
+
+# =============================================================================
+# HDF5 Reader
+# =============================================================================
+
+
+class PseudobulkHDF5Reader:
+    """Read pseudobulk and pure-profile data from a consolidated HDF5 file.
+
+    This is the counterpart of :class:`PseudobulkHDF5ConsolidationWriter`.
+    It exposes convenience methods to reconstruct the matrices required by
+    downstream consumers (e.g. the deconvolution fitting pipeline) directly
+    from the single ``pseudobulk.h5`` file produced by
+    :class:`~syto.data.pseudobulk_generator.PseudobulkGenerator`.
+    """
+
+    def __init__(
+        self,
+        path: "os.PathLike | str",
+        logger: logging.Logger = _module_logger,
+    ):
+        """Initialize the reader.
+
+        Args:
+            path: Path to the consolidated ``pseudobulk.h5`` file.
+            logger: Logger instance for logging messages.
+        """
+        self.path = Path(path)
+        self.logger = logger
+
+    # --- Low level helpers ---
+
+    @staticmethod
+    def _decode_columns(raw: Any) -> List[str]:
+        """Decode an HDF5 column-name attribute into a list of ``str``."""
+        return [
+            c.decode() if isinstance(c, (bytes, bytearray)) else str(c) for c in raw
+        ]
+
+    @staticmethod
+    def _prediction_indices(columns: List[str], num_pred_classes: int) -> List[int]:
+        """Return the column indices of the ``prediction_{i}_wavg`` features.
+
+        Args:
+            columns: Ordered list of feature-column names.
+            num_pred_classes: Number of prediction classes to extract.
+
+        Returns:
+            List of indices (length ``num_pred_classes``) into ``columns``.
+        """
+        indices: List[int] = []
+        for i in range(num_pred_classes):
+            name = f"prediction_{i}_wavg"
+            if name not in columns:
+                raise KeyError(
+                    f"Expected feature column '{name}' not found in HDF5 file "
+                    f"(available columns: {columns})."
+                )
+            indices.append(columns.index(name))
+        return indices
+
+    # --- Public API ---
+
+    def list_splits(self) -> List[str]:
+        """List the split names present in the ``outputs`` group."""
+        with h5py.File(self.path, "r") as f:
+            if PseudobulkHDF5Schema.OUTPUTS not in f:
+                return []
+            return list(f[PseudobulkHDF5Schema.OUTPUTS].keys())
+
+    def read_pure_feature_matrix(
+        self, split_name: str, num_pred_classes: int
+    ) -> np.ndarray:
+        """Read pure cell-type profiles for a split.
+
+        Args:
+            split_name: Name of the split (e.g. ``"train"``).
+            num_pred_classes: Number of prediction classes to keep
+                (selects ``prediction_0_wavg`` ... ``prediction_{n-1}_wavg``).
+
+        Returns:
+            Array of shape ``(n_cell_types, n_gr_groups, num_pred_classes)``.
+        """
+        pp_group = PseudobulkHDF5Schema.pure_profiles_group(split_name)
+        with h5py.File(self.path, "r") as f:
+            if pp_group not in f:
+                raise KeyError(
+                    f"No pure profiles found for split '{split_name}' at "
+                    f"'{pp_group}' in {self.path}."
+                )
+            grp = f[pp_group]
+            feature_matrices = grp[PseudobulkHDF5Schema.DATASET_FEATURE_MATRICES][...]
+            columns = self._decode_columns(grp.attrs["numeric_columns"])
+        pred_idx = self._prediction_indices(columns, num_pred_classes)
+        return feature_matrices[:, :, pred_idx]
+
+    def read_pseudobulk_matrices(
+        self, split_name: str, num_pred_classes: int
+    ) -> "tuple[np.ndarray, np.ndarray]":
+        """Read pseudobulk feature matrices and target proportions for a split.
+
+        Args:
+            split_name: Name of the split (e.g. ``"train"``).
+            num_pred_classes: Number of prediction classes to keep
+                (selects ``prediction_0_wavg`` ... ``prediction_{n-1}_wavg``).
+
+        Returns:
+            Tuple ``(features, target_proportions)`` where:
+            - ``features`` has shape
+              ``(n_pseudobulks, n_gr_groups, num_pred_classes)``.
+            - ``target_proportions`` has shape ``(n_pseudobulks, n_classes)``.
+        """
+        pbs_group = PseudobulkHDF5Schema.pseudobulks_group(split_name)
+        features: List[np.ndarray] = []
+        target_proportions: List[np.ndarray] = []
+
+        with h5py.File(self.path, "r") as f:
+            if pbs_group not in f:
+                raise KeyError(
+                    f"No pseudobulks found for split '{split_name}' at "
+                    f"'{pbs_group}' in {self.path}."
+                )
+            pbs = f[pbs_group]
+            keys = sorted(pbs.keys(), key=lambda k: int(k.split("_")[1]))
+            pred_idx: Optional[List[int]] = None
+            for key in keys:
+                grp = pbs[key]
+                aggregated = grp[PseudobulkHDF5Schema.DATASET_AGGREGATED_FEATURES][...]
+                if pred_idx is None:
+                    columns = self._decode_columns(grp.attrs["feature_columns"])
+                    pred_idx = self._prediction_indices(columns, num_pred_classes)
+                features.append(aggregated[:, pred_idx])
+                target_proportions.append(
+                    grp[PseudobulkHDF5Schema.DATASET_TARGET_PROPORTIONS][...]
+                )
+
+        if not features:
+            raise ValueError(
+                f"No pseudobulk samples found for split '{split_name}' in {self.path}."
+            )
+
+        return np.stack(features, axis=0), np.stack(target_proportions, axis=0)

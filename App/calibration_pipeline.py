@@ -2,7 +2,9 @@
 Calibration pipeline:
 
 This pipeline takes as input:
-- path to ios (already feature selected)
+- path to the consolidated pseudobulk HDF5 file (output of the pseudobulk v2
+  pipeline, see ``App/pseudobulk_pipeline.py``)
+- path to the feature-selection mask (output of the deconvolution pipeline)
 - path to folder with saved deconvolvers (named expected to match the output of
 the deconvolution pipeline)
 
@@ -14,7 +16,8 @@ and with VectorScalingCalibrator with CV calibration
 
 
 The pipeline proceeds in the following steps:
-1. Load the ios (already feature selected) and deconvolvers
+1. Read the pseudobulk feature matrices from the HDF5 file, apply the feature
+   mask, and load the deconvolvers
 2. For each deconvolver:
     a. evaluate the deconvolver on the validation set and test set, saving the predictions
     b. fit a linear calibrator on the validation set
@@ -35,7 +38,9 @@ from typing import Any, Dict, List, Tuple
 import numpy as np
 import pandas as pd
 
+from syto.data.pseudobulk_hdf5_utils import PseudobulkHDF5Reader
 from syto.deconvolution.evaluation import compute_deconvolution_metrics
+from syto.deconvolution.feature_selection import apply_feature_mask
 from syto.calibration.linear_calibrator import LinearCalibrator
 from syto.calibration.vector_scaling_calibrator import VectorScalingCalibrator
 from syto.cross_validation_engine import CrossValidationEngine
@@ -47,7 +52,7 @@ from syto.deconvolution.least_squares_deconvolvers import (
 from syto.deconvolution.deep_deconvolvers.swn import SWNDeconvolver
 from syto.deconvolution.deep_deconvolvers.mlp import MLPDeconvolver
 
-LINEAR_NORM_METHODS = ["clip0-normalize", "simplex-projection"]
+LINEAR_NORM_METHODS = ["clip-normalize", "simplex-projection"]
 
 
 class CalibratorFittingPipeline:
@@ -71,6 +76,17 @@ class CalibratorFittingPipeline:
             raw = json.load(f)
             self.labels_dict: Dict[int, str] = {int(k): v for k, v in raw.items()}
         self.num_output_labels = config.get("num_output_labels", len(self.labels_dict))
+        self.num_input_labels = config.get("num_input_labels", self.num_output_labels)
+
+        # Input: consolidated pseudobulk HDF5 file (pseudobulks + proportions)
+        self.pseudobulk_h5_path = config["pseudobulk_h5_path"]
+        self.reader = PseudobulkHDF5Reader(self.pseudobulk_h5_path, logger=self.logger)
+
+        # Feature-selection mask (produced by the deconvolution pipeline)
+        self.features_mask_path = config["features_mask_path"]
+
+        # Splits to load from the HDF5 file
+        self.splits = config.get("splits", ["train", "valid", "test"])
 
         # Output
         self.output_dir = config["output_dir"]
@@ -92,13 +108,8 @@ class CalibratorFittingPipeline:
             Summary of calibration results per deconvolver.
         """
         # ── Stage 1: Load data and deconvolvers ───────────────────
-        ios_data = self._stage1_load_data()
+        features_dict, proportions_dict = self._stage1_load_features()
         deconvolvers = self._stage1_load_deconvolvers()
-
-        # Extract features per split, resolving variant-aware keys
-        features_dict, proportions_dict = self._resolve_features_and_proportions(
-            ios_data
-        )
 
         features_valid = features_dict["valid"]
         y_valid = proportions_dict["valid"]
@@ -139,103 +150,51 @@ class CalibratorFittingPipeline:
     #  Stage 1: Load data and deconvolvers
     # ═══════════════════════════════════════════════════════════════
 
-    def _stage1_load_data(self) -> Dict[str, np.ndarray]:
-        """Load the IOs (already feature selected).
-
-        Supports both legacy key layout (``proportions``,
-        ``features_{split}``) and the new variant-aware layout
-        (``proportions_{split}``, ``features_{split}_{variant}``).
-        """
-        ios_path = self.config["ios_feature_selected_path"]
-        self.logger.info(f"Stage 1a: Loading IOs from {ios_path}")
-
-        data = np.load(ios_path)
-        ios_data = {k: data[k] for k in data.files}
-        self.logger.info(f"  Available keys: {list(ios_data.keys())}")
-        return ios_data
-
-    def _resolve_features_and_proportions(
-        self, ios_data: Dict[str, np.ndarray]
+    def _stage1_load_features(
+        self,
     ) -> Tuple[Dict[str, np.ndarray], Dict[str, np.ndarray]]:
-        """Resolve variant-aware feature and per-split proportion keys.
+        """Read pseudobulk feature matrices from the HDF5 file and apply the mask.
 
-        Config options
-        --------------
-        preferred_dmr_variant : str or dict, optional
-            A global variant name (e.g. ``"uniform"``) or a per-split
-            mapping (e.g. ``{"valid": "uniform", "test": "uniform_multimodal"}``).
-            When omitted, the first variant found alphabetically is used.
+        The feature mask (shape ``(n_gr_groups, n_pred_classes)``) is produced by
+        the deconvolution pipeline.  It is applied to the pseudobulk matrices read
+        from the consolidated HDF5 file so that the calibration features match the
+        features the deconvolvers were trained on.
 
         Returns
         -------
         features_dict : dict
-            ``{split_name: np.ndarray}``
+            ``{split_name: np.ndarray}`` of shape ``(n_samples, n_selected_features)``.
         proportions_dict : dict
-            ``{split_name: np.ndarray}``
+            ``{split_name: np.ndarray}`` of shape ``(n_samples, n_output_labels)``.
         """
-        preferred_variant = self.config.get("preferred_dmr_variant")
+        self.logger.info(
+            f"Stage 1a: Loading feature mask from {self.features_mask_path}"
+        )
+        mask = np.load(self.features_mask_path)["features_mask"]
+        self.logger.info(f"  Mask shape={mask.shape}, selected={int(mask.sum())}")
 
-        # ── Features ──────────────────────────────────────────────
+        self.logger.info(
+            f"Stage 1a: Reading pseudobulk matrices from {self.pseudobulk_h5_path}"
+        )
         features_dict: Dict[str, np.ndarray] = {}
-        for key, val in ios_data.items():
-            if not key.startswith("features_"):
-                continue
-            remainder = key[len("features_") :]
-            parts = remainder.split("_")
-
-            if len(parts) > 1:
-                # Variant-aware key: features_{split}_{variant}
-                split_name, variant = parts[0], "_".join(parts[1:])
-
-                target_variant = preferred_variant
-                if isinstance(preferred_variant, dict):
-                    target_variant = preferred_variant.get(split_name)
-
-                if target_variant and variant != target_variant:
-                    continue
-                if split_name not in features_dict:
-                    features_dict[split_name] = val
-            else:
-                # Legacy key: features_{split}
-                features_dict[remainder] = val
-
-        self.logger.info(f"  Resolved feature splits: {list(features_dict.keys())}")
+        proportions_dict: Dict[str, np.ndarray] = {}
+        for split_name in self.splits:
+            features, proportions = self.reader.read_pseudobulk_matrices(
+                split_name, num_pred_classes=self.num_input_labels
+            )
+            # features: (n_samples, n_gr_groups, n_pred_classes)
+            features_dict[split_name] = apply_feature_mask(features, mask)
+            proportions_dict[split_name] = proportions[:, : self.num_output_labels]
+            self.logger.info(
+                f"  {split_name}: features={features_dict[split_name].shape}, "
+                f"proportions={proportions_dict[split_name].shape}"
+            )
 
         if "valid" not in features_dict:
             raise ValueError(
                 "'valid' split is required for calibration but was not found "
                 f"in the loaded data. Available: {list(features_dict.keys())}"
             )
-
-        # ── Proportions ───────────────────────────────────────────
-        splits = self.config.get("splits", ["train", "valid", "test"])
-        proportions_dict: Dict[str, np.ndarray] = {}
-        for split_name in splits:
-            pkey = f"proportions_{split_name}"
-            if pkey in ios_data:
-                proportions_dict[split_name] = ios_data[pkey]
-            elif "proportions" in ios_data:
-                proportions_dict[split_name] = ios_data["proportions"]
-
-        if "valid" not in proportions_dict:
-            raise ValueError(
-                "Proportions for 'valid' split are required for calibration."
-            )
-
-        self.logger.info(
-            f"  Resolved proportion splits: {list(proportions_dict.keys())}"
-        )
-        for key, value in proportions_dict.items():
-            value = np.array([y[: self.num_output_labels] for y in value])
-            proportions_dict[key] = value
-
-        for split_name, split_features in features_dict.items():
-            f_shape = split_features.shape
-            if split_name in proportions_dict:
-                p_shape = proportions_dict[split_name].shape
-                self.logger.info(
-                    f"  {split_name}: features={f_shape}, proportions={p_shape}"
-                )
 
         return features_dict, proportions_dict
 
@@ -259,7 +218,7 @@ class CalibratorFittingPipeline:
                 model = XGBoostDeconvolver.load(
                     os.path.join(self.deconvolvers_dir, "xgb_deconvolver.joblib")
                 )
-            if name == "swn":
+            elif name == "swn":
                 weights_path = Path(self.deconvolvers_dir) / "swn_best_deconvolver.pt"
                 metadata_path = (
                     Path(self.deconvolvers_dir) / "swn_architecture_meta.json"
@@ -362,7 +321,7 @@ class CalibratorFittingPipeline:
 
         # ── 2b: Linear calibration ───────────────────────────────
         self.logger.info(f"  [{name}] Fitting linear calibrator ...")
-        linear_calibrator_path = os.path.join(deconv_out, "linear_calibrator.npz")
+        linear_calibrator_path = os.path.join(deconv_out, "linear_calibrator.joblib")
         if os.path.exists(linear_calibrator_path):
             self.logger.info(
                 f"    Found existing linear calibrator at {linear_calibrator_path},"
@@ -580,7 +539,7 @@ class CalibratorFittingPipeline:
                     m = data["test_metrics"]
                     self.logger.info(
                         f"    {calib_name:30s}  "
-                        f"R2={m['overall_r2']:.6f}  "
+                        f"R2={m['r2']:.6f}  "
                         f"LoA=[{m['loa_lower']:.6f}, {m['loa_upper']:.6f}]  "
                         f"LoA(worst)=[{m['worst_class_loa_lower']:.6f},"
                         f" {m['worst_class_loa_upper']:.6f}]  "
@@ -605,7 +564,7 @@ class CalibratorFittingPipeline:
                     {
                         "deconvolver": deconv_name,
                         "calibration_method": calib_name,
-                        "overall_r2": m["overall_r2"],
+                        "r2": m["r2"],
                         "loa_lower": m["loa_lower"],
                         "loa_upper": m["loa_upper"],
                         "worst_class_loa_lower": m["worst_class_loa_lower"],

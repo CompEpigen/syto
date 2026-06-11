@@ -49,7 +49,7 @@ class LinearCalibrator(AbstractCalibrator):
     """
 
     _VALID_NORM_METHODS = (
-        "clip0-normalize",
+        "clip-normalize",
         "simplex-projection",
     )
 
@@ -105,8 +105,8 @@ class LinearCalibrator(AbstractCalibrator):
         Args:
             X: Raw predicted proportions with shape ``(n_samples, n_cell_types)``.
             **kwargs: Additional keyword arguments, including:
-                norm_method: One of ``"clip0-normalize"``, ``"simplex-projection"``
-                    (default: ``"clip0-normalize"``), specifying how to project the
+                norm_method: One of ``"clip-normalize"``, ``"simplex-projection"``
+                    (default: ``"clip-normalize"``), specifying how to project the
                     linearly adjusted predictions back onto the probability simplex
                     if they fall outside due to the linear correction.
                 return_adjusted: If True, also return the linearly adjusted predictions
@@ -115,7 +115,7 @@ class LinearCalibrator(AbstractCalibrator):
             The normalized calibrated predictions, or a tuple of (normalized, adjusted)
             if ``return_adjusted`` is True.
         """
-        norm_method = kwargs.get("norm_method", "clip0-normalize")
+        norm_method = kwargs.get("norm_method", "clip-normalize")
         return_adjusted = kwargs.get("return_adjusted", False)
 
         check_is_fitted(self)
@@ -136,7 +136,7 @@ class LinearCalibrator(AbstractCalibrator):
         # Linear correction can push some values slightly outside the simplex.
         # Project back onto the simplex using the chosen method.
         final_predictions = None
-        if norm_method == "clip0-normalize":
+        if norm_method == "clip-normalize":
             final_predictions = _clip0_normalize(adjusted_predictions)
         elif norm_method == "simplex-projection":
             final_predictions = _project_onto_simplex(adjusted_predictions)
