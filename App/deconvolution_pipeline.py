@@ -3,31 +3,30 @@ Deconvolution Model Fitting Pipeline
 =====================================
 
 End-to-end pipeline orchestrating:
-    1. Pure cell-type profile generation from predicted splits
+    1. Pure cell-type profile loading from a consolidated pseudobulk HDF5 file
     2. Feature selection via cutoff-based mask
     3. Fitting / training deconvolution models (XGB, SWN, MLP, NNLS, PSLS)
-       with optional linear calibration
+
+The pipeline consumes the single ``pseudobulk.h5`` file produced by the new
+:class:`~syto.data.pseudobulk_generator.PseudobulkGenerator` (see
+``App/pseudobulk_pipeline.py``).  Both the pseudobulk samples (model inputs /
+outputs) and the pure cell-type profiles (used for feature selection and the
+least-squares reference matrix) are read from this single file.
 """
 
 import json
 import logging
 import os
-import pickle
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List
 
 import numpy as np
 import pandas as pd
 import torch
-import torch.nn as nn
 
-from syto.data.pure_profile_generation import (
-    extract_pure_feature_matrix,
-    generate_pure_profiles,
-)
+from syto.data.pseudobulk_hdf5_utils import PseudobulkHDF5Reader
 from syto.deconvolution.evaluation import compute_deconvolution_metrics
 from syto.deconvolution.feature_selection import (
     apply_feature_mask,
-    apply_mask_to_ios,
     compute_feature_mask,
     compute_feature_ratios,
     generate_feature_selection_plot,
@@ -36,7 +35,6 @@ from syto.deconvolution.least_squares_deconvolvers import (
     NNLSDeconvolver,
     PSLSDeconvolver,
 )
-from syto.calibration.linear_calibrator import LinearCalibrator
 from syto.deconvolution.xgbdeconvolver import (
     XGBoostDeconvolver,
     XGBDeconvolverConfig,
@@ -67,6 +65,10 @@ class DeconvolutionFittingPipeline:
             self.labels_dict: Dict[int, str] = {int(k): v for k, v in raw.items()}
         self.num_output_labels = config.get("num_output_labels", len(self.labels_dict))
         self.num_input_labels = config.get("num_input_labels", self.num_output_labels)
+
+        # Input: consolidated pseudobulk HDF5 file (pure profiles + pseudobulks)
+        self.pseudobulk_h5_path = config["pseudobulk_h5_path"]
+        self.reader = PseudobulkHDF5Reader(self.pseudobulk_h5_path, logger=self.logger)
 
         # Output
         self.output_dir = config["output_dir"]
@@ -103,45 +105,33 @@ class DeconvolutionFittingPipeline:
         return results
 
     # ═══════════════════════════════════════════════════════════════
-    #  Stage 1: Pure profile generation
+    #  Stage 1: Pure profile loading
     # ═══════════════════════════════════════════════════════════════
 
-    def _stage1_pure_profiles(self) -> list:
-        """Generate or load purified cell-type profiles."""
-        pure_profiles_path = self.config.get("pure_profiles_path")
+    def _stage1_pure_profiles(self) -> Dict[str, np.ndarray]:
+        """Load purified cell-type profiles from the pseudobulk HDF5 file.
 
-        if pure_profiles_path and os.path.exists(pure_profiles_path):
-            self.logger.info(
-                f"Stage 1: Loading pre-computed pure profiles from "
-                f"{pure_profiles_path}"
-            )
-            with open(pure_profiles_path, "rb") as f:
-                pure_profiles = pickle.load(f)
-            self.logger.info(f"  Loaded {len(pure_profiles)} pure profiles")
-            return pure_profiles
-
-        self.logger.info("Stage 1: Generating purified cell-type profiles ...")
-
-        # Load predicted splits
-        splits_data = self._load_predicted_splits()
-        n_read_per_split = self.config.get("n_read_per_split", 475_000)
-
-        pure_profiles = generate_pure_profiles(
-            splits=splits_data,
-            num_output_labels=self.num_output_labels,
-            num_input_labels=self.num_input_labels,
-            n_read_per_split=n_read_per_split,
-            labels_dict=self.labels_dict,
-        )
-
-        # Save
-        save_path = os.path.join(self.output_dir, "pure_profiles.pkl")
-        with open(save_path, "wb") as f:
-            pickle.dump(pure_profiles, f)
+        Returns
+        -------
+        dict
+            Mapping ``split_name -> pure feature matrix`` of shape
+            ``(n_cell_types, n_gr_groups, n_pred_classes)`` containing only the
+            ``prediction_{i}_wavg`` columns.
+        """
         self.logger.info(
-            f"  Generated and saved {len(pure_profiles)} pure profiles "
-            f"to {save_path}"
+            f"Stage 1: Loading pure cell-type profiles from {self.pseudobulk_h5_path}"
         )
+
+        pure_profiles: Dict[str, np.ndarray] = {}
+        for split_name in self.splits:
+            matrix = self.reader.read_pure_feature_matrix(
+                split_name, num_pred_classes=self.num_input_labels
+            )
+            pure_profiles[split_name] = matrix
+            self.logger.info(
+                f"  {split_name}: pure profiles {matrix.shape} "
+                f"(cell_types, gr_groups, pred_classes)"
+            )
 
         return pure_profiles
 
@@ -149,8 +139,10 @@ class DeconvolutionFittingPipeline:
     #  Stage 2: Feature selection
     # ═══════════════════════════════════════════════════════════════
 
-    def _stage2_feature_selection(self, pure_profiles: list) -> Dict[str, np.ndarray]:
-        """Compute feature mask and apply to full IO matrices."""
+    def _stage2_feature_selection(
+        self, pure_profiles: Dict[str, np.ndarray]
+    ) -> Dict[str, np.ndarray]:
+        """Compute feature mask and apply it to the pseudobulk feature matrices."""
         ios_feature_selected_path = self.config.get("ios_feature_selected_path")
 
         if ios_feature_selected_path and os.path.exists(ios_feature_selected_path):
@@ -183,14 +175,13 @@ class DeconvolutionFittingPipeline:
                 f"Stage 2: Feature selection with cutoff={self.cutoff} ..."
             )
 
-        # Compute mask from validation split
-        pure_valid = extract_pure_feature_matrix(
-            pure_profiles,
-            self.num_input_labels,
-            self.num_output_labels,
-            split_idx=1,
-            splits=self.splits,
-        )
+        # Compute mask from the validation split's pure profiles
+        if "valid" not in pure_profiles:
+            raise ValueError(
+                "A 'valid' split is required to compute the feature mask, "
+                f"but only splits {list(pure_profiles)} were loaded."
+            )
+        pure_valid = pure_profiles["valid"]
         valid_ratios = compute_feature_ratios(pure_valid)
 
         if getattr(self, "top_features", None) is not None:
@@ -226,19 +217,26 @@ class DeconvolutionFittingPipeline:
         np.savez_compressed(mask_path, features_mask=mask)
         self.logger.info(f"  Saved feature mask to {mask_path}")
 
-        # Apply mask to full IO matrices
-        ios_path = self.config["ios_full_matrices_path"]
+        # Read pseudobulk matrices per split and apply the mask
+        feature_data: Dict[str, np.ndarray] = {"mask": mask}
+        for split_name in self.splits:
+            features, proportions = self.reader.read_pseudobulk_matrices(
+                split_name, num_pred_classes=self.num_input_labels
+            )
+            # features: (n_samples, n_gr_groups, n_pred_classes)
+            feature_data[f"features_{split_name}"] = apply_feature_mask(features, mask)
+            feature_data[f"proportions_{split_name}"] = proportions
+            self.logger.info(
+                f"  {split_name}: {features.shape[0]} pseudobulks -> "
+                f"{feature_data[f'features_{split_name}'].shape[1]} selected features"
+            )
+
+        # Persist the feature-selected matrices for reuse / inspection
         filtered_path = os.path.join(
             self.output_dir, f"features_cutoff_{self.cutoff}.npz"
         )
-        feature_data = apply_mask_to_ios(
-            ios_path=ios_path,
-            mask=mask,
-            output_path=filtered_path,
-            cutoff=self.cutoff,
-            splits=self.splits,
-        )
-        feature_data["mask"] = mask
+        np.savez_compressed(filtered_path, **feature_data)
+        self.logger.info(f"  Saved feature-selected matrices to {filtered_path}")
 
         # Optional plot
         if self.config.get("generate_feature_selection_plot", True):
@@ -250,7 +248,7 @@ class DeconvolutionFittingPipeline:
                 f"feature_selection_cutoff_{self.cutoff}.png",
             )
             generate_feature_selection_plot(
-                pure_profiles=pure_profiles,
+                pure_matrices_per_split=pure_profiles,
                 num_input_labels=self.num_input_labels,
                 num_output_labels=self.num_output_labels,
                 cutoff=self.cutoff,
@@ -270,48 +268,22 @@ class DeconvolutionFittingPipeline:
 
     def _stage3_fit_deconvolvers(
         self,
-        pure_profiles: list,
+        pure_profiles: Dict[str, np.ndarray],
         feature_data: Dict[str, np.ndarray],
     ) -> Dict[str, Any]:
-        """Fit all configured deconvolvers and optional calibrators."""
+        """Fit all configured deconvolvers."""
         self.logger.info("Stage 3: Fitting deconvolvers ...")
 
         deconvolvers_cfg = self.config.get("deconvolvers", [])
 
         # Extract feature dict mapping split names to arrays.
-        # Handles both legacy keys (features_{split}) and variant-aware
-        # keys (features_{split}_{variant}).  When multiple variants
-        # exist for a split, the preferred variant from config is used
-        # (default: first variant found alphabetically).
-        preferred_variant = self.config.get("preferred_dmr_variant")
-        features_dict = {}
-        for key, val in feature_data.items():
-            if not key.startswith("features_"):
-                continue
-            remainder = key[len("features_") :]
-            # Determine if this is a variant key (split_variant) or legacy (split)
-            parts = remainder.split("_")
+        features_dict = {
+            key[len("features_") :]: val
+            for key, val in feature_data.items()
+            if key.startswith("features_")
+        }
 
-            if len(parts) > 1:
-                split_name, variant = parts[0], "_".join(parts[1:])
-
-                # Resolve preferred variant (handle dictionary mapping per split)
-                target_variant = preferred_variant
-                if isinstance(preferred_variant, dict):
-                    target_variant = preferred_variant.get(split_name)
-
-                if target_variant and variant != target_variant:
-                    continue
-                # Only store if not already occupied (first variant wins)
-                if split_name not in features_dict:
-                    features_dict[split_name] = val
-            else:
-                # Legacy key: features_{split}
-                features_dict[remainder] = val
-
-        if not np.any(["train" in x for x in features_dict]) or not np.any(
-            ["valid" in x for x in features_dict]
-        ):
+        if "train" not in features_dict or "valid" not in features_dict:
             raise ValueError(
                 "Both 'train' and 'valid' splits are required for fitting deconvolvers."
             )
@@ -329,12 +301,6 @@ class DeconvolutionFittingPipeline:
                 "Proportions for both 'train' and 'valid' splits are required."
             )
 
-        # HOT FIX of the incorrect length of proportion vector for Hard Labels
-        # TODO: Fix at source where data is generated.
-        for key, value in proportions_dict.items():
-            value = np.array([y[: self.num_output_labels] for y in value])
-            proportions_dict[key] = value
-
         mask = feature_data["mask"]
 
         results: Dict[str, Any] = {}
@@ -345,15 +311,13 @@ class DeconvolutionFittingPipeline:
 
             try:
                 if name == "xgb":
-                    model, metrics = self._fit_xgb(
-                        deconv_cfg, features_dict, proportions_dict
-                    )
+                    metrics = self._fit_xgb(deconv_cfg, features_dict, proportions_dict)
                 elif name in ("swn", "mlp"):
-                    model, metrics = self._fit_nn(
+                    metrics = self._fit_nn(
                         name, deconv_cfg, features_dict, proportions_dict
                     )
                 elif name in ("nnls", "psls"):
-                    model, metrics = self._fit_ls(
+                    metrics = self._fit_ls(
                         name,
                         deconv_cfg,
                         pure_profiles,
@@ -367,14 +331,6 @@ class DeconvolutionFittingPipeline:
                     continue
 
                 results[name] = {"metrics": metrics}
-
-                # Optional calibration
-                if deconv_cfg.get("calibrate", False):
-                    self.logger.info(f"  Fitting linear calibrator for {name}")
-                    calib_metrics = self._fit_calibrator(
-                        name, model, deconv_cfg, features_dict, proportions_dict
-                    )
-                    results[f"{name}_calibrated"] = {"metrics": calib_metrics}
 
             except Exception as e:  # pylint: disable=broad-exception-caught
                 self.logger.error(f"  Failed to fit '{name}': {e}", exc_info=True)
@@ -394,35 +350,48 @@ class DeconvolutionFittingPipeline:
         cfg: dict,
         features: Dict[str, np.ndarray],
         proportions: Dict[str, np.ndarray],
-    ) -> Tuple[XGBoostDeconvolver, dict]:
+    ) -> dict:
         """Fit XGBoost deconvolver."""
         # pylint: disable=invalid-name
-        params = cfg.get("params", {})
-        xgb_config = XGBDeconvolverConfig(**params)
+        save_path = os.path.join(self.output_dir, "xgb_deconvolver.joblib")
 
-        X_train = features["train"]
         X_val = features["valid"]
         X_test = features.get("test")
 
-        y_train = proportions["train"]
         y_val = proportions["valid"]
         y_test = proportions.get("test")
 
-        model = XGBoostDeconvolver(
-            config=xgb_config,
-            output_transform="clip_normalize",
-            n_dmr_groups=self.num_output_labels,
-            n_pred_classes=self.num_output_labels,
-            n_cell_types=self.num_output_labels,
-        )
+        if os.path.exists(save_path):
+            self.logger.info(
+                f"  XGB model already exists at {save_path}, loading instead of fitting."
+            )
+            model = XGBoostDeconvolver.load(save_path)
+        else:
+            params = cfg.get("params", {})
+            xgb_config = XGBDeconvolverConfig(**params)
 
-        model.fit(
-            X=X_train,
-            y=y_train,
-            X_val=X_val,
-            y_val=y_val,
-            verbose=1,
-        )
+            model = XGBoostDeconvolver(
+                config=xgb_config,
+                output_transform="clip_normalize",
+                n_gr_groups=self.num_output_labels,
+                n_pred_classes=self.num_output_labels,
+                n_cell_types=self.num_output_labels,
+            )
+
+            X_train = features["train"]
+            y_train = proportions["train"]
+
+            model.fit(
+                X=X_train,
+                y=y_train,
+                X_val=X_val,
+                y_val=y_val,
+                verbose=1,
+            )
+
+            # Save
+            model.save(save_path)
+            self.logger.info(f"    Saved XGB model to {save_path}")
 
         # Evaluate on test or fallback to valid
         eval_X = X_test if X_test is not None else X_val
@@ -433,12 +402,7 @@ class DeconvolutionFittingPipeline:
         metrics = compute_deconvolution_metrics(test_pred, eval_y)
         self.logger.info(f"    XGB {eval_name} MAE: {metrics['mae']:.6f}")
 
-        # Save
-        save_path = os.path.join(self.output_dir, "xgb_deconvolver.joblib")
-        model.save(save_path)
-        self.logger.info(f"    Saved XGB model to {save_path}")
-
-        return model, metrics
+        return metrics
 
     # ───────────────────────────────────────────────────────────────
     #  Neural Network (SWN / MLP)
@@ -450,48 +414,68 @@ class DeconvolutionFittingPipeline:
         cfg: dict,
         features: Dict[str, np.ndarray],
         proportions: Dict[str, np.ndarray],
-    ) -> Tuple[nn.Module, dict]:
+    ) -> dict:
         """Fit a neural network deconvolver (SWN or MLP)."""
+        assert name in ("swn", "mlp"), f"Unknown NN architecture: {name}"
         # pylint: disable=invalid-name
+        save_path = os.path.join(self.output_dir, f"{name}_best_deconvolver.pt")
+        meta_path = os.path.join(self.output_dir, f"{name}_architecture_meta.json")
+
         params = cfg.get("params", {})
-        X_train = features["train"]
+        device = params.get("device", "cuda" if torch.cuda.is_available() else "cpu")
+
         X_val = features["valid"]
         X_test = features.get("test")
 
-        y_train = proportions["train"]
         y_val = proportions["valid"]
         y_test = proportions.get("test")
 
-        n_input_features = X_train.shape[1]
-
-        if name == "swn":
-            model = SWNDeconvolver(
-                n_input_features, self.num_output_labels, logger=self.logger
+        if os.path.exists(save_path) and os.path.exists(meta_path):
+            self.logger.info(
+                f"  {name.upper()} model already exists at {save_path} with metadata at {meta_path}, "
+                "loading instead of fitting."
             )
-        elif name == "mlp":
-            model = MLPDeconvolver(
-                n_input_features, self.num_output_labels, logger=self.logger
-            )
+            if name == "swn":
+                model = SWNDeconvolver.load(path=save_path, metadata_path=meta_path)
+            else:
+                model = MLPDeconvolver.load(path=save_path, metadata_path=meta_path)
         else:
-            raise ValueError(f"Unknown NN architecture: {name}")
 
-        device = params.get("device", "cuda" if torch.cuda.is_available() else "cpu")
+            n_input_features = X_train.shape[1]
 
-        model.fit(
-            X=X_train,
-            y=y_train,
-            X_val=X_val,
-            y_val=y_val,
-            n_epochs=params.get("n_epochs", 100),
-            batch_size=params.get("batch_size", 64),
-            lr=params.get("lr", 1e-3),
-            weight_decay=params.get("weight_decay", 1e-4),
-            early_stopping_metric=params.get("early_stopping_metric", "val_mae"),
-            early_stopping_patience=params.get("early_stopping_patience", 15),
-            scheduler_type=params.get("scheduler_type", "plateau"),
-            verbose=params.get("verbose", 1),
-            device=device,
-        )
+            if name == "swn":
+                model = SWNDeconvolver(
+                    n_input_features, self.num_output_labels, logger=self.logger
+                )
+            else:
+                model = MLPDeconvolver(
+                    n_input_features, self.num_output_labels, logger=self.logger
+                )
+
+            X_train = features["train"]
+            y_train = proportions["train"]
+
+            model.fit(
+                X=X_train,
+                y=y_train,
+                X_val=X_val,
+                y_val=y_val,
+                n_epochs=params.get("n_epochs", 100),
+                batch_size=params.get("batch_size", 64),
+                lr=params.get("lr", 1e-3),
+                weight_decay=params.get("weight_decay", 1e-4),
+                early_stopping_metric=params.get("early_stopping_metric", "val_mae"),
+                early_stopping_patience=params.get("early_stopping_patience", 15),
+                scheduler_type=params.get("scheduler_type", "plateau"),
+                verbose=params.get("verbose", 1),
+                device=device,
+            )
+
+            # Save
+            model.save(save_path, metadata_path=meta_path)
+            self.logger.info(
+                f"    Saved {name.upper()} model to {save_path} and metadata to {meta_path}"
+            )
 
         # Evaluate on test or fallback to valid
         eval_X = X_test if X_test is not None else X_val
@@ -502,15 +486,7 @@ class DeconvolutionFittingPipeline:
         metrics = compute_deconvolution_metrics(test_pred, eval_y)
         self.logger.info(f"    {name.upper()} {eval_name} MAE: {metrics['mae']:.6f}")
 
-        # Save
-        save_path = os.path.join(self.output_dir, f"{name}_best_deconvolver.pt")
-        meta_path = os.path.join(self.output_dir, f"{name}_architecture_meta.json")
-        model.save(save_path, metadata_path=meta_path)
-        self.logger.info(
-            f"    Saved {name.upper()} model to {save_path} and metadata to {meta_path}"
-        )
-
-        return model, metrics
+        return metrics
 
     # ───────────────────────────────────────────────────────────────
     #  Least Squares (NNLS / PSLS)
@@ -520,12 +496,12 @@ class DeconvolutionFittingPipeline:
         self,
         name: str,
         cfg: dict,
-        pure_profiles: list,
+        pure_profiles: Dict[str, np.ndarray],
         mask: np.ndarray,
         features: Dict[str, np.ndarray],
         proportions: Dict[str, np.ndarray],
         splits: List,
-    ) -> Tuple[Any, dict]:
+    ) -> dict:
         """Fit NNLS or PSLS deconvolver.
 
         The LS deconvolvers use a reference matrix from the **train**
@@ -533,32 +509,42 @@ class DeconvolutionFittingPipeline:
         derived from validation data).
         """
         # pylint: disable=invalid-name
+        save_path = os.path.join(self.output_dir, f"{name}_deconvolver.joblib")
         params = cfg.get("params", {})
 
-        # Build reference matrix from train-split pure profiles
-        pure_train = extract_pure_feature_matrix(
-            pure_profiles,
-            self.num_input_labels,
-            self.num_output_labels,
-            split_idx=0,
-            splits=splits,
-        )
-        # pure_train shape: (n_cell_types, n_dmr_groups, n_pred_classes)
-        # Apply mask to each cell type's profile
-        reference_features = apply_feature_mask(pure_train, mask)
-        # reference_features shape: (n_cell_types, n_selected_features)
-
-        labels = np.arange(self.num_output_labels)
-
-        if name == "nnls":
-            model = NNLSDeconvolver()
-        elif name == "psls":
-            solver_type = params.get("solver_type", "cvxpy")
-            model = PSLSDeconvolver(solver_type=solver_type)
+        if os.path.exists(save_path):
+            self.logger.info(
+                f"  {name.upper()} model already exists at {save_path}, loading instead of fitting."
+            )
+            if name == "nnls":
+                model = NNLSDeconvolver.load(save_path)
+            else:
+                model = PSLSDeconvolver.load(save_path)
         else:
-            raise ValueError(f"Unknown LS variant: {name}")
 
-        model.fit(reference_features, labels)
+            # Build reference matrix from train-split pure profiles
+            train_split = splits[0]
+            pure_train = pure_profiles[train_split]
+            # pure_train shape: (n_cell_types, n_dmr_groups, n_pred_classes)
+            # Apply mask to each cell type's profile
+            reference_features = apply_feature_mask(pure_train, mask)
+            # reference_features shape: (n_cell_types, n_selected_features)
+
+            labels = np.arange(self.num_output_labels)
+
+            if name == "nnls":
+                model = NNLSDeconvolver()
+            elif name == "psls":
+                solver_type = params.get("solver_type", "cvxpy")
+                model = PSLSDeconvolver(solver_type=solver_type)
+            else:
+                raise ValueError(f"Unknown LS variant: {name}")
+
+            model.fit(reference_features, labels)
+
+            # Save
+            model.save(save_path)
+            self.logger.info(f"    Saved {name.upper()} model to {save_path}")
 
         # Evaluate on test or fallback to valid
         X_test = features.get("test")
@@ -572,7 +558,7 @@ class DeconvolutionFittingPipeline:
         eval_name = "test" if X_test is not None else "valid"
 
         if name == "nnls":
-            test_pred, _, _ = model.predict(eval_X, n_workers=1)
+            test_pred = model.predict(eval_X, n_workers=1)
         else:
             n_workers = params.get("n_workers", 2)
             test_pred = model.predict(eval_X, n_workers=n_workers)
@@ -580,88 +566,11 @@ class DeconvolutionFittingPipeline:
         metrics = compute_deconvolution_metrics(test_pred, eval_y)
         self.logger.info(f"    {name.upper()} {eval_name} MAE: {metrics['mae']:.6f}")
 
-        # Save
-        save_path = os.path.join(self.output_dir, f"{name}_deconvolver.joblib")
-        model.save(save_path)
-        self.logger.info(f"    Saved {name.upper()} model to {save_path}")
-
-        return model, metrics
-
-    # ───────────────────────────────────────────────────────────────
-    #  Linear Calibration
-    # ───────────────────────────────────────────────────────────────
-
-    def _fit_calibrator(
-        self,
-        deconv_name: str,
-        model: Any,
-        cfg: dict,
-        features: Dict[str, np.ndarray],
-        proportions: Dict[str, np.ndarray],
-    ) -> dict:
-        """Fit a linear calibrator on validation predictions.
-
-        1. Run the deconvolver on the validation set.
-        2. Fit ``LinearCalibrator(predicted, ground_truth)``.
-        3. Apply calibration to the test predictions.
-        4. Evaluate and save.
-        """
-        # pylint: disable=invalid-name
-        X_val = features["valid"]
-        y_val = proportions["valid"]
-
-        X_test = features.get("test")
-        y_test = proportions.get("test")
-
-        eval_X = X_test if X_test is not None else X_val
-        eval_y = y_test if y_test is not None else y_val
-        eval_name = "test" if X_test is not None else "valid"
-
-        # Get validation predictions
-        val_pred = model.predict(X_val, **cfg.get("params", {}))
-
-        # Fit calibrator
-        calibrator = LinearCalibrator()
-        calibrator.fit(val_pred, y_val)
-
-        # Get test predictions and calibrate
-        test_pred = model.predict(eval_X, **cfg.get("params", {}))
-        calibrated_pred, _ = calibrator.predict(test_pred)
-
-        metrics = compute_deconvolution_metrics(calibrated_pred, eval_y)
-        self.logger.info(
-            f"    {deconv_name}_calibrated {eval_name} MAE: " f"{metrics['mae']:.6f}"
-        )
-
-        # Save calibrator
-        calib_path = os.path.join(
-            self.output_dir, f"{deconv_name}_linear_calibrator.npz"
-        )
-        calibrator.save(calib_path)
-        self.logger.info(f"    Saved calibrator to {calib_path}")
-
         return metrics
 
     # ═══════════════════════════════════════════════════════════════
     #  Helpers
     # ═══════════════════════════════════════════════════════════════
-
-    def _load_predicted_splits(
-        self,
-    ) -> Dict[str, pd.DataFrame]:
-        """Load predicted splits from pickle."""
-        paths = self.config["predicted_splits"]
-        splits_cfg = self.config.get("splits", ["train", "valid", "test"])
-        splits = {}
-
-        self.logger.info("  Loading predicted splits ...")
-        for split_name in splits_cfg:
-            with open(paths[split_name], "rb") as f:
-                splits[split_name] = pickle.load(f)
-
-        sizes = ", ".join(f"{name}={len(df)}" for name, df in splits.items())
-        self.logger.info(f"    {sizes}")
-        return splits
 
     def _log_summary(self, results: Dict[str, Any]) -> None:
         """Log a summary of all fitted models and their test metrics."""

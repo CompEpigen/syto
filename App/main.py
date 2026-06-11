@@ -73,8 +73,7 @@ def validate_config(config: Dict[str, Any], task: str) -> None:
             "labels_dict_path",
         ],
         "fit_deconvolution": [
-            "predicted_splits",
-            "ios_full_matrices_path",
+            "pseudobulk_h5_path",
             "output_dir",
             "labels_dict_path",
         ],

@@ -22,11 +22,6 @@ logger = logging.getLogger(__name__)
 # ─────────────────────────────────────────────────────────────────────
 
 
-from syto.data.pure_profile_generation import (  # noqa: F401
-    extract_pure_feature_matrix,
-)
-
-
 def compute_feature_ratios(pure_matrix: np.ndarray) -> np.ndarray:
     """Compute max / mean ratio for each feature position.
 
@@ -166,69 +161,13 @@ def apply_feature_mask(
         raise ValueError(f"Expected 2-D or 3-D matrix, got {matrix.ndim}-D")
 
 
-def apply_mask_to_ios(
-    ios_path: str, mask: np.ndarray, output_path: str, cutoff: float, splits: list
-) -> dict:
-    """Load full IO matrices, apply the feature mask, and save.
-
-    Supports both **legacy** and **variant-aware** ``.npz`` layouts:
-
-    * Legacy: ``proportions``, ``features_{split}``
-    * Variant-aware: ``proportions_{split}``, ``features_{split}_{variant}``
-
-    Parameters
-    ----------
-    ios_path : str
-        Path to the ``ios_full_matrices.npz`` file.
-    mask : np.ndarray
-        Binary feature mask of shape ``(n_gr_groups, n_pred_classes)``.
-    output_path : str
-        Where to save the filtered ``.npz`` file.
-    cutoff : float
-        Cutoff value used (recorded in the filename for traceability).
-    splits : list
-        Split names to process.
-
-    Returns
-    -------
-    dict
-        Dictionary with proportions and masked features arrays.
-    """
-    data = np.load(ios_path)
-
-    logger.info(
-        f"Applying mask (cutoff={cutoff}) to IO matrices: "
-        f"selected features = {int(mask.sum())}"
-    )
-    result = {}
-
-    # Copy proportions — handle both legacy and per-split keys
-    if "proportions" in data:
-        result["proportions"] = data["proportions"]
-    for key in data.files:
-        if key.startswith("proportions_"):
-            result[key] = data[key]
-
-    # Apply mask to feature arrays — handle both layout variants
-    for key in data.files:
-        if key.startswith("features_"):
-            result[key] = apply_feature_mask(data[key], mask)
-
-    if output_path is not None:
-        os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
-        np.savez_compressed(output_path, **result)
-        logger.info(f"Saved filtered features to {output_path}")
-
-    return result
-
-
 # ─────────────────────────────────────────────────────────────────────
 #  Visualisation
 # ─────────────────────────────────────────────────────────────────────
 
 
 def generate_feature_selection_plot(
-    pure_profiles: list,
+    pure_matrices_per_split: dict,
     num_input_labels: int,
     num_output_labels: int,
     cutoff: float,
@@ -246,8 +185,11 @@ def generate_feature_selection_plot(
 
     Parameters
     ----------
-    pure_profiles : list
-        Output of :func:`generate_pure_profiles`.
+    pure_matrices_per_split : dict
+        Mapping ``split_name -> pure feature matrix`` of shape
+        ``(n_cell_types, n_gr_groups, n_pred_classes)`` (prediction columns
+        only), as returned by
+        :meth:`syto.data.pseudobulk_hdf5_utils.PseudobulkHDF5Reader.read_pure_feature_matrix`.
     num_input_labels : int
         Number of input prediction classes.
     num_output_labels : int
@@ -277,14 +219,8 @@ def generate_feature_selection_plot(
     # --- Build per-split matrices, ratios, and binary masks ---------------
     split_bins = {}
     split_ratios = {}
-    for idx, split_name in enumerate(splits):
-        pure_matrix = extract_pure_feature_matrix(
-            pure_profiles,
-            num_input_labels,
-            num_output_labels,
-            split_idx=idx,
-            splits=splits,
-        )
+    for split_name in splits:
+        pure_matrix = pure_matrices_per_split[split_name]
         ratios = compute_feature_ratios(pure_matrix)
         binary = compute_feature_mask(
             ratios,

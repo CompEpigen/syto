@@ -326,7 +326,7 @@ class PseudoBulkPipeline:
                 )
             self.logger.debug("  Loaded %s from %s", split_name, path)
 
-            splits_data[split_name] = splits_data[split_name].sample(n=100000)
+            splits_data[split_name] = splits_data[split_name]
 
         return splits_data
 
