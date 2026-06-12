@@ -55,4 +55,3 @@ class AbstractReadClassifier(ABC):
     @abstractmethod
     def save(self, path: Union[str, Path]) -> None:
         """Persist the fitted classifier to disk."""
-
