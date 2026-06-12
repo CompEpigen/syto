@@ -613,7 +613,7 @@ class CancerDetectorClassifier(AbstractReadClassifier):
         return result
 
     @mlflow_tracked_fit
-    def fit_split(
+    def fit_classificaton(
         self,
         train_df: pd.DataFrame,
         val_df: Union[pd.DataFrame, None] = None,

@@ -4,10 +4,10 @@ Classifier Fitting Pipeline
 
 Fits a read-level classifier (``EpigenDnabert2``, ``MethylBert``, ``Dismir``,
 ``CancerDetectorClassifier`` or ``LookupClassifier``) on one or more datasets
-via ``AbstractReadClassifier.fit_split``.
+via ``AbstractReadClassifier.fit_classificaton``.
 
 If an ``mlflow`` section is present in the configuration, the tracking URI
-and experiment are configured once up front; each dataset's ``fit_split``
+and experiment are configured once up front; each dataset's ``fit_classificaton``
 call is then recorded as its own MLflow run by the
 ``mlflow_tracked_fit`` decorator on the classifier.
 """
@@ -106,7 +106,7 @@ class ClassifierFittingPipeline:
         )
 
         self.logger.info("Fitting classifier...")
-        classifier.fit_split(
+        classifier.fit_classificaton(
             train_df=train_df,
             val_df=val_df,
             output_dir=out_dir,

@@ -1,16 +1,16 @@
 """
-MLflow tracking decorator for ``AbstractReadClassifier.fit_split`` implementations.
+MLflow tracking decorator for ``AbstractReadClassifier.fit_classificaton`` implementations.
 
 Rather than re-introducing a monolithic "experiment wrapper" per model
-architecture, ``mlflow_tracked_fit`` wraps any ``fit_split`` method that
+architecture, ``mlflow_tracked_fit`` wraps any ``fit_classificaton`` method that
 follows the ``AbstractReadClassifier`` signature
-(``fit_split(self, train_df, val_df=None, output_dir=None, **kwargs)``) and
+(``fit_classificaton(self, train_df, val_df=None, output_dir=None, **kwargs)``) and
 records the call as an MLflow run:
 
 - hyperparameters from ``kwargs`` (and dataset sizes) are logged as params
-- everything written to ``output_dir`` by ``fit_split`` is logged as run
+- everything written to ``output_dir`` by ``fit_classificaton`` is logged as run
   artifacts
-- train/validation metrics that ``fit_split`` already computed (exposed via
+- train/validation metrics that ``fit_classificaton`` already computed (exposed via
   ``classifier.history``, a list of per-fit metric dicts with ``train_*``/
   ``val_*`` keys) are logged as metrics
 """
@@ -44,11 +44,11 @@ def _flatten_for_mlflow(prefix: str, value: Any, out: Dict[str, Any]) -> None:
 
 
 def _fit_metrics(classifier) -> Dict[str, float]:
-    """Pull the ``train_*``/``val_*`` metrics from the most recent ``fit_split`` call.
+    """Pull the ``train_*``/``val_*`` metrics from the most recent ``fit_classificaton`` call.
 
     Classifiers record per-fit metrics (computed via ``compute_metrics`` /
     ``compute_metrics_soft_labels``) in ``self.history``, a list of dicts
-    appended to on each ``fit_split`` call. Returns the scalar ``train_*``/
+    appended to on each ``fit_classificaton`` call. Returns the scalar ``train_*``/
     ``val_*`` entries of the last record, or ``{}`` if unavailable.
     """
     history = getattr(classifier, "history", None)
@@ -64,25 +64,25 @@ def _fit_metrics(classifier) -> Dict[str, float]:
     }
 
 
-def mlflow_tracked_fit(fit_split: Callable) -> Callable:
-    """Decorate ``fit_split`` so each call is recorded as an MLflow run.
+def mlflow_tracked_fit(fit_classificaton: Callable) -> Callable:
+    """Decorate ``fit_classificaton`` so each call is recorded as an MLflow run.
 
     Recognized (and consumed) ``kwargs``:
 
     - ``track_with_mlflow`` (bool, default ``True``): set to ``False`` to run
-      ``fit_split`` without any MLflow involvement (e.g. in unit tests).
+      ``fit_classificaton`` without any MLflow involvement (e.g. in unit tests).
     - ``mlflow_run_name`` (str): name for the MLflow run.
     - ``mlflow_tags`` (dict): extra tags to set on the run.
 
     The tracking URI and experiment are expected to already be configured
     (e.g. via ``mlflow.set_tracking_uri`` / ``mlflow.set_experiment``) before
-    ``fit_split`` is called.
+    ``fit_classificaton`` is called.
     """
 
-    @functools.wraps(fit_split)
+    @functools.wraps(fit_classificaton)
     def wrapper(self, train_df, val_df=None, output_dir=None, **kwargs):
         if not kwargs.pop("track_with_mlflow", True):
-            return fit_split(
+            return fit_classificaton(
                 self, train_df, val_df=val_df, output_dir=output_dir, **kwargs
             )
 
@@ -105,7 +105,7 @@ def mlflow_tracked_fit(fit_split: Callable) -> Callable:
             mlflow.log_params(params)
 
             try:
-                result = fit_split(
+                result = fit_classificaton(
                     self, train_df, val_df=val_df, output_dir=output_dir, **kwargs
                 )
             except Exception as exc:
