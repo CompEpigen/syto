@@ -8,29 +8,10 @@ import logging
 import argparse
 import sys
 import os
-from pathlib import Path
 from typing import Dict, Any
+import shutil
 
 import yaml
-from syto.classification.experiment_wrappers import (
-    AbstractMLFlowExperiment,
-    TransformersMLFlowExperiment,
-)
-
-# pylint: disable=import-outside-toplevel
-
-# Add parent directory to path for imports
-sys.path.append(str(Path(__file__).parent.parent))
-
-# pylint: disable=wrong-import-position
-from syto.classification.experiment_wrappers import (
-    DismirMLflowExperiment,
-    EpigenBERT2MLflowExperiment,
-    MethylBertMLflowExperiment,
-)
-from syto.classification.classifiers.dnabert2 import (
-    TrainingArguments,
-)  # TODO - must be different for MethylBERT
 
 
 def setup_logging(verbose: bool = False, log_file: str = None):
@@ -61,7 +42,7 @@ def load_config(config_path: str) -> Dict[str, Any]:
 def validate_config(config: Dict[str, Any], task: str) -> None:
     """Validate configuration for the specified task."""
     required_fields = {
-        "fine_tune": ["model", "data_path", "max_sequence_length"],
+        "classifier_fit": ["model", "data_path", "max_sequence_length"],
         "pretrain": ["model", "data_path"],  # Add pretrain requirements
         "inference": [
             "classifier",
@@ -107,124 +88,27 @@ def validate_config(config: Dict[str, Any], task: str) -> None:
         "fit_calibration",
         "confidence_intervals",
     ):
-        model = config["classifier"]["classifier_type"].lower()
-        if model not in ["methylbert", "dismir", "cancer_detector", "lookup"]:
+        if task in ("classifier_fit", "pretrain"):
+            model = config["model"]["architecture"].lower()
+        else:
+            model = config["classifier"]["classifier_type"].lower()
+        if model not in [
+            "methylbert",
+            "dismir",
+            "cancer_detector",
+            "lookup",
+            "epigenbert2",
+        ]:
             raise ValueError(f"Unknown model architecture: {model}")
 
 
-def create_experiment(
-    config: Dict[str, Any], logger: logging.Logger
-) -> AbstractMLFlowExperiment:
-    """Create the appropriate experiment based on configuration."""
-    model_arch = config["model"]["architecture"].lower()
-    data_path = config["data_path"]
-    max_seq_length = config["max_sequence_length"]
+def run_classifier_fit(config: Dict[str, Any], logger: logging.Logger) -> None:
+    """Run classifier fitting workflow."""
+    from classifier_fit_pipeline import ClassifierFittingPipeline
 
-    # MLflow configuration
-    mlflow_config = config.get("mlflow", {})
-
-    experiment_name = None
-    tracking_uri = None
-
-    experiment_name = mlflow_config.get("experiment_name")
-    tracking_uri = mlflow_config.get("tracking_uri")
-
-    if not experiment_name:
-        raise ValueError("MLflow is enabled but 'experiment_name' is not provided")
-
-    logger.info(f"MLflow enabled - Experiment: {experiment_name}")
-    if tracking_uri:
-        logger.info(f"MLflow tracking URI: {tracking_uri}")
-
-    # Model-specific parameters
-    model_config = config["model"]
-
-    if model_arch == "dismir":
-        return DismirMLflowExperiment(
-            data_path=data_path,
-            experiment_name=experiment_name,
-            tracking_uri=tracking_uri,
-            max_sequence_length=max_seq_length,
-            model_flavor=model_config.get("flavor", "lstm"),
-            splits=config.get("splits", ["train", "valid", "test"]),
-        )
-    if model_arch == "epigenbert2":
-        return EpigenBERT2MLflowExperiment(
-            data_path=data_path,
-            experiment_name=experiment_name,
-            tracking_uri=tracking_uri,
-            max_sequence_length=max_seq_length,
-            use_cpg_methylation=model_config.get("use_cpg_methylation", True),
-            use_m6a_methylation=model_config.get("use_m6a_methylation", False),
-            foundation_model_huggingface=model_config.get(
-                "foundation_model", "zhihan1996/DNABERT-2-117M"
-            ),
-            splits=config.get("splits", ["train", "valid", "test"]),
-            use_triton=model_config.get("use_triton", False),
-        )
-    if model_arch == "methylbert":
-        return MethylBertMLflowExperiment(
-            data_path=data_path,
-            experiment_name=experiment_name,
-            tracking_uri=tracking_uri,
-            max_sequence_length=max_seq_length,
-            foundation_model_huggingface=model_config.get(
-                "foundation_model", "hanyangii/methylbert_hg19_12l"
-            ),
-            splits=config.get("splits", ["train", "valid", "test"]),
-        )
-
-    raise ValueError(f"Unknown model architecture: {model_arch}")
-
-
-def run_fine_tuning(config: Dict[str, Any], logger: logging.Logger) -> None:
-    """Run fine-tuning based on configuration."""
-
-    # Create experiment
-    experiment = create_experiment(config, logger)
-
-    # Get training configuration
-    training_config = config.get("training", {})
-    model_arch = config["model"]["architecture"].lower()
-
-    # Dataset selection
-    datasets = config.get("datasets", "all")
-
-    if datasets == "all":
-        # Train on all available datasets
-        logger.info("Training on all available datasets")
-        if model_arch == "dismir":
-            experiment.run_full_experiment(**training_config)
-        else:
-            # For transformer models, check if custom TrainingArguments provided
-            if "training_arguments" in training_config:
-                args_dict = training_config["training_arguments"]
-                training_args = TrainingArguments(**args_dict)
-                experiment.run_full_experiment(training_args=training_args)
-            else:
-                experiment.run_full_experiment(**training_config)
-    else:
-        # Train on specific datasets
-        if isinstance(datasets, str):
-            datasets = [datasets]
-
-        for dataset_name in datasets:
-            logger.info(f"Training on dataset: {dataset_name}")
-
-            if model_arch == "dismir":
-                experiment.train_dataset(dataset_name, **training_config)
-            else:
-                # For transformer models
-                assert isinstance(
-                    experiment, TransformersMLFlowExperiment
-                ), "Expected a transformer experiment instance"
-                if "training_arguments" in training_config:
-                    args_dict = training_config["training_arguments"]
-                    training_args = TrainingArguments(**args_dict)
-                    # pylint: disable-next=unexpected-keyword-arg
-                    experiment.train_dataset(dataset_name, training_args=training_args)
-                else:
-                    experiment.train_dataset(dataset_name, **training_config)
+    logger.info("Starting classifier fitting pipeline")
+    pipeline = ClassifierFittingPipeline(config=config, logger=logger)
+    pipeline.run()
 
 
 def run_inference(config: Dict[str, Any], logger: logging.Logger) -> None:
@@ -317,10 +201,10 @@ def main():
         epilog="""
 Examples:
   # Fine-tune using configuration file
-  python main.py --task fine_tune --config config/fine_tune_epigenbert2.yaml
+  python main.py --task classifier_fit --config config/classifier_fit_epigenbert2.yaml
   
   # Fine-tune with command-line overrides
-  python main.py --task fine_tune --config config/base.yaml \\
+  python main.py --task classifier_fit --config config/base.yaml \\
     --model epigenbert2 --max-seq-length 1000 --data-path /data/methylation
   
   # Run inference
@@ -333,7 +217,7 @@ Examples:
         "--task",
         choices=[
             "pretrain",
-            "fine_tune",
+            "classifier_fit",
             "inference",
             "generate_pseudobulk",
             "fit_deconvolution",
@@ -474,9 +358,14 @@ Examples:
             )
             return 0
 
+        output_dir = config["output"]["output_dir"]
+        os.makedirs(output_dir, exist_ok=True)
+        shutil.copy(args.config, output_dir)
+        logger.info(f"Copied config to {output_dir}")
+
         # Execute task
-        if args.task == "fine_tune":
-            run_fine_tuning(config, logger)
+        if args.task == "classifier_fit":
+            run_classifier_fit(config, logger)
         elif args.task == "inference":
             run_inference(config, logger)
         elif args.task == "pretrain":

@@ -31,3 +31,27 @@ class AbstractReadClassifier(ABC):
     @abstractmethod
     def load(cls, path: Union[str, Path], **kwargs) -> "AbstractReadClassifier":
         """Load a ReadClassifier from a checkpoint."""
+
+    @abstractmethod
+    def fit_classificaton(
+        self,
+        train_df: pd.DataFrame,
+        val_df: Union[pd.DataFrame, None] = None,
+        output_dir: Union[str, Path, None] = None,
+        **kwargs,
+    ) -> "AbstractReadClassifier":
+        """Fit the classifier on training data.
+
+        Args:
+            train_df: Training DataFrame with read-level data.
+            val_df: Optional validation DataFrame for early stopping / metrics.
+            output_dir: Where to save checkpoints and artifacts.
+            **kwargs: Classifier-specific hyperparameters.
+
+        Returns:
+            self (the fitted classifier instance).
+        """
+
+    @abstractmethod
+    def save(self, path: Union[str, Path]) -> None:
+        """Persist the fitted classifier to disk."""

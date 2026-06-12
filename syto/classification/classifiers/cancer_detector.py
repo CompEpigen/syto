@@ -24,6 +24,7 @@ from syto.classification.classifiers.abstract_read_classifier import (
     AbstractReadClassifier,
 )
 from syto.classification.evaluation import compute_metrics
+from syto.classification.mlflow_tracking import mlflow_tracked_fit
 
 _module_logger = logging.getLogger(__name__)
 
@@ -157,6 +158,7 @@ class CancerDetectorClassifier(AbstractReadClassifier):
         eps_beta_fit: float = 1e-2,
         class_prior_type: str = "uniform",
         val_data: pd.DataFrame = None,
+        **kwargs,
     ) -> "CancerDetectorClassifier":
         """Fit Beta distributions for every (marker, class) pair and compute
         class priors.
@@ -514,8 +516,10 @@ class CancerDetectorClassifier(AbstractReadClassifier):
             )
 
     @classmethod
-    def load(cls, path: str, **kwargs) -> "CancerDetectorClassifier":
-        """Load model parameters from a .pkl file.
+    def load(
+        cls, path: Union[str, None] = None, **kwargs
+    ) -> "CancerDetectorClassifier":
+        """Load model parameters from a .pkl file, or build a fresh instance if path is None.
 
         Args:
             path: Path to the .pkl file from which to load the model parameters.
@@ -523,6 +527,8 @@ class CancerDetectorClassifier(AbstractReadClassifier):
         Returns:
             An instance of ``CancerDetectorClassifier`` with the loaded parameters.
         """
+        if path is None:
+            return cls()
 
         file_extension = Path(path).suffix
 
@@ -653,3 +659,18 @@ class CancerDetectorClassifier(AbstractReadClassifier):
         for i, col in enumerate(pred_cols):
             result[col] = probabilities[:, i]
         return result
+
+    @mlflow_tracked_fit
+    def fit_classificaton(
+        self,
+        train_df: pd.DataFrame,
+        val_df: Union[pd.DataFrame, None] = None,
+        output_dir: Union[str, Path, None] = None,
+        **kwargs,
+    ) -> "CancerDetectorClassifier":
+        """Fit the classifier on training data for compatibility with AbstractReadClassifier."""
+        self.fit(train_data=train_df, val_data=val_df, **kwargs)
+        if output_dir:
+            Path(output_dir).mkdir(parents=True, exist_ok=True)
+            self.save(Path(output_dir) / "cancer_detector.joblib")
+        return self
