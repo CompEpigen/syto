@@ -1,0 +1,118 @@
+# ══════════════════════════════════════════════════════════════════════════════
+# Deconvolution Model Fitting Configuration (HDF5 / pseudobulk v2)
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# This configuration drives the reworked deconvolution fitting pipeline
+# (App/deconvolution_pipeline.py) which consumes the single consolidated
+# `pseudobulk.h5` file produced by the new PseudobulkGenerator
+# (see App/pseudobulk_pipeline.py and App/config/pseudobulk/pseudobulk_v2_template.yaml).
+#
+# Both the pseudobulk samples (model inputs/outputs) and the pure cell-type
+# profiles (used for feature selection and the least-squares reference matrix)
+# are read directly from this HDF5 file.
+#
+# Usage:
+#   python App/main.py --task fit_deconvolution --config App/config/deconvolution/new_deconvolution_template.yaml
+
+# ══════════════════════════════════════════════════════════════════════════════
+# INPUT DATA
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Consolidated pseudobulk HDF5 file (output of the pseudobulk v2 pipeline).
+# It must contain, per split:
+#   - outputs/{split}/pseudobulks/i_{idx}/{aggregated_features,target_proportions,...}
+#   - outputs/{split}/pure_profiles/{feature_matrices,uniform_prior,...}
+pseudobulk_h5_path: Data/extended_proportions/pseudobulk_v2/cancer_detector_soft_labels_uniform/pseudobulk_generation/pseudobulk.h5
+
+# Splits to load from the HDF5 file. The first split is used as the reference
+# (train) split for least-squares deconvolvers; "valid" is used to compute the
+# feature-selection mask. "test" is optional (falls back to "valid" for eval).
+splits: [train, valid, test]
+
+# ══════════════════════════════════════════════════════════════════════════════
+# LABELS
+# ══════════════════════════════════════════════════════════════════════════════
+labels_dict_path: App/labels_dict.json
+# Number of prediction classes (input features per GR group): selects
+# prediction_0_wavg ... prediction_{num_input_labels-1}_wavg from the HDF5.
+num_input_labels: 39
+# Number of output cell-type labels (deconvolution targets).
+num_output_labels: 39
+
+# ══════════════════════════════════════════════════════════════════════════════
+# FEATURE SELECTION (Stage 2)
+# ══════════════════════════════════════════════════════════════════════════════
+# Select discriminative features using the max/mean ratio computed on the
+# validation pure profiles. Use EITHER `feature_cutoff` OR `top_features`.
+
+# Threshold on the max/mean ratio above which a feature is selected.
+# feature_cutoff: 1.312
+# Alternatively, select exactly this many top features (overrides feature_cutoff):
+top_features: 156
+
+# Always keep the diagonal (cell-type vs. its own prediction class).
+guarantee_diagonal_selection: true
+# Optionally force-select specific prediction-class columns (e.g. cancer column):
+# guarantee_columns_selection: [38]
+
+# Whether to render the per-split feature-mask comparison heatmap.
+generate_feature_selection_plot: true
+
+# ── Optional caching ──────────────────────────────────────────────────────────
+# If set and present, Stage 2 loads pre-computed feature-selected matrices from
+# this .npz instead of reading the HDF5 again (keys: features_{split},
+# proportions_{split}, and optionally a mask).
+# ios_feature_selected_path: /path/to/features_cutoff_1.312.npz
+# features_mask_path: /path/to/features_mask_1.312_cutoff.npz
+
+# ══════════════════════════════════════════════════════════════════════════════
+# DECONVOLVERS (Stage 3)
+# ══════════════════════════════════════════════════════════════════════════════
+# Each entry defines a deconvolver to fit. Supported names: xgb, swn, mlp, nnls, psls.
+deconvolvers:
+  - name: swn
+    params:
+      n_epochs: 5000
+      batch_size: 512
+      lr: 0.00005
+      weight_decay: 0.001
+      early_stopping_metric: val_mae
+      early_stopping_patience: 1000
+      scheduler_type: none
+      device: cuda
+
+  - name: mlp
+    params:
+      n_epochs: 5000
+      batch_size: 512
+      lr: 0.00005
+      weight_decay: 0.001
+      early_stopping_metric: val_mae
+      early_stopping_patience: 1000
+      scheduler_type: plateau
+      device: cuda
+
+  - name: xgb
+    params:
+      n_estimators: 500
+      max_depth: 15
+      learning_rate: 0.05
+      subsample: 0.7
+      colsample_bytree: 1.0
+      min_child_weight: 5
+      reg_alpha: 0.1
+      reg_lambda: 1.0
+      random_state: 42
+
+  - name: nnls
+
+  - name: psls
+    params:
+      solver_type: cvxpy
+      n_workers: 2
+
+# ══════════════════════════════════════════════════════════════════════════════
+# OUTPUT
+# ══════════════════════════════════════════════════════════════════════════════
+# Directory where fitted models, feature masks, plots and the summary CSV are written.
+output_dir: Data/extended_proportions/pseudobulk_v2/cancer_detector_soft_labels_uniform/deconvolution

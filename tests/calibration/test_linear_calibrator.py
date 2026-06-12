@@ -119,7 +119,7 @@ class TestLinearCalibrator(unittest.TestCase):
             calibrator.predict(np.array([[0.2, 0.3, 0.5]], dtype=float))
 
     def test_predict_applies_affine_adjustment_and_row_normalization(self):
-        """predict should return raw affine outputs plus clip0-normalized calibrated rows."""
+        """predict should return raw affine outputs plus clip-normalized calibrated rows."""
         calibrator = self._make_fitted_calibrator(
             slopes=[2.0, 0.5],
             intercepts=[0.1, 0.2],
@@ -133,7 +133,7 @@ class TestLinearCalibrator(unittest.TestCase):
         )
 
         normalized, adjusted = calibrator.predict(
-            X, norm_method="clip0-normalize", return_adjusted=True
+            X, norm_method="clip-normalize", return_adjusted=True
         )
 
         expected_adjusted = np.array(
@@ -168,7 +168,7 @@ class TestLinearCalibrator(unittest.TestCase):
             )
 
     def test_predict_clip0_normalize_preserves_values_above_one(self):
-        """clip0-normalize should keep values > 1 and only clip negatives to zero."""
+        """clip-normalize should keep values > 1 and only clip negatives to zero."""
         calibrator = self._make_fitted_calibrator(
             slopes=[2.0, 0.5],
             intercepts=[0.1, 0.2],
@@ -182,7 +182,7 @@ class TestLinearCalibrator(unittest.TestCase):
         )
 
         normalized, adjusted = calibrator.predict(
-            X, norm_method="clip0-normalize", return_adjusted=True
+            X, norm_method="clip-normalize", return_adjusted=True
         )
 
         expected_adjusted = np.array(
@@ -206,7 +206,7 @@ class TestLinearCalibrator(unittest.TestCase):
         np.testing.assert_allclose(normalized.sum(axis=1), np.ones(X.shape[0]))
 
     def test_predict_clip0_normalize_clips_negatives_and_preserves_zero_rows(self):
-        """clip0-normalize should clip negatives to 0 and survive all-zero rows."""
+        """clip-normalize should clip negatives to 0 and survive all-zero rows."""
         calibrator = self._make_fitted_calibrator(
             slopes=[2.0, -3.0],
             intercepts=[0.8, -0.1],
@@ -220,7 +220,7 @@ class TestLinearCalibrator(unittest.TestCase):
         )
 
         normalized, adjusted = calibrator.predict(
-            X, norm_method="clip0-normalize", return_adjusted=True
+            X, norm_method="clip-normalize", return_adjusted=True
         )
 
         expected_adjusted = np.array(
@@ -249,7 +249,7 @@ class TestLinearCalibrator(unittest.TestCase):
 
         zero_row_normalized, zero_row_adjusted = zero_row_calibrator.predict(
             np.array([[0.1, 0.2]], dtype=float),
-            norm_method="clip0-normalize",
+            norm_method="clip-normalize",
             return_adjusted=True,
         )
 

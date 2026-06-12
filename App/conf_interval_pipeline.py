@@ -220,7 +220,7 @@ class ConfidenceIntervalPipeline:
             for method, m in methods.items():
                 self.logger.info(
                     f"    {method:30s}  "
-                    f"R2={m.get('overall_r2', m.get('r2', float('nan'))):.6f}  "
+                    f"R2={m.get('r2', m.get('r2', float('nan'))):.6f}  "
                     f"MAE={m['mae']:.6f} [{m.get('mae_ci_lower', float('nan')):.6f}, {m.get('mae_ci_upper', float('nan')):.6f}]  "
                     f"MSE={m['mse']:.6f} [{m.get('mse_ci_lower', float('nan')):.6f}, {m.get('mse_ci_upper', float('nan')):.6f}]  "
                     f"KL={m['kl']:.6f} [{m.get('kl_ci_lower', float('nan')):.6f}, {m.get('kl_ci_upper', float('nan')):.6f}]"

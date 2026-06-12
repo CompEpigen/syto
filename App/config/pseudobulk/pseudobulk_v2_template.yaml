@@ -10,8 +10,7 @@
 #   - Pure profile generation and uniform prior computation
 #
 # Usage:
-#   python App/main.py --task generate_pseudobulk_v2 \
-#       --config App/config/pseudobulk/pseudobulk_v2_template.yaml
+#   python App/main.py --task generate_pseudobulk --config App/config/pseudobulk/pseudobulk_v2_template.yaml
 
 # ══════════════════════════════════════════════════════════════════════════════
 # INPUT CONFIGURATION
@@ -23,7 +22,7 @@
 #                       classifier prediction (runs stages 1-3)
 #   - "pre_predicted" : Pre-predicted splits with classifier predictions
 #                       (skips directly to stage 4)
-input_type: pre_predicted
+input_type: raw_splits
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -32,17 +31,17 @@ input_type: pre_predicted
 split_information:
   train:
     # path to the parquet file with pre-predicted reads for this split (if input_type == "pre_predicted")
-    # data_path: Data/training_data/SoftLabelsTrainingData_205files_pooled_Jaccard_hg38_mincpg_4_minlen_10_no_data_leak_d041/train.parquet
-    data_path: Data/extended_proportions/pseudobulk_v2/cancer_detector_soft_labels_uniform/train_predicted.pkl
+    data_path: Data/training_data/SoftLabelsTrainingData_205files_pooled_Jaccard_hg38_mincpg_4_minlen_10_no_data_leak_d041/train.parquet
+    # data_path: Data/extended_proportions/pseudobulk_v2/cancer_detector_soft_labels_uniform/train_predicted.pkl
     # path to the target proportions npz file for this split
     target_proportions_path: Data/extended_proportions/proportions/target_proportions_train.npz
   valid:
-    # data_path: Data/training_data/SoftLabelsTrainingData_205files_pooled_Jaccard_hg38_mincpg_4_minlen_10_no_data_leak_d041/valid.parquet
-    data_path: Data/extended_proportions/pseudobulk_v2/cancer_detector_soft_labels_uniform/valid_predicted.pkl
+    data_path: Data/training_data/SoftLabelsTrainingData_205files_pooled_Jaccard_hg38_mincpg_4_minlen_10_no_data_leak_d041/valid.parquet
+    # data_path: Data/extended_proportions/pseudobulk_v2/cancer_detector_soft_labels_uniform/valid_predicted.pkl
     target_proportions_path: Data/extended_proportions/proportions/target_proportions_valid.npz
   test:
-    # data_path: Data/training_data/SoftLabelsTrainingData_205files_pooled_Jaccard_hg38_mincpg_4_minlen_10_no_data_leak_d041/test.parquet
-    data_path: Data/extended_proportions/pseudobulk_v2/cancer_detector_soft_labels_uniform/test_predicted.pkl
+    data_path: Data/training_data/SoftLabelsTrainingData_205files_pooled_Jaccard_hg38_mincpg_4_minlen_10_no_data_leak_d041/test.parquet
+    # data_path: Data/extended_proportions/pseudobulk_v2/cancer_detector_soft_labels_uniform/test_predicted.pkl
     target_proportions_path: Data/extended_proportions/proportions/target_proportions_test.npz
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -58,7 +57,8 @@ classifier_checkpoint: output/cancer_detector/CD_trainlen=2910114_epsbetafit=0.0
 classifier_config:
   seq_length: 150
   soft_labels: true
-  batch_size: 2200
+  batch_size: 100000
+  copy_input_df: false
   # MethylBERT-specific:
   # foundation_model: hanyangii/methylbert_hg19_12l
   # classifier_head_implementation: dmr_attention_based
@@ -76,7 +76,7 @@ labels_dict_path: App/labels_dict.json
 num_labels: 39
 
 # Path to UXM atlas (for read preparation)
-# atlas_path: /path/to/Atlas.U25.l4.hg38.full.tsv
+atlas_path: /path/to/Atlas.U25.l4.hg38.full.tsv
 
 # Labeling scheme used (soft_labels, hard_labels, etc.) (for metadata purposes)
 labeling_scheme: soft_labels
@@ -89,6 +89,7 @@ labeling_scheme: soft_labels
 # ── Sampling parameters ───────────────────────────────────────────────────────
 # Total number of reads to sample per pseudobulk
 n_reads_to_sample: 475000
+n_pseudobulks_to_sample: 1000
 
 # Column containing the class/cell-type label for each read
 class_label_column: original_label

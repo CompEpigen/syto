@@ -51,7 +51,7 @@ from syto.deconvolution.xgbdeconvolver import (
 from syto.calibration.linear_calibrator import LinearCalibrator
 from syto.calibration.vector_scaling_calibrator import VectorScalingCalibrator
 
-LINEAR_NORM_METHODS = ["clip0-normalize", "simplex-projection"]
+LINEAR_NORM_METHODS = ["clip-normalize", "simplex-projection"]
 
 
 class InferencePipeline:
