@@ -141,8 +141,8 @@ class PseudoBulkPipeline:
                 classifier_head_implementation=classifier_config.get(
                     "classifier_head_implementation", "grg_attention_based"
                 ),
-                dmr_label_column=classifier_config.get(
-                    "dmr_label_column", "dmr_ctype_label"
+                grg_label_column=classifier_config.get(
+                    "grg_label_column", "dmr_ctype_label"
                 ),
                 soft_labels=classifier_config.get("soft_labels", True),
                 dismir_flavor=classifier_config.get("dismir_flavor", "lstm"),

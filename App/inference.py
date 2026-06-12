@@ -378,7 +378,7 @@ class InferencePipeline:
             classifier_head_implementation=classifier_cfg.get(
                 "classifier_head_implementation", "grg_attention_based"
             ),
-            dmr_label_column=classifier_cfg.get("dmr_label_column", "dmr_ctype_label"),
+            grg_label_column=classifier_cfg.get("grg_label_column", "dmr_ctype_label"),
             dismir_flavor=classifier_cfg.get("dismir_flavor", "lstm"),
             cancer_detector_prior_type=classifier_cfg.get(
                 "cancer_detector_prior_type", "uniform"
