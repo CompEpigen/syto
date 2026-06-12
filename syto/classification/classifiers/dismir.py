@@ -15,16 +15,10 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 
-try:
-    from transformers.utils.import_utils import is_in_notebook
-    from transformers.utils.notebook import NotebookTrainingTracker
-except ImportError:
-
-    def is_in_notebook():
-        return False
-
-    NotebookTrainingTracker = None
-
+from syto.classification.training_progress import (
+    TrainingProgressTracker,
+    is_in_notebook,
+)
 from syto.classification.evaluation import compute_metrics, compute_metrics_soft_labels
 from syto.classification.classification_heads import (
     GRGAttentionClassificationHead,
@@ -34,6 +28,7 @@ from syto.classification.classifiers.minirnns.minRNNs import BiMinGRU
 from syto.classification.classifiers.abstract_read_classifier import (
     AbstractReadClassifier,
 )
+from syto.classification.mlflow_tracking import mlflow_tracked_fit
 
 from syto.data.dataset import resolve_column
 
@@ -146,18 +141,18 @@ class DISMIRNet(nn.Module):
 
         # ============== CLASSIFIER HEAD ==============
         if classifier_type == "vanilla":
-            print("Using vanilla classifier with FC layers")
+            _module_logger.info("Using vanilla classifier with FC layers")
             self._init_vanilla_classifier(dropout_prob)
-            self.dmr_classifier = None
+            self.grg_classifier = None
 
         elif classifier_type == "grg_attention_based":
-            print("Using attention-based classifier with GRG context")
+            _module_logger.info("Using attention-based classifier with GRG context")
             if num_grg_labels is None:
                 raise ValueError(
                     "num_grg_labels must be provided for grg_attention_based classifier"
                 )
 
-            self._init_dmr_attention_classifier(
+            self._init_grg_attention_classifier(
                 num_labels, num_grg_labels, dropout_prob
             )
             # Set vanilla FC components to None
@@ -180,7 +175,7 @@ class DISMIRNet(nn.Module):
         self.fc3 = nn.Linear(300, self.num_labels)
         self.sigmoid = nn.Sigmoid()
 
-    def _init_dmr_attention_classifier(self, num_labels, num_grg_labels, dropout_prob):
+    def _init_grg_attention_classifier(self, num_labels, num_grg_labels, dropout_prob):
         """Initialize GRG attention-based classifier."""
         # After encoder: shape is (batch, 100, seq_len/4)
         # Permuted for attention: (batch, seq_len/4, 100)
@@ -193,7 +188,7 @@ class DISMIRNet(nn.Module):
             hidden_dropout_prob=dropout_prob,
             layer_norm_eps=1e-12,
         )
-        self.dmr_classifier = GRGAttentionClassificationHead(config)
+        self.grg_classifier = GRGAttentionClassificationHead(config)
 
     def _forward_encoder(self, x, parallel_scan=True):
         """
@@ -250,7 +245,7 @@ class DISMIRNet(nn.Module):
         if self.classifier_type == "vanilla":
             return self._forward_vanilla(x)
         elif self.classifier_type == "grg_attention_based":
-            return self._forward_dmr_attention(x, grg_ids, attention_mask)
+            return self._forward_grg_attention(x, grg_ids, attention_mask)
 
     def _forward_vanilla(self, x):
         """Forward pass for vanilla classifier (FC layers only)."""
@@ -267,7 +262,7 @@ class DISMIRNet(nn.Module):
         x = self.sigmoid(x)
         return x
 
-    def _forward_dmr_attention(self, x, grg_ids, attention_mask):
+    def _forward_grg_attention(self, x, grg_ids, attention_mask):
         """Forward pass for GRG attention-based classifier."""
         if grg_ids is None:
             raise ValueError(
@@ -278,7 +273,7 @@ class DISMIRNet(nn.Module):
         # Permute for attention: (batch, seq_len/4, 100) = (batch, seq_len, hidden_size)
         x = x.permute(0, 2, 1)
 
-        logits, attention_weights = self.dmr_classifier(x, grg_ids, attention_mask)
+        logits, attention_weights = self.grg_classifier(x, grg_ids, attention_mask)
 
         return logits, attention_weights
 
@@ -296,7 +291,6 @@ class VariableLengthDataset(Dataset):
             self.data = pd.read_parquet(data_path_or_df)
         else:
             self.data = data_path_or_df
-
 
         # Create mapping from read_id to chunks
         self.read_chunks = defaultdict(list)
@@ -479,18 +473,14 @@ class Dismir(AbstractReadClassifier):
         num_labels=2,
         classifier_type="vanilla",
         num_grg_labels=None,
-        dmr_label_col=None,
-        dna_column="input_ids",
-        methylation_column="methylation_ids",
+        grg_label_column=None,
         soft_labels=False,
     ):
         self.max_sequence_length = max_sequence_length
         self.num_labels = num_labels
         self.classifier_type = classifier_type
         self.num_grg_labels = num_grg_labels
-        self.dmr_label_col = dmr_label_col
-        self.dna_column = dna_column
-        self.methylation_column = methylation_column
+        self.grg_label_column = grg_label_column
         self.soft_labels = soft_labels
 
         # Validate GRG parameters
@@ -499,9 +489,9 @@ class Dismir(AbstractReadClassifier):
                 raise ValueError(
                     "num_grg_labels must be provided for grg_attention_based classifier"
                 )
-            if dmr_label_col is None:
+            if grg_label_column is None:
                 raise ValueError(
-                    "dmr_label_col must be provided for grg_attention_based classifier"
+                    "grg_label_column must be provided for grg_attention_based classifier"
                 )
 
         # Set up loss function
@@ -516,6 +506,9 @@ class Dismir(AbstractReadClassifier):
                 self.criterion = nn.BCEWithLogitsLoss()
             else:
                 if soft_labels:
+                    _module_logger.info(
+                        "Soft Labels were selected as labeling scheme. The model will be trained with ConfidenceWeightedCrossEntropy"
+                    )
                     self.criterion = ConfidenceWeightedCrossEntropy(num_labels)
                 else:
                     self.criterion = nn.CrossEntropyLoss()
@@ -573,42 +566,47 @@ class Dismir(AbstractReadClassifier):
         return onehot
 
     def load_and_transform_input(
-        self, data_path, return_dmr_labels=False, soft_labels=False
+        self, data_path, return_grg_labels=False, soft_labels=False
     ):
         """
-        Loads parquet data with columns: [input_ids, methylation_ids, label, (dmr_label_col)]
+        Loads parquet data with columns: [input_ids, methylation_ids, label, (grg_label_column)]
         Then transforms sequences into one-hot + methylation.
 
         Args:
             data_path: Path to parquet file
-            return_dmr_labels: If True, also return GRG labels
+            return_grg_labels: If True, also return GRG labels
 
         Returns:
-            If return_dmr_labels is False: (features, labels)
-            If return_dmr_labels is True: (features, labels, dmr_labels)
+            If return_grg_labels is False: (features, labels)
+            If return_grg_labels is True: (features, labels, grg_labels)
         """
         data = pd.read_parquet(data_path)
-        return self._transform_input_df(data, return_dmr_labels, soft_labels)
+        return self._transform_input_df(data, return_grg_labels, soft_labels)
 
-    def _transform_input_df(self, data: pd.DataFrame, return_dmr_labels=False, soft_labels=False):
+    def _transform_input_df(
+        self, data: pd.DataFrame, return_grg_labels=False, soft_labels=False
+    ):
         """Transform dataframe into one-hot + methylation."""
-        dna = data[self.dna_column]
-        methylation = data[self.methylation_column]
+        cols = list(data.columns)
+        dna_col = resolve_column(cols, "input_ids")
+        meth_col = resolve_column(cols, "methylation_ids")
+        dna = data[dna_col]
+        methylation = data[meth_col]
         if soft_labels:
             labels = np.array(data["soft_label"].to_list())
         else:
             labels = np.array(data["label"].to_list())
         features = self.conv_onehot(dna, methylation)
 
-        if return_dmr_labels:
-            if self.dmr_label_col is None:
-                raise ValueError("dmr_label_col must be set to return GRG labels")
-            if self.dmr_label_col not in data.columns:
+        if return_grg_labels:
+            if self.grg_label_column is None:
+                raise ValueError("grg_label_column must be set to return GRG labels")
+            if self.grg_label_column not in data.columns:
                 raise ValueError(
-                    f"GRG label column '{self.dmr_label_col}' not found in data"
+                    f"GRG label column '{self.grg_label_column}' not found in data"
                 )
-            dmr_labels = data[self.dmr_label_col]
-            return features, labels, dmr_labels
+            grg_labels = data[self.grg_label_column]
+            return features, labels, grg_labels
 
         return features, labels
 
@@ -684,27 +682,34 @@ class Dismir(AbstractReadClassifier):
         Fixed-length training method with GRG support.
         """
         if verbose > 0:
-            print("Preparing data for fixed-length training...")
+            _module_logger.info("Preparing data for fixed-length training...")
 
         # Load data - with or without GRG labels
         use_grg = self.classifier_type == "grg_attention_based"
 
         def _get_data(df, path):
             if df is not None:
-                return self._transform_input_df(df, return_dmr_labels=use_grg, soft_labels=self.soft_labels)
-            return self.load_and_transform_input(path, return_dmr_labels=use_grg, soft_labels=self.soft_labels)
+                return self._transform_input_df(
+                    df, return_grg_labels=use_grg, soft_labels=self.soft_labels
+                )
+            return self.load_and_transform_input(
+                path, return_grg_labels=use_grg, soft_labels=self.soft_labels
+            )
 
         if use_grg:
-            self.train_x, self.train_y, self.train_dmr = _get_data(train_df, self.train_data_path)
-            print(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}... Train is ready")
-            self.valid_x, self.valid_y, self.valid_dmr = _get_data(valid_df, self.valid_data_path)
-            print(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}... Valid is ready")
+            self.train_x, self.train_y, self.train_grg = _get_data(
+                train_df, self.train_data_path
+            )
+            _module_logger.info(f"... Train is ready")
+            self.valid_x, self.valid_y, self.valid_grg = _get_data(
+                valid_df, self.valid_data_path
+            )
+            _module_logger.info(f"... Valid is ready")
         else:
             self.train_x, self.train_y = _get_data(train_df, self.train_data_path)
-            print(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}... Train is ready")
+            _module_logger.info(f"... Train is ready")
             self.valid_x, self.valid_y = _get_data(valid_df, self.valid_data_path)
-            print(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}... Valid is ready")
-
+            _module_logger.info(f"... Valid is ready")
 
         # Convert features to torch.Tensor
         self.train_x = torch.tensor(self.train_x, dtype=torch.float32)
@@ -725,8 +730,8 @@ class Dismir(AbstractReadClassifier):
 
         # Convert GRG labels if needed
         if use_grg:
-            self.train_dmr = torch.tensor(self.train_dmr.values, dtype=torch.long)
-            self.valid_dmr = torch.tensor(self.valid_dmr.values, dtype=torch.long)
+            self.train_grg = torch.tensor(self.train_grg.values, dtype=torch.long)
+            self.valid_grg = torch.tensor(self.valid_grg.values, dtype=torch.long)
 
         # Create optimizer
         optimizer = self._create_optimizer(
@@ -736,10 +741,10 @@ class Dismir(AbstractReadClassifier):
         # DataLoaders
         if use_grg:
             train_dataset = torch.utils.data.TensorDataset(
-                self.train_x, self.train_y, self.train_dmr
+                self.train_x, self.train_y, self.train_grg
             )
             valid_dataset = torch.utils.data.TensorDataset(
-                self.valid_x, self.valid_y, self.valid_dmr
+                self.valid_x, self.valid_y, self.valid_grg
             )
         else:
             train_dataset = torch.utils.data.TensorDataset(self.train_x, self.train_y)
@@ -785,23 +790,25 @@ class Dismir(AbstractReadClassifier):
             )
 
         if verbose > 0:
-            print("Preparing data for variable-length training...")
+            _module_logger.info("Preparing data for variable-length training...")
 
         # Create variable-length datasets
         train_dataset = VariableLengthDataset(
-            train_df if train_df is not None else self.train_data_path, 
-            self.max_sequence_length, self.conv_onehot
+            train_df if train_df is not None else self.train_data_path,
+            self.max_sequence_length,
+            self.conv_onehot,
         )
         valid_dataset = VariableLengthDataset(
-            valid_df if valid_df is not None else self.valid_data_path, 
-            self.max_sequence_length, self.conv_onehot
+            valid_df if valid_df is not None else self.valid_data_path,
+            self.max_sequence_length,
+            self.conv_onehot,
         )
 
         max_chunks_per_batch = batch_size
 
         if verbose > 0:
-            print(f"Using max_chunks_per_batch: {max_chunks_per_batch}")
-            print(
+            _module_logger.info(f"Using max_chunks_per_batch: {max_chunks_per_batch}")
+            _module_logger.info(
                 f"Average chunks per read (train): {np.mean([train_dataset.get_chunk_count(i) for i in range(min(100, len(train_dataset)))]):.2f}"
             )
 
@@ -880,83 +887,6 @@ class Dismir(AbstractReadClassifier):
         else:
             raise ValueError("optimizer_type must be 'SGD' or 'Adam'")
 
-    def _update_training_tracker(
-        self, tracker, epoch, epochs, train_loss, val_loss, val_metrics, use_notebook
-    ):
-        """
-        Dynamically initializes the tracker / header and updates metrics.
-        Returns the tracker object (which is created/configured on the first update).
-        """
-        # Determine column names dynamically
-        columns = ["Epoch", "Training Loss", "Validation Loss"]
-        metric_keys = sorted([k for k in val_metrics.keys() if k.startswith("val_")])
-        metric_display_names = [k[4:].replace("_", " ").title() for k in metric_keys]
-        column_names = columns + metric_display_names
-
-        # 1. Initialize tracker / print header on first update
-        if tracker is None:
-            if use_notebook and NotebookTrainingTracker is not None:
-                tracker = NotebookTrainingTracker(
-                    num_steps=epochs, column_names=column_names
-                )
-            else:
-                # Terminal/tqdm mode: compute column widths dynamically
-                column_widths = [max(len(col) + 2, 10) for col in column_names]
-                # Special override for Training Loss and Validation Loss to have slightly wider columns
-                for idx, col in enumerate(column_names):
-                    if col == "Training Loss":
-                        column_widths[idx] = max(column_widths[idx], 15)
-                    elif col == "Validation Loss":
-                        column_widths[idx] = max(column_widths[idx], 17)
-
-                tracker = {
-                    "column_names": column_names,
-                    "column_widths": column_widths,
-                }
-
-                # Print console header
-                header_str = "  ".join(
-                    col.ljust(w) for col, w in zip(column_names, column_widths)
-                )
-                separator_str = "  ".join("-" * w for w in column_widths)
-                tqdm.write(header_str)
-                tqdm.write(separator_str)
-
-        # 2. Format row values
-        row_dict = {
-            "Epoch": epoch,
-            "Training Loss": f"{train_loss:.6f}",
-            "Validation Loss": f"{val_loss:.6f}",
-        }
-
-        # Add validation metrics formatted
-        metric_key_mapping = {
-            col: f"val_{col.lower().replace(' ', '_')}" for col in column_names[3:]
-        }
-        for display_name in column_names[3:]:
-            key = metric_key_mapping[display_name]
-            val = val_metrics.get(key, None)
-            row_dict[display_name] = f"{val:.6f}" if val is not None else "-"
-
-        # 3. Log/render row values
-        if use_notebook and not isinstance(tracker, dict):
-            # Notebook mode
-            tracker.write_line(row_dict)
-            tracker.update(epoch, comment=f"Epoch {epoch}/{epochs}")
-        else:
-            # Console/tqdm mode
-            column_widths = tracker["column_widths"]
-            row_values = [
-                f"{epoch}/{epochs}".ljust(column_widths[0]),
-                row_dict["Training Loss"].ljust(column_widths[1]),
-                row_dict["Validation Loss"].ljust(column_widths[2]),
-            ]
-            for col_name, w in zip(column_names[3:], column_widths[3:]):
-                row_values.append(row_dict[col_name].ljust(w))
-            tqdm.write("  ".join(row_values))
-
-        return tracker
-
     def _training_loop(
         self,
         train_loader,
@@ -976,10 +906,10 @@ class Dismir(AbstractReadClassifier):
         use_grg = self.classifier_type == "grg_attention_based"
 
         if verbose > 0:
-            print(f"Start {mode}-length training...")
+            _module_logger.info(f"Start {mode}-length training...")
 
         use_notebook = is_in_notebook()
-        tracker = None
+        progress_tracker = TrainingProgressTracker(use_notebook=use_notebook)
         disable_tqdm = (verbose <= 0) or use_notebook
 
         epoch_iterator = tqdm(
@@ -998,10 +928,10 @@ class Dismir(AbstractReadClassifier):
 
             for batch in train_loader:
                 if use_grg:
-                    X_batch, y_batch, dmr_batch = batch
+                    X_batch, y_batch, grg_batch = batch
                     X_batch = X_batch.to(self.device)
                     y_batch = y_batch.to(self.device)
-                    dmr_batch = dmr_batch.to(self.device)
+                    grg_batch = grg_batch.to(self.device)
                 else:
                     X_batch, y_batch = batch
                     X_batch = X_batch.to(self.device)
@@ -1010,7 +940,7 @@ class Dismir(AbstractReadClassifier):
                 optimizer.zero_grad()
 
                 if use_grg:
-                    outputs, _ = self.model(X_batch, grg_ids=dmr_batch)
+                    outputs, _ = self.model(X_batch, grg_ids=grg_batch)
                 else:
                     outputs = self.model(X_batch)
 
@@ -1061,11 +991,11 @@ class Dismir(AbstractReadClassifier):
             with torch.no_grad():
                 for batch in valid_loader:
                     if use_grg:
-                        X_val, y_val, dmr_val = batch
+                        X_val, y_val, grg_val = batch
                         X_val = X_val.to(self.device)
                         y_val = y_val.to(self.device)
-                        dmr_val = dmr_val.to(self.device)
-                        val_outputs, _ = self.model(X_val, grg_ids=dmr_val)
+                        grg_val = grg_val.to(self.device)
+                        val_outputs, _ = self.model(X_val, grg_ids=grg_val)
                     else:
                         X_val, y_val = batch
                         X_val = X_val.to(self.device)
@@ -1120,14 +1050,8 @@ class Dismir(AbstractReadClassifier):
             self.history.append(epoch_record)
 
             if verbose > 0:
-                tracker = self._update_training_tracker(
-                    tracker,
-                    epoch,
-                    epochs,
-                    train_loss,
-                    val_loss,
-                    val_metrics,
-                    use_notebook,
+                progress_tracker.update(
+                    epoch, epochs, train_loss, val_loss, val_metrics
                 )
 
             # Early stopping
@@ -1142,7 +1066,7 @@ class Dismir(AbstractReadClassifier):
 
             if patience_counter >= patience:
                 if verbose > 0:
-                    print("Early stopping triggered.")
+                    _module_logger.info("Early stopping triggered.")
                 break
 
     def _training_loop_variable_length(
@@ -1162,10 +1086,10 @@ class Dismir(AbstractReadClassifier):
         patience_counter = 0
         session_start_time = time.time()
         if verbose > 0:
-            print("Start variable-length training...")
+            _module_logger.info("Start variable-length training...")
 
         use_notebook = is_in_notebook()
-        tracker = None
+        progress_tracker = TrainingProgressTracker(use_notebook=use_notebook)
         disable_tqdm = (verbose <= 0) or use_notebook
 
         epoch_iterator = tqdm(
@@ -1289,14 +1213,8 @@ class Dismir(AbstractReadClassifier):
             self.history.append(epoch_record)
 
             if verbose > 0:
-                tracker = self._update_training_tracker(
-                    tracker,
-                    epoch,
-                    epochs,
-                    train_loss,
-                    val_loss,
-                    val_metrics,
-                    use_notebook,
+                progress_tracker.update(
+                    epoch, epochs, train_loss, val_loss, val_metrics
                 )
 
             if val_loss < best_val_loss:
@@ -1310,7 +1228,7 @@ class Dismir(AbstractReadClassifier):
 
             if patience_counter >= patience:
                 if verbose > 0:
-                    print("Early stopping triggered.")
+                    _module_logger.info("Early stopping triggered.")
                 break
 
     def _validate_variable_length(self, valid_loader, criterion):
@@ -1453,8 +1371,8 @@ class Dismir(AbstractReadClassifier):
         X_tensor = torch.tensor(onehot_data, dtype=torch.float32)
 
         if self.classifier_type == "grg_attention_based":
-            dmr_tensor = torch.tensor(np.array(grg_ids), dtype=torch.long)
-            dataset = torch.utils.data.TensorDataset(X_tensor, dmr_tensor)
+            grg_tensor = torch.tensor(np.array(grg_ids), dtype=torch.long)
+            dataset = torch.utils.data.TensorDataset(X_tensor, grg_tensor)
         else:
             dataset = torch.utils.data.TensorDataset(X_tensor)
 
@@ -1473,11 +1391,11 @@ class Dismir(AbstractReadClassifier):
         with torch.no_grad():
             for batch in tqdm(loader, "predicting batches"):
                 if self.classifier_type == "grg_attention_based":
-                    X_batch, dmr_batch = batch
+                    X_batch, grg_batch = batch
                     X_batch = X_batch.to(self.device)
-                    dmr_batch = dmr_batch.to(self.device)
+                    grg_batch = grg_batch.to(self.device)
                     outputs, attn_weights = self.model(
-                        X_batch, parallel_scan=parallel_scan, grg_ids=dmr_batch
+                        X_batch, parallel_scan=parallel_scan, grg_ids=grg_batch
                     )
 
                     # Apply sigmoid for probability output (model returns logits)
@@ -1532,7 +1450,8 @@ class Dismir(AbstractReadClassifier):
             "classifier_head_implementation", "grg_attention_based"
         )
         grg_label_column = (
-            kwargs.get("grg_label_column") or kwargs.get("dmr_label_column", "dmr_ctype_label")
+            kwargs.get("grg_label_column")
+            or kwargs.get("grg_label_column", "grg_ctype_label")
             if classifier_head_implementation == "grg_attention_based"
             else None
         )
@@ -1547,7 +1466,8 @@ class Dismir(AbstractReadClassifier):
                 "classifier_head_implementation", "grg_attention_based"
             ),
             num_grg_labels=kwargs.get("num_grg_labels", 39),
-            dmr_label_col=grg_label_column,
+            grg_label_column=grg_label_column,
+            soft_labels=kwargs.get("soft_labels", False),
         )
         # Load pre-trained weights, if a checkpoint path was provided
         if path is not None:
@@ -1579,7 +1499,7 @@ class Dismir(AbstractReadClassifier):
         # GRG ids if using attention-based classifier
         grg_ids = None
         if self.classifier_type == "grg_attention_based":
-            grg_ids = split_df[self.dmr_label_col].values
+            grg_ids = split_df[self.grg_label_column].values
 
         # Run prediction
         probabilities, _ = self.predict(
@@ -1600,6 +1520,7 @@ class Dismir(AbstractReadClassifier):
 
         return result
 
+    @mlflow_tracked_fit
     def fit_split(
         self,
         train_df: pd.DataFrame,
@@ -1613,7 +1534,7 @@ class Dismir(AbstractReadClassifier):
         train_dir = output_dir if output_dir else "./"
         if output_dir:
             Path(output_dir).mkdir(parents=True, exist_ok=True)
-            
+
         self.train(
             train_dir=str(train_dir),
             train_df=train_df,

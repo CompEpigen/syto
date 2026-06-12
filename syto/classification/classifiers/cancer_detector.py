@@ -24,6 +24,7 @@ from syto.classification.classifiers.abstract_read_classifier import (
     AbstractReadClassifier,
 )
 from syto.classification.evaluation import compute_metrics
+from syto.classification.mlflow_tracking import mlflow_tracked_fit
 
 _module_logger = logging.getLogger(__name__)
 
@@ -157,6 +158,7 @@ class CancerDetectorClassifier(AbstractReadClassifier):
         eps_beta_fit: float = 1e-2,
         class_prior_type: str = "uniform",
         val_data: pd.DataFrame = None,
+        **kwargs,
     ) -> "CancerDetectorClassifier":
         """Fit Beta distributions for every (marker, class) pair and compute
         class priors.
@@ -514,7 +516,9 @@ class CancerDetectorClassifier(AbstractReadClassifier):
             )
 
     @classmethod
-    def load(cls, path: Union[str, None] = None, **kwargs) -> "CancerDetectorClassifier":
+    def load(
+        cls, path: Union[str, None] = None, **kwargs
+    ) -> "CancerDetectorClassifier":
         """Load model parameters from a .pkl file, or build a fresh instance if path is None.
 
         Args:
@@ -608,6 +612,7 @@ class CancerDetectorClassifier(AbstractReadClassifier):
             result[col] = pred_df[col].values
         return result
 
+    @mlflow_tracked_fit
     def fit_split(
         self,
         train_df: pd.DataFrame,
@@ -618,6 +623,6 @@ class CancerDetectorClassifier(AbstractReadClassifier):
         """Fit the classifier on training data for compatibility with AbstractReadClassifier."""
         self.fit(train_data=train_df, val_data=val_df, **kwargs)
         if output_dir:
+            Path(output_dir).mkdir(parents=True, exist_ok=True)
             self.save(Path(output_dir) / "cancer_detector.joblib")
         return self
-

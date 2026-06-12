@@ -18,7 +18,6 @@ from syto.classification.classifiers.methylbert import (
     VanillaClassifier,
     methylbert_finetune_collator,
     methylbert_pretrain_collator,
-    default_methylbert_config,
     _line2tokens_finetune,
     _line2tokens_pretrain,
     prepare_methylbert_list,
@@ -554,7 +553,7 @@ class TestMethylBert(unittest.TestCase):
         """Set up test fixtures."""
         self.foundation_model = "foundationalModels/methylbert_hg19_12l"
         self.seq_len = 150
-        self.config = default_methylbert_config.copy()
+        self.loss = "bce"
 
     def _build_small_hf_config(self, num_labels=2, num_grg_labels=4, loss="bce"):
         """Build a tiny BERT config so wrapper-level tests stay lightweight."""
@@ -574,12 +573,13 @@ class TestMethylBert(unittest.TestCase):
 
     def _create_small_model(self, **kwargs):
         """Create a wrapper with a tiny Hugging Face config for unit-level branches."""
+        loss = kwargs.get("loss", self.loss)
         with patch(
             "syto.classification.classifiers.methylbert.BertConfig.from_pretrained",
             return_value=self._build_small_hf_config(
                 num_labels=kwargs.get("num_labels", 2),
                 num_grg_labels=kwargs.get("num_grg_labels", 4),
-                loss=(kwargs.get("custom_config") or self.config).get("loss", "bce"),
+                loss=loss,
             ),
         ), patch(
             "syto.classification.classifiers.methylbert.AutoTokenizer.from_pretrained",
@@ -588,7 +588,7 @@ class TestMethylBert(unittest.TestCase):
             return MethylBert(
                 foundation_model_path=self.foundation_model,
                 seq_len=kwargs.pop("seq_len", 5),
-                custom_config=kwargs.pop("custom_config", self.config.copy()),
+                loss=kwargs.pop("loss", self.loss),
                 load_weights=kwargs.pop("load_weights", False),
                 num_labels=kwargs.pop("num_labels", 2),
                 num_grg_labels=kwargs.pop("num_grg_labels", 4),
@@ -599,13 +599,13 @@ class TestMethylBert(unittest.TestCase):
             )
 
     def _create_model(
-        self, num_labels=2, num_grg_labels=10, load_weights=False, custom_config=None
+        self, num_labels=2, num_grg_labels=10, load_weights=False, loss=None
     ):
         """Helper to create a MethylBert model."""
         return MethylBert(
             foundation_model_path=self.foundation_model,
             seq_len=self.seq_len,
-            custom_config=self.config if custom_config is None else custom_config,
+            loss=self.loss if loss is None else loss,
             load_weights=load_weights,
             num_labels=num_labels,
             num_grg_labels=num_grg_labels,
@@ -630,13 +630,15 @@ class TestMethylBert(unittest.TestCase):
 
     def test_model_config_propagation(self):
         """Test that config is properly propagated to model."""
-        custom_config = default_methylbert_config.copy()
-        custom_config["lr"] = 0.001
+        training_args = TrainingArguments(
+            output_dir="../test_container_tmp/tmp_trainer",
+            learning_rate=0.001,
+        )
 
         model = MethylBert(
             foundation_model_path=self.foundation_model,
             seq_len=self.seq_len,
-            custom_config=custom_config,
+            training_args=training_args,
             load_weights=False,
             num_labels=2,
             num_grg_labels=10,
@@ -653,16 +655,12 @@ class TestMethylBert(unittest.TestCase):
     )
     def test_model_predict(self, name, num_labels, num_grg_labels):
         """Test model prediction with different configurations."""
-        custom_config = self.config
-        if num_labels > 2:
-            custom_config["loss"] = "ce"
-        else:
-            custom_config["loss"] = "bce"
+        loss = "ce" if num_labels > 2 else "bce"
         model = self._create_model(
             num_labels=num_labels,
             num_grg_labels=num_grg_labels,
             load_weights=False,
-            custom_config=custom_config,
+            loss=loss,
         )
 
         # Create dummy dataset
@@ -737,7 +735,7 @@ class TestMethylBert(unittest.TestCase):
             MethylBert(
                 foundation_model_path=self.foundation_model,
                 seq_len=5,
-                custom_config=self.config.copy(),
+                loss=self.loss,
                 load_weights=False,
                 classifier_implementation="invalid-name",
             )
@@ -759,7 +757,7 @@ class TestMethylBert(unittest.TestCase):
             model = MethylBert(
                 foundation_model_path=self.foundation_model,
                 seq_len=5,
-                custom_config=self.config.copy(),
+                loss=self.loss,
                 load_weights=True,
                 fine_tuned_model_path="/tmp/fine_tuned_model",
                 num_labels=2,
@@ -796,7 +794,7 @@ class TestMethylBertFineTune(unittest.TestCase):
         """Set up test fixtures."""
         self.foundation_model = "foundationalModels/methylbert_hg19_12l"
         self.seq_len = 150
-        self.config = default_methylbert_config.copy()
+        self.loss = "bce"
         self.vocab = MethylVocab(k=3)
 
     def _create_test_dataset(self, num_samples=5):
@@ -819,7 +817,7 @@ class TestMethylBertFineTune(unittest.TestCase):
         model = MethylBert(
             foundation_model_path=self.foundation_model,
             seq_len=self.seq_len,
-            custom_config=self.config,
+            loss=self.loss,
             load_weights=False,
             num_labels=2,
             num_grg_labels=10,
@@ -859,7 +857,7 @@ class TestMethylBertFineTune(unittest.TestCase):
         model = MethylBert(
             foundation_model_path=self.foundation_model,
             seq_len=600,  # Longer than 512
-            custom_config=self.config,
+            loss=self.loss,
             load_weights=False,
             num_labels=2,
             num_grg_labels=10,

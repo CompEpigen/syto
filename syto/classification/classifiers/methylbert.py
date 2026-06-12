@@ -4,10 +4,9 @@ import os
 import gc
 import logging
 from typing import Optional, Tuple, Union, List
-from collections import OrderedDict
 import itertools
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from copy import deepcopy
 import multiprocessing as mp
 from functools import partial
@@ -23,13 +22,14 @@ from torch.utils.data import DataLoader, Sampler, Dataset
 from transformers import BertPreTrainedModel, BertModel
 from transformers.trainer_callback import TrainerCallback
 from transformers.modeling_outputs import ModelOutput
-from transformers import AutoTokenizer, Trainer, BertConfig
+from transformers import AutoTokenizer, Trainer, BertConfig, TrainingArguments
 
 
 from syto.classification.evaluation import (
     compute_metrics,
     preprocess_logits_for_prediction,
     compute_metrics_soft_labels,
+    extract_trainer_metrics,
 )
 from syto.classification.classification_heads import (
     GRGAttentionClassificationHead,
@@ -38,6 +38,8 @@ from syto.classification.loss import ConfidenceWeightedCrossEntropy, FocalLoss
 from syto.classification.classifiers.abstract_read_classifier import (
     AbstractReadClassifier,
 )
+from syto.classification.mlflow_tracking import mlflow_tracked_fit
+from syto.classification.training_progress import use_table_progress_callback
 
 from syto.classification.prediction_aggregation import (
     aggregate_chuncked_predictions_weighted,
@@ -46,30 +48,6 @@ from syto.classification.prediction_aggregation import (
 from syto.data.dataset import resolve_column
 
 _module_logger = logging.getLogger(__name__)
-
-default_methylbert_config = OrderedDict(
-    [
-        ("lr", 0.0004),
-        ("beta", (0.9, 0.98)),
-        ("weight_decay", 0.1),
-        ("warmup_step", 100),
-        ("eps", 1e-6),
-        ("with_cuda", True),
-        ("log_freq", 10),
-        ("eval_freq", 10),
-        ("n_hidden", None),
-        ("decrease_steps", 200),
-        ("eval", False),
-        ("amp", True),
-        ("gradient_accumulation_steps", 1),
-        ("max_grad_norm", 1.0),
-        ("save_freq", None),
-        ("loss", "bce"),
-        ("adam_beta1", 0.9),
-        ("adam_beta2", 0.98),
-        ("seed", 950410),
-    ]
-)
 
 
 def _chunk_tokens(tokens, window_size, stride):
@@ -545,7 +523,9 @@ class MethylBertEmbeddedGRG(BertPreTrainedModel):
 
         # Initialize the appropriate classifier based on implementation choice
         if classifier_implementation == "vanilla":
-            print("Using vanilla classifier with GRG encoding and flattening")
+            _module_logger.info(
+                "Using vanilla classifier with GRG encoding and flattening"
+            )
             # For vanilla, we create the components directly (no VanillaClassifier wrapper)
             # This avoids tensor sharing issues
             self.grg_encoder = nn.Sequential(
@@ -564,7 +544,7 @@ class MethylBertEmbeddedGRG(BertPreTrainedModel):
             self.classifier = None  # No separate classifier module for vanilla
 
         elif classifier_implementation == "grg_attention_based":
-            print("Using attention-based classifier with GRG context")
+            _module_logger.info("Using attention-based classifier with GRG context")
             self.classifier = GRGAttentionClassificationHead(config)
             # These won't be used in attention mode but set to None for clarity
             self.read_classifier = None
@@ -579,16 +559,18 @@ class MethylBertEmbeddedGRG(BertPreTrainedModel):
 
     def _setup_loss(self):
         if self.loss == "bce":
-            print("Binary Cross Entropy loss assigned")
+            _module_logger.info("Binary Cross Entropy loss assigned")
             return nn.BCEWithLogitsLoss()
         elif self.loss == "focal_bce":
-            print("Focal loss assigned")
+            _module_logger.info("Focal loss assigned")
             return FocalLoss()
         elif self.loss == "ce":
-            print("Cross Entropy loss assigned (multi-class)")
+            _module_logger.info("Cross Entropy loss assigned (multi-class)")
             return nn.CrossEntropyLoss()
         elif self.loss == "cwce":
-            print("Confidence Weighted Cross Entropy assigned (multi-class)")
+            _module_logger.info(
+                "Confidence Weighted Cross Entropy assigned (multi-class)"
+            )
             return ConfidenceWeightedCrossEntropy(
                 self.num_labels,
                 penalty_scale=self.cwce_penalty_scale,
@@ -598,9 +580,9 @@ class MethylBertEmbeddedGRG(BertPreTrainedModel):
             raise ValueError(f"Unknown loss type: {self.loss}")
 
     def check_model_status(self):
-        print(f"Bert model training mode: {self.bert.training}")
-        print(f"Dropout training mode: {self.dropout.training}")
-        print(
+        _module_logger.info(f"Bert model training mode: {self.bert.training}")
+        _module_logger.info(f"Dropout training mode: {self.dropout.training}")
+        _module_logger.info(
             f"Classifier ({self.classifier_implementation}) training mode: {self.classifier.training}"
         )
 
@@ -612,7 +594,7 @@ class MethylBertEmbeddedGRG(BertPreTrainedModel):
                 torch.load(pretrained_model_name_or_path, map_location=device)
             )
         else:
-            print(
+            _module_logger.info(
                 "Warning: from_pretrained_read_classifier is only applicable for vanilla classifier"
             )
 
@@ -622,7 +604,7 @@ class MethylBertEmbeddedGRG(BertPreTrainedModel):
                 torch.load(pretrained_model_name_or_path, map_location=device)
             )
         else:
-            print(
+            _module_logger.info(
                 "Warning: from_pretrained_grg_encoder is only applicable for vanilla classifier"
             )
 
@@ -729,7 +711,8 @@ class MethylBert(AbstractReadClassifier):
         self,
         foundation_model_path: str,
         seq_len: int = 150,
-        custom_config: OrderedDict = None,
+        loss: str = "bce",
+        training_args: Optional[TrainingArguments] = None,
         load_weights: bool = True,
         fine_tuned_model_path: Optional[str] = None,
         num_labels: int = 2,
@@ -740,21 +723,37 @@ class MethylBert(AbstractReadClassifier):
         cache_dir="./cache",
         classifier_implementation: str = "vanilla",
         soft_labels: bool = False,
+        cwce_penalty_scale: float = 1.0,
+        cwce_on_target_weight: Optional[float] = None,
+        focal_init: bool = False,
+        bg_class_index: int = 0,
+        focal_prior_prob: float = 0.01,
     ):
         """
         Extended initialization with classifier implementation and soft label selection.
 
         Args:
             ... (existing parameters) ...
+            loss: str
+                Classification loss to use: "bce", "focal_bce", "ce", or "cwce".
+            training_args: Optional[TrainingArguments]
+                Training arguments to use. If not provided, a set of defaults
+                tuned for MethylBERT fine-tuning is built.
             classifier_implementation: str
                 Choice of classifier: "vanilla" or "grg_attention_based"
             soft_labels: bool
                 If True, use soft-label collator and tokenizer for probability vectors.
+            cwce_penalty_scale: float
+                Penalty scale forwarded to ConfidenceWeightedCrossEntropy ("cwce" loss).
+            cwce_on_target_weight: Optional[float]
+                On-target weight forwarded to ConfidenceWeightedCrossEntropy ("cwce" loss).
+            focal_init: bool
+                If True, bias-initialize the GRG attention classification head for focal loss.
+            bg_class_index: int
+                Background class index used by the focal-loss bias initialization.
+            focal_prior_prob: float
+                Prior probability used by the focal-loss bias initialization.
         """
-        if custom_config is None:
-            raise ValueError("Must provide a custom_config dictionary.")
-
-        self._config = custom_config
         self.output_dir = output_dir
         self.lazy_tokenization = lazy_tokenization
         self.cache_dir = cache_dir
@@ -771,34 +770,36 @@ class MethylBert(AbstractReadClassifier):
             )
 
         # Load BERT config
-        if os.path.isdir(foundation_model_path):
-            config = BertConfig.from_pretrained(foundation_model_path)
-        else:
-            config = BertConfig.from_pretrained(foundation_model_path)
+        config = BertConfig.from_pretrained(foundation_model_path)
 
         config.num_labels = num_labels
         config.num_grg_labels = num_grg_labels
-        config.loss = self._config["loss"]
+        config.loss = loss
+        config.cwce_penalty_scale = cwce_penalty_scale
+        config.cwce_on_target_weight = cwce_on_target_weight
+        config.focal_init = focal_init
+        config.bg_class_index = bg_class_index
+        config.focal_prior_prob = focal_prior_prob
 
         # Validate loss type based on num_labels
-        if num_labels == 1 and config.loss not in ["bce"]:
-            print(
-                f"Warning: num_labels=1 typically uses 'bce' loss, but '{config.loss}' was specified"
+        if num_labels == 1 and loss not in ["bce"]:
+            _module_logger.info(
+                f"Warning: num_labels=1 typically uses 'bce' loss, but '{loss}' was specified"
             )
-        elif num_labels == 2 and config.loss not in ["bce", "focal_bce", "ce"]:
+        elif num_labels == 2 and loss not in ["bce", "focal_bce", "ce", "cwce"]:
             raise ValueError(
-                f"For binary classification (num_labels=2), loss must be 'bce', 'focal_bce', or 'ce'"
+                f"For binary classification (num_labels=2), loss must be 'bce', 'focal_bce', 'ce', or 'cwce'"
             )
-        elif num_labels > 2 and config.loss not in ["ce"]:
-            print(
-                f"Warning: Multi-class classification (num_labels={num_labels}) typically uses 'ce' loss"
+        elif num_labels > 2 and loss not in ["ce", "cwce"]:
+            _module_logger.info(
+                f"Warning: Multi-class classification (num_labels={num_labels}) typically uses 'ce' or 'cwce' loss"
             )
 
         self.seq_len = seq_len
 
         # Build the model with selected classifier implementation
         if not load_weights:
-            print(
+            _module_logger.info(
                 f"Initializing MethylBertEmbeddedGRG with {classifier_implementation} classifier from config only"
             )
             self.model = MethylBertEmbeddedGRG(
@@ -808,7 +809,7 @@ class MethylBert(AbstractReadClassifier):
             )
         else:
             if fine_tuned_model_path:
-                print(
+                _module_logger.info(
                     f"Loading MethylBertEmbeddedGRG with {classifier_implementation} classifier "
                     f"from fine-tuned path: {fine_tuned_model_path}"
                 )
@@ -822,7 +823,7 @@ class MethylBert(AbstractReadClassifier):
                     use_safetensors=True,
                 )
             else:
-                print(
+                _module_logger.info(
                     f"Loading MethylBertEmbeddedGRG with {classifier_implementation} classifier "
                     f"from foundation path: {foundation_model_path}"
                 )
@@ -849,43 +850,44 @@ class MethylBert(AbstractReadClassifier):
         else:
             recommended_batch_size = batch_size
 
-        # Create default TrainingArguments
-        from transformers import TrainingArguments
+        # Build TrainingArguments, unless the caller supplied their own.
+        if training_args is None:
+            training_args = TrainingArguments(
+                output_dir=self.output_dir,
+                learning_rate=4e-4,
+                warmup_steps=100,
+                weight_decay=0.1,
+                adam_beta1=0.9,
+                adam_beta2=0.98,
+                adam_epsilon=1e-6,
+                fp16=True,
+                max_grad_norm=1.0,
+                gradient_accumulation_steps=1,
+                logging_steps=10,
+                eval_steps=10,
+                save_steps=10,
+                per_device_train_batch_size=recommended_batch_size,
+                per_device_eval_batch_size=recommended_batch_size,
+                num_train_epochs=100,
+                eval_strategy="steps",
+                remove_unused_columns=False,
+                eval_accumulation_steps=8,
+                torch_empty_cache_steps=10,
+                prediction_loss_only=False,
+                gradient_checkpointing=True,
+                skip_memory_metrics=True,
+                auto_find_batch_size=False,
+                save_total_limit=5,
+                load_best_model_at_end=True,
+                metric_for_best_model="eval_loss",
+                run_name=f"methylBERT_{classifier_implementation}",
+                seed=950410,
+            )
 
-        default_training_args = TrainingArguments(
-            output_dir=self.output_dir,
-            learning_rate=self._config["lr"],
-            warmup_steps=self._config["warmup_step"],
-            weight_decay=self._config["weight_decay"],
-            adam_beta1=self._config["beta"][0],
-            adam_beta2=self._config["beta"][1],
-            adam_epsilon=self._config["eps"],
-            fp16=self._config["amp"],
-            max_grad_norm=self._config["max_grad_norm"],
-            gradient_accumulation_steps=self._config["gradient_accumulation_steps"],
-            logging_steps=self._config["log_freq"],
-            eval_steps=self._config["eval_freq"],
-            save_steps=self._config["eval_freq"],
-            per_device_train_batch_size=recommended_batch_size,
-            per_device_eval_batch_size=recommended_batch_size,
-            num_train_epochs=100,
-            eval_strategy="steps",
-            remove_unused_columns=False,
-            eval_accumulation_steps=8,
-            torch_empty_cache_steps=10,
-            prediction_loss_only=False,
-            gradient_checkpointing=True,
-            skip_memory_metrics=True,
-            auto_find_batch_size=False,
-            save_total_limit=5,
-            load_best_model_at_end=True,
-            metric_for_best_model="eval_loss",
-            run_name=f"methylBERT_{classifier_implementation}",
-        )
-
-        self.training_args = default_training_args
+        self.training_args = training_args
         self.hf_config = config
         self.trainer = None
+        self.history: List[dict] = []
 
     def _init_trainer(
         self,
@@ -958,6 +960,7 @@ class MethylBert(AbstractReadClassifier):
                 bg_ratio=bg_ratio,
             )
 
+        use_table_progress_callback(trainer)
         return trainer
 
     def fine_tune(
@@ -1074,35 +1077,12 @@ class MethylBert(AbstractReadClassifier):
             loss = "bce"
         else:
             loss = "ce"
-        rrms_config = OrderedDict(
-            [
-                ("lr", 0.0004),
-                ("beta", (0.9, 0.98)),
-                ("weight_decay", 0.1),
-                ("warmup_step", 100),
-                ("eps", 1e-6),
-                ("with_cuda", True),
-                ("log_freq", 200),
-                ("eval_freq", 200),
-                ("n_hidden", None),
-                ("decrease_steps", 200),
-                ("eval", False),
-                ("amp", True),
-                ("gradient_accumulation_steps", 1),
-                ("max_grad_norm", 1.0),
-                ("save_freq", None),
-                ("loss", loss),
-                ("adam_beta1", 0.9),
-                ("adam_beta2", 0.98),
-                ("seed", 950410),
-            ]
-        )
 
         instance = cls(
-            custom_config=rrms_config,
             foundation_model_path=kwargs.get(
                 "foundation_model_path", "hanyangii/methylbert_hg19_12l"
             ),
+            loss=loss,
             num_labels=num_labels,
             num_grg_labels=kwargs.get("num_grg_labels", 39),
             fine_tuned_model_path=path,
@@ -1112,6 +1092,11 @@ class MethylBert(AbstractReadClassifier):
             soft_labels=soft_labels,
             seq_len=kwargs.get("seq_length", 150),
             batch_size=kwargs.get("batch_size", 2200),
+            cwce_penalty_scale=kwargs.get("cwce_penalty_scale", 1.0),
+            cwce_on_target_weight=kwargs.get("cwce_on_target_weight", None),
+            focal_init=kwargs.get("focal_init", False),
+            bg_class_index=kwargs.get("bg_class_index", 0),
+            focal_prior_prob=kwargs.get("focal_prior_prob", 0.01),
         )
         return instance
 
@@ -1164,6 +1149,7 @@ class MethylBert(AbstractReadClassifier):
         result = pd.merge(split_df, pred_df, on="read_name")
         return result
 
+    @mlflow_tracked_fit
     def fit_split(
         self,
         train_df: pd.DataFrame,
@@ -1172,8 +1158,6 @@ class MethylBert(AbstractReadClassifier):
         **kwargs,
     ) -> "MethylBert":
         """Fit the classifier on training data for compatibility with AbstractReadClassifier."""
-        from transformers import TrainingArguments
-
         # Prepare train dataset
         train_df_renamed = train_df.rename(
             columns={"seq": "input_ids", "pattern": "methylation_ids"}
@@ -1218,12 +1202,16 @@ class MethylBert(AbstractReadClassifier):
                 soft_labels=self.soft_labels,
             )
 
-        # Build training arguments
-        training_args_dict = kwargs.get("training_args", {})
-        if "output_dir" not in training_args_dict:
-            training_args_dict["output_dir"] = str(output_dir) if output_dir else "./methylbert_output"
-            
-        training_args = TrainingArguments(**training_args_dict)
+        # Build training arguments, applying any overrides on top of the
+        # TrainingArguments built in __init__ (preserving its tuned defaults,
+        # e.g. remove_unused_columns=False, gradient_checkpointing=True).
+        training_args_overrides = dict(kwargs.get("training_args", {}))
+        if "output_dir" not in training_args_overrides:
+            training_args_overrides["output_dir"] = (
+                str(output_dir) if output_dir else self.training_args.output_dir
+            )
+
+        training_args = replace(self.training_args, **training_args_overrides)
 
         self.fine_tune(
             data_path=None,
@@ -1235,6 +1223,7 @@ class MethylBert(AbstractReadClassifier):
             signal_mask=kwargs.get("signal_mask", None),
             bg_ratio=kwargs.get("bg_ratio", 0.3),
         )
+        self.history.append(extract_trainer_metrics(self.trainer))
 
         if output_dir:
             self.save(output_dir)
@@ -1257,7 +1246,7 @@ class MethylVocab(object):
         k: int
             k to create k-mer sequences
         """
-        print("Building Vocab")
+        _module_logger.info("Building Vocab")
         self.kmers = k
 
         # Create a look up table with 3-mer tokens
@@ -1343,7 +1332,7 @@ def _line2tokens_finetune(l, tokenizer, max_len=150, headers=None, soft_labels=F
         if len(headers) == len(l):
             l = {k: v for k, v in zip(headers, l)}
         else:
-            print(headers, l)
+            _module_logger.info(headers, l)
             raise ValueError(
                 f"Only {len(headers)} elements are in the input file header, whereas the line has {len(l)} elements."
             )
@@ -1408,11 +1397,11 @@ class MethylBertPretrainDataset(MethylBertDataset):
 
         # Read all text files and convert the raw sequence into tokens
         with open(self.f_path, "r") as f_input:
-            print("Open data : %s" % f_input)
+            _module_logger.info("Open data : %s" % f_input)
             raw_seqs = f_input.read().splitlines()
 
         num_lines = len(raw_seqs)
-        print("Total number of sequences : ", num_lines)
+        _module_logger.info("Total number of sequences : ", num_lines)
 
         # Fix 1: Disable multiprocessing for small datasets
         if num_lines < 10000:
@@ -1438,7 +1427,7 @@ class MethylBertPretrainDataset(MethylBertDataset):
                 )
 
         del raw_seqs
-        print("Lines are processed")
+        _module_logger.info("Lines are processed")
         self.lines = torch.squeeze(torch.tensor(np.array(line_labels, dtype=np.int16)))
         if num_lines == 1:
             # Wrapping in one more dimension for this edge case
@@ -1650,28 +1639,30 @@ class MethylBertFinetuneDataset(MethylBertDataset):
         if n_seqs is not None:
             raw_seqs = raw_seqs[:n_seqs]
 
-        print(f"Total number of sequences: {len(raw_seqs)}")
+        _module_logger.info(f"Total number of sequences: {len(raw_seqs)}")
 
         if lazy_tokenization:
             # LAZY MODE: Store raw strings only
-            print("Using lazy tokenization (on-the-fly processing)")
+            _module_logger.info("Using lazy tokenization (on-the-fly processing)")
             self.raw_lines = raw_seqs
             self.lines = None  # Not tokenized yet
 
             # Load cache if exists
             if self.cache_dir and os.path.exists(self.cache_file):
-                print(f"Loading cache from {self.cache_file}")
+                _module_logger.info(f"Loading cache from {self.cache_file}")
                 with open(self.cache_file, "rb") as f:
                     self._cache = pickle.load(f)
-                print(f"Loaded {len(self._cache)} cached items")
+                _module_logger.info(f"Loaded {len(self._cache)} cached items")
         else:
             # EAGER MODE: Tokenize everything upfront
-            print("Using eager tokenization (pre-processing all data)")
+            _module_logger.info("Using eager tokenization (pre-processing all data)")
             self.raw_lines = None
 
             # Check if cached version exists
             if self.cache_dir and os.path.exists(self.cache_file):
-                print(f"Loading pre-tokenized data from {self.cache_file}")
+                _module_logger.info(
+                    f"Loading pre-tokenized data from {self.cache_file}"
+                )
                 with open(self.cache_file, "rb") as f:
                     self.lines = pickle.load(f)
             else:
@@ -1704,7 +1695,7 @@ class MethylBertFinetuneDataset(MethylBertDataset):
 
                 # Save to cache
                 if self.cache_dir:
-                    print(f"Saving tokenized data to {self.cache_file}")
+                    _module_logger.info(f"Saving tokenized data to {self.cache_file}")
                     with open(self.cache_file, "wb") as f:
                         pickle.dump(self.lines, f)
 
@@ -1715,7 +1706,7 @@ class MethylBertFinetuneDataset(MethylBertDataset):
         if not lazy_tokenization:
             self.set_grg_labels = set([l["grg_label"] for l in self.lines])
             self.ctype_label_count = self._get_cls_num()
-            print("# of reads in each label:", self.ctype_label_count)
+            _module_logger.info("# of reads in each label:", self.ctype_label_count)
         else:
             self.set_grg_labels = None
             self.ctype_label_count = None
@@ -1787,7 +1778,9 @@ class MethylBertFinetuneDataset(MethylBertDataset):
     def save_cache(self):
         """Manually save cache to disk (useful in lazy mode)."""
         if self.cache_dir and self._cache:
-            print(f"Saving cache with {len(self._cache)} items to {self.cache_file}")
+            _module_logger.info(
+                f"Saving cache with {len(self._cache)} items to {self.cache_file}"
+            )
             with open(self.cache_file, "wb") as f:
                 pickle.dump(self._cache, f)
 

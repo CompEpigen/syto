@@ -3,7 +3,7 @@ import csv
 import json
 import gc
 import random
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Optional, Dict, Sequence, Tuple, List, Union, Callable
 from transformers.models.bert.modeling_bert import BertPreTrainedModel
@@ -24,7 +24,7 @@ import pandas as pd
 from syto.classification.evaluation import (
     compute_metrics,
     preprocess_logits_for_prediction,
-
+    extract_trainer_metrics,
 )
 from syto.classification.utils import calculate_batch_size
 from syto.data.dataset import (
@@ -43,6 +43,8 @@ from syto.classification.loss import ConfidenceWeightedCrossEntropy
 from syto.classification.classifiers.abstract_read_classifier import (
     AbstractReadClassifier,
 )
+from syto.classification.mlflow_tracking import mlflow_tracked_fit
+from syto.classification.training_progress import use_table_progress_callback
 from syto.classification.prediction_aggregation import (
     aggregate_chuncked_predictions_weighted,
 )
@@ -61,7 +63,7 @@ class DNABERT2FineTuneDataset(Dataset):
         data_interface: str = "csv",
         lazy_tokenization=False,
         include_grg_ids=False,
-        dmr_label_column=None,
+        grg_label_column=None,
         soft_labels=False,
     ):
         """
@@ -79,7 +81,7 @@ class DNABERT2FineTuneDataset(Dataset):
         self.lazy_tokenization = lazy_tokenization
         self.include_grg_ids = include_grg_ids
         self.soft_labels = soft_labels
-        self.dmr_label_column = dmr_label_column
+        self.grg_label_column = grg_label_column
 
         # Determine input type
         if data_interface == "csv":
@@ -168,11 +170,11 @@ class DNABERT2FineTuneDataset(Dataset):
                 data[label_col],
             )
             if self.include_grg_ids:
-                if self.dmr_label_column is None:
+                if self.grg_label_column is None:
                     raise ValueError(
-                        "dmr_label_column must not be none if include_grg_ids is set to True"
+                        "grg_label_column must not be none if include_grg_ids is set to True"
                     )
-                self.grg_ids = data[self.dmr_label_column]
+                self.grg_ids = data[self.grg_label_column]
             self.labels = labels.to_list()
             self.cpg_methylation = methylation.to_list()
             texts = dna.to_list()
@@ -843,6 +845,7 @@ class EpigenDnabert2(AbstractReadClassifier):
             tokenizer=self.tokenizer, soft_labels=self.soft_labels
         )
         self.trainer = None
+        self.history: List[dict] = []
 
     def __str__(self):
         return str(self.model)
@@ -859,7 +862,7 @@ class EpigenDnabert2(AbstractReadClassifier):
             None,
         ),
     ):
-        return transformers.Trainer(
+        trainer = transformers.Trainer(
             model=self.model,
             args=args,
             data_collator=self.data_collator,
@@ -872,6 +875,8 @@ class EpigenDnabert2(AbstractReadClassifier):
             preprocess_logits_for_metrics=preprocess_logits_for_prediction,
             compute_metrics=compute_metrics,
         )
+        use_table_progress_callback(trainer)
+        return trainer
 
     def predict(self, test_dataset, batch_size=None, clear_cache=True):
         if batch_size is not None:
@@ -1015,6 +1020,7 @@ class EpigenDnabert2(AbstractReadClassifier):
             self.trainer.save_state()
             self.safe_save_model_for_hf_trainer(output_dir=training_args.output_dir)
 
+    @mlflow_tracked_fit
     def fit_split(
         self,
         train_df: pd.DataFrame,
@@ -1030,7 +1036,7 @@ class EpigenDnabert2(AbstractReadClassifier):
             data_interface="pandas",
             lazy_tokenization=True,
             include_grg_ids=self.num_grg_labels is not None,
-            dmr_label_column=kwargs.get("dmr_label_column", "dmr_ctype_label"),
+            grg_label_column=kwargs.get("grg_label_column", "dmr_ctype_label"),
             soft_labels=self.soft_labels,
         )
 
@@ -1045,12 +1051,20 @@ class EpigenDnabert2(AbstractReadClassifier):
                 data_interface="pandas",
                 lazy_tokenization=True,
                 include_grg_ids=self.num_grg_labels is not None,
-                dmr_label_column=kwargs.get("dmr_label_column", "dmr_ctype_label"),
+                grg_label_column=kwargs.get("grg_label_column", "dmr_ctype_label"),
                 soft_labels=self.soft_labels,
             )
 
-        if "training_args" in kwargs:
-            self.training_args = kwargs["training_args"]
+        # Apply any training_args overrides (e.g. from a YAML config dict) on
+        # top of the TrainingArguments built in __init__, preserving its
+        # tuned defaults (e.g. remove_unused_columns=False).
+        training_args_overrides = dict(kwargs.get("training_args", {}))
+        if "output_dir" not in training_args_overrides:
+            training_args_overrides["output_dir"] = (
+                str(output_dir) if output_dir else self.training_args.output_dir
+            )
+
+        self.training_args = replace(self.training_args, **training_args_overrides)
 
         self.fine_tune(
             data_path=None,
@@ -1062,6 +1076,7 @@ class EpigenDnabert2(AbstractReadClassifier):
             data_interface="pandas",
             resume_from_checkpoint=kwargs.get("resume_from_checkpoint", None),
         )
+        self.history.append(extract_trainer_metrics(self.trainer))
 
         if output_dir:
             self.save(output_dir)
@@ -1075,7 +1090,6 @@ class EpigenDnabert2(AbstractReadClassifier):
         if self.trainer is not None:
             self.safe_save_model_for_hf_trainer(str(path))
 
-
     def predict_split(self, split_df: pd.DataFrame, **kwargs) -> pd.DataFrame:
         """Run DNABERT2 prediction on a single split."""
         dataset = DNABERT2FineTuneDataset(
@@ -1085,18 +1099,22 @@ class EpigenDnabert2(AbstractReadClassifier):
             data_interface="pandas",
             lazy_tokenization=True,
             include_grg_ids=self.num_grg_labels is not None,
-            dmr_label_column=kwargs.get("dmr_label_column", "dmr_ctype_label"),
+            grg_label_column=kwargs.get("grg_label_column", "dmr_ctype_label"),
             soft_labels=self.soft_labels,
         )
 
-        prediction_output = self.predict(dataset, batch_size=kwargs.get("batch_size", None))
+        prediction_output = self.predict(
+            dataset, batch_size=kwargs.get("batch_size", None)
+        )
         probabilities = prediction_output.predictions
 
         # Apply softmax or sigmoid
         if self.num_labels == 1:
             probabilities = 1 / (1 + np.exp(-probabilities))
         else:
-            exp_preds = np.exp(probabilities - np.max(probabilities, axis=1, keepdims=True))
+            exp_preds = np.exp(
+                probabilities - np.max(probabilities, axis=1, keepdims=True)
+            )
             probabilities = exp_preds / np.sum(exp_preds, axis=1, keepdims=True)
 
         pred_cols = [f"prediction_{i}" for i in range(self.num_labels)]
@@ -1111,12 +1129,18 @@ class EpigenDnabert2(AbstractReadClassifier):
     @classmethod
     def load(cls, path: Union[str, Path, None] = None, **kwargs) -> "EpigenDnabert2":
         """Load EpigenDnabert2 from a checkpoint, or build a fresh instance if path is None."""
-        classifier_head_implementation = kwargs.get("classifier_head_implementation", "grg_attention_based")
+        classifier_head_implementation = kwargs.get(
+            "classifier_head_implementation", "grg_attention_based"
+        )
         num_grg_labels = kwargs.get("num_grg_labels")
-        if num_grg_labels is None and classifier_head_implementation == "grg_attention_based":
+        if (
+            num_grg_labels is None
+            and classifier_head_implementation == "grg_attention_based"
+        ):
             num_grg_labels = 39
         return cls(
-            foundation_model_huggingface=kwargs.get("foundation_model_path") or "zhihan1996/DNABERT-2-117M",
+            foundation_model_huggingface=kwargs.get("foundation_model_path")
+            or "zhihan1996/DNABERT-2-117M",
             fine_tuned_model_path=str(path) if path else None,
             max_sequence_length=kwargs.get("seq_length", 150),
             num_labels=kwargs.get("num_labels", 2),
@@ -1125,4 +1149,3 @@ class EpigenDnabert2(AbstractReadClassifier):
             num_grg_labels=num_grg_labels,
             soft_labels=kwargs.get("soft_labels", False),
         )
-
