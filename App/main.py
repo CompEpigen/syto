@@ -8,13 +8,10 @@ import logging
 import argparse
 import sys
 import os
-from pathlib import Path
 from typing import Dict, Any
+import shutil
 
-import pandas as pd
 import yaml
-from syto.classification.classifiers.lazy_classifier_factory import read_classifier_factory
-from syto.classification.classifiers.dnabert2 import TrainingArguments
 
 
 def setup_logging(verbose: bool = False, log_file: str = None):
@@ -100,102 +97,23 @@ def validate_config(config: Dict[str, Any], task: str) -> None:
             model = config["model"]["architecture"].lower()
         else:
             model = config["classifier"]["classifier_type"].lower()
-        if model not in ["methylbert", "dismir", "cancer_detector", "lookup", "epigenbert2"]:
+        if model not in [
+            "methylbert",
+            "dismir",
+            "cancer_detector",
+            "lookup",
+            "epigenbert2",
+        ]:
             raise ValueError(f"Unknown model architecture: {model}")
-
-
-def load_split(base_path: Path, split: str) -> pd.DataFrame:
-    """Load a split data file (try parquet, csv, txt)."""
-    import pandas as pd
-    
-    if (base_path / f"{split}.parquet").exists():
-        return pd.read_parquet(base_path / f"{split}.parquet")
-    if (base_path / f"{split}.csv").exists():
-        return pd.read_csv(base_path / f"{split}.csv")
-    if (base_path / f"{split}.txt").exists():
-        return pd.read_csv(base_path / f"{split}.txt", sep="\t")
-    
-    raise FileNotFoundError(f"Could not find {split} split in {base_path}")
 
 
 def run_classifier_fit(config: Dict[str, Any], logger: logging.Logger) -> None:
     """Run classifier fitting workflow."""
-    from pathlib import Path
-    
-    model_arch = config["model"]["architecture"].lower()
-    data_path = Path(config["data_path"])
-    datasets = config.get("datasets", ["all"])
-    
-    if isinstance(datasets, str):
-        if datasets == "all":
-            # Just use data_path as the single dataset
-            datasets = ["all"]
-        else:
-            datasets = [datasets]
+    from classifier_fit_pipeline import ClassifierFittingPipeline
 
-    model_cfg = config.get("model", {})
-    training_cfg = config.get("training", {})
-    output_cfg = config.get("output", {})
-    
-    base_output_dir = Path(output_cfg.get("output_dir", "output"))
-    
-    logger.info(f"Starting classifier fit workflow for architecture: {model_arch}")
-    
-    for dataset_name in datasets:
-        if dataset_name == "all":
-            dataset_path = data_path
-            out_dir = base_output_dir / "all"
-        else:
-            dataset_path = data_path / dataset_name
-            out_dir = base_output_dir / dataset_name
-            
-        logger.info(f"Processing dataset: {dataset_name} at {dataset_path}")
-        
-        # Load splits
-        try:
-            train_df = load_split(dataset_path, "train")
-            logger.info(f"Loaded train split: {len(train_df)} rows")
-        except FileNotFoundError as e:
-            logger.error(f"Error loading train data: {e}")
-            continue
-            
-        try:
-            val_df = load_split(dataset_path, "valid")
-            logger.info(f"Loaded valid split: {len(val_df)} rows")
-        except FileNotFoundError:
-            logger.warning("No valid split found, continuing without validation data")
-            val_df = None
-
-        # Build classifier
-        num_labels = model_cfg.get("num_labels", 2)
-        classifier_kwargs = {
-            "num_labels": num_labels,
-            "seq_length": config.get("max_sequence_length", 150),
-            "foundation_model_path": model_cfg.get("foundation_model"),
-            "classifier_head_implementation": model_cfg.get("classifier_head_implementation", "grg_attention_based"),
-            "dmr_label_column": model_cfg.get("dmr_label_column", "dmr_ctype_label"),
-            "dismir_flavor": model_cfg.get("flavor", "lstm"),
-            "cancer_detector_prior_type": model_cfg.get("cancer_detector_prior_type", "uniform"),
-            "soft_labels": model_cfg.get("soft_labels", False),
-            "batch_size": config.get("prediction_batch_size", 2200),
-        }
-        
-        logger.info("Initializing classifier...")
-        classifier = read_classifier_factory(
-            name=model_arch,
-            path=None,  # Start fresh
-            **classifier_kwargs
-        )
-        
-        logger.info("Fitting classifier...")
-        classifier.fit_split(
-            train_df=train_df,
-            val_df=val_df,
-            output_dir=out_dir,
-            **training_cfg
-        )
-        
-        logger.info(f"Finished processing {dataset_name}")
+    logger.info("Starting classifier fitting pipeline")
+    pipeline = ClassifierFittingPipeline(config=config, logger=logger)
+    pipeline.run()
 
 
 def run_inference(config: Dict[str, Any], logger: logging.Logger) -> None:
@@ -467,6 +385,11 @@ Examples:
                 "Dry run mode - Configuration is valid, exiting without execution"
             )
             return 0
+
+        output_dir = config["output"]["output_dir"]
+        os.makedirs(output_dir, exist_ok=True)
+        shutil.copy(args.config, output_dir)
+        logger.info(f"Copied config to {output_dir}")
 
         # Execute task
         if args.task == "classifier_fit":
