@@ -221,3 +221,32 @@ compute_metrics = make_compute_metrics(background_threshold_func=None)
 compute_metrics_soft_labels = make_compute_metrics(
     background_threshold_func=lambda n: 0.5
 )
+
+
+def extract_trainer_metrics(trainer) -> dict:
+    """Extract the train/validation metrics a HuggingFace ``Trainer`` already computed.
+
+    Scans ``trainer.state.log_history`` for the training-summary entry
+    (``train_loss``, ``train_runtime``, ...) produced at the end of
+    ``Trainer.train()``, and the last evaluation entry (``eval_loss``,
+    ``eval_accuracy``, ...) produced by ``compute_metrics`` /
+    ``compute_metrics_soft_labels`` during periodic evaluation.
+    ``eval_*`` keys are renamed to ``val_*`` for consistency with the
+    ``train_*``/``val_*`` convention used by other classifiers' ``history``
+    records.
+    """
+    metrics: dict = {}
+    for entry in trainer.state.log_history:
+        if "train_loss" in entry:
+            metrics.update(
+                {k: v for k, v in entry.items() if isinstance(v, (int, float))}
+            )
+        elif any(k.startswith("eval_") for k in entry):
+            metrics.update(
+                {
+                    (f"val_{k[len('eval_'):]}" if k.startswith("eval_") else k): v
+                    for k, v in entry.items()
+                    if isinstance(v, (int, float))
+                }
+            )
+    return metrics
