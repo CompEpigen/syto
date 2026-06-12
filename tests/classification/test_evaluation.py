@@ -95,6 +95,7 @@ class TestPreprocessLogitsForPrediction(unittest.TestCase):
         expected = torch.softmax(logits, dim=-1)
         self.assertTrue(torch.allclose(result, expected))
 
+
 class TestComputeMetrics(unittest.TestCase):
     """Test suite for compute_metrics (backward-compat alias)."""
 
