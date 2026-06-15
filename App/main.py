@@ -327,10 +327,8 @@ Examples:
             logger.info("Override: labels_dict_path = %s", args.labels_dict)
 
         if hasattr(args, "output_dir") and args.output_dir:
-            if "output" not in config:
-                config["output"] = {}
-            config["output"]["output_dir"] = args.output_dir
-            logger.info("Override: output.output_dir = %s", args.output_dir)
+            config["output_dir"] = args.output_dir
+            logger.info("Override: output_dir = %s", args.output_dir)
 
         if args.datasets:
             config["datasets"] = args.datasets
@@ -358,7 +356,7 @@ Examples:
             )
             return 0
 
-        output_dir = config["output"]["output_dir"]
+        output_dir = config["output_dir"]
         os.makedirs(output_dir, exist_ok=True)
         shutil.copy(args.config, output_dir)
         logger.info(f"Copied config to {output_dir}")
