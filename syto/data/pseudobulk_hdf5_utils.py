@@ -10,7 +10,7 @@ import shutil
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, Iterator, List, Literal, Optional
 import hashlib
 import json
 import logging
@@ -1003,3 +1003,172 @@ class PseudobulkHDF5Reader:
             )
 
         return np.stack(features, axis=0), np.stack(target_proportions, axis=0)
+
+    # --- Reconstruction of sampled read subsets ---
+
+    def _read_input_dataframe(self, split_name: str) -> pd.DataFrame:
+        """Read back the original per-split input DataFrame.
+
+        Reconstructs the DataFrame written by
+        :meth:`PseudobulkHDF5ConsolidationWriter._write_inputs`, preserving
+        the row order of the data used during generation (required for
+        :meth:`iter_pseudobulk_read_subsets` to reproduce the same sampling).
+
+        Args:
+            split_name: Name of the split (e.g. ``"train"``).
+
+        Returns:
+            DataFrame with the same rows and columns as the input passed to
+            :class:`~syto.data.pseudobulk_generator.PseudobulkGenerator`.
+        """
+        split_group = f"{PseudobulkHDF5Schema.INPUTS}/{split_name}"
+        with h5py.File(self.path, "r") as f:
+            if split_group not in f:
+                raise KeyError(
+                    f"No input data found for split '{split_name}' at "
+                    f"'{split_group}' in {self.path}."
+                )
+            grp = f[split_group]
+            df_parts: List[pd.DataFrame] = []
+            if "numeric_data" in grp:
+                numeric_cols = self._decode_columns(grp.attrs["numeric_columns"])
+                df_parts.append(
+                    pd.DataFrame(grp["numeric_data"][...], columns=numeric_cols)
+                )
+            if "string_data" in grp:
+                string_cols = self._decode_columns(grp.attrs["string_columns"])
+                string_df = pd.DataFrame(grp["string_data"][...], columns=string_cols)
+                string_df = string_df.apply(lambda col: col.str.decode("utf-8"))
+                df_parts.append(string_df)
+
+        if not df_parts:
+            return pd.DataFrame()
+        return pd.concat(df_parts, axis=1)
+
+    def _read_gr_groups_mapping(self) -> Dict[str, int]:
+        """Read the GR-group label -> index mapping from the parameters group."""
+        with h5py.File(self.path, "r") as f:
+            arr = f[PseudobulkHDF5Schema.PARAMS_GR_GROUPS_MAPPING][...]
+        return {name.decode(): int(idx) for name, idx in arr}
+
+    def _read_grg_label_column(self) -> str:
+        """Read the GR-group label column name used during generation."""
+        with h5py.File(self.path, "r") as f:
+            raw = f[PseudobulkHDF5Schema.INPUTS_METADATA].attrs[
+                PseudobulkHDF5Schema.ATTR_GR_ID_COLUMN
+            ]
+        return raw.decode() if isinstance(raw, (bytes, bytearray)) else str(raw)
+
+    @staticmethod
+    def _build_indices_per_class_and_grg(
+        df: pd.DataFrame,
+        class_label_column: str,
+        grg_label_column: str,
+        gr_groups_mapping: Dict[str, int],
+    ) -> Dict[tuple[int, int], np.ndarray]:
+        """Group row positions of ``df`` by ``(class_index, grg_index)``.
+
+        Mirrors
+        :meth:`~syto.data.pseudobulk_generator.PseudobulkGenerator._precompute_group_indices`
+        so that the resulting dictionary matches the one used at generation
+        time (required for the sampling RNG to reproduce the same draws).
+
+        Args:
+            df: Input DataFrame for the split (as returned by
+                :meth:`_read_input_dataframe`).
+            class_label_column: Column holding the (integer) class index.
+            grg_label_column: Column holding the GR-group label or index.
+            gr_groups_mapping: Mapping from GR-group label to GR-group index.
+
+        Returns:
+            Dictionary mapping ``(class_index, grg_index)`` to arrays of row
+            positions (suitable for ``DataFrame.iloc``).
+        """
+        for col in (class_label_column, grg_label_column):
+            if col not in df.columns:
+                raise KeyError(
+                    f"Column '{col}' not found in the reconstructed input "
+                    f"DataFrame (available columns: {list(df.columns)})."
+                )
+
+        grouped = df.groupby([class_label_column, grg_label_column], sort=False)
+        indices_dict: Dict[tuple[int, int], np.ndarray] = {}
+        for (class_label, grg_label), row_indices in grouped.indices.items():
+            class_index = int(class_label)
+            grg_key = (
+                str(grg_label) if str(grg_label) in gr_groups_mapping else grg_label
+            )
+            if grg_key in gr_groups_mapping:
+                grg_index = gr_groups_mapping[grg_key]
+            else:
+                grg_index = int(grg_label)
+            indices_dict[(class_index, grg_index)] = row_indices
+
+        return indices_dict
+
+    def iter_pseudobulk_read_subsets(
+        self,
+        split_name: str,
+        class_label_column: str = "original_label",
+    ) -> Iterator[tuple[pd.DataFrame, np.ndarray]]:
+        """Reconstruct the read-level subset sampled for each pseudobulk.
+
+        For every pseudobulk stored under
+        ``outputs/<split_name>/pseudobulks``, re-derives the exact rows of
+        the input DataFrame that were sampled (with replacement) to build
+        it, using the stored ``seed`` and ``n_reads_per_gr`` together with
+        :func:`syto.data.pseudobulk_generator._sample_read_ids_from_grouped_dataframe`.
+        This is the inverse of
+        :meth:`~syto.data.pseudobulk_generator.PseudobulkGenerator.generate_single_pseudobulk`.
+
+        Args:
+            split_name: Name of the split (e.g. ``"train"``).
+            class_label_column: Column in the input DataFrame holding the
+                (integer) class index of each read. Must match the
+                ``class_label_column`` used by
+                :class:`~syto.data.pseudobulk_generator.PseudobulkGenerator`
+                during generation (default: ``"original_label"``).
+
+        Yields:
+            Tuples ``(reads, target_proportions)`` in order of pseudobulk
+            index, where ``reads`` is the DataFrame subset of sampled reads
+            (rows may repeat, since sampling is performed with replacement)
+            and ``target_proportions`` has shape ``(n_classes,)``.
+        """
+        from syto.data.pseudobulk_generator import (
+            _sample_read_ids_from_grouped_dataframe,
+        )
+
+        input_df = self._read_input_dataframe(split_name)
+        grg_label_column = self._read_grg_label_column()
+        gr_groups_mapping = self._read_gr_groups_mapping()
+        indices_per_class_and_grg = self._build_indices_per_class_and_grg(
+            input_df, class_label_column, grg_label_column, gr_groups_mapping
+        )
+
+        pbs_group = PseudobulkHDF5Schema.pseudobulks_group(split_name)
+        with h5py.File(self.path, "r") as f:
+            if pbs_group not in f:
+                raise KeyError(
+                    f"No pseudobulks found for split '{split_name}' at "
+                    f"'{pbs_group}' in {self.path}."
+                )
+            pbs = f[pbs_group]
+            keys = sorted(pbs.keys(), key=lambda k: int(k.split("_")[1]))
+            for key in keys:
+                grp = pbs[key]
+                seed = int(grp.attrs[PseudobulkHDF5Schema.ATTR_SEED])
+                n_samples_per_class_per_grg = grp[
+                    PseudobulkHDF5Schema.DATASET_N_READS_PER_GR
+                ][...]
+                target_proportions = grp[
+                    PseudobulkHDF5Schema.DATASET_TARGET_PROPORTIONS
+                ][...]
+
+                read_ids = _sample_read_ids_from_grouped_dataframe(
+                    n_samples_per_class_per_grg,
+                    indices_per_class_and_grg,
+                    seed=seed,
+                )
+                reads = input_df.iloc[read_ids].reset_index(drop=True)
+                yield reads, target_proportions
