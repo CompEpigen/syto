@@ -22,7 +22,6 @@ from typing import Any, Dict
 import numpy as np
 import pandas as pd
 
-from syto.data import LOYFER_CELL_TYPE_MATCH_DICT
 from syto.data.read_preparation import prepare_splits_for_pseudobulk
 from syto.data.pseudobulk_generator import PseudobulkGenerator
 from syto.data.pseudobulk_hdf5_utils import (
@@ -32,6 +31,7 @@ from syto.data.pseudobulk_hdf5_utils import (
 from syto.classification.classifiers.lazy_classifier_factory import (
     read_classifier_factory,
 )
+from syto.data.dataset import resolve_column
 
 
 class PseudoBulkPipeline:
@@ -63,11 +63,6 @@ class PseudoBulkPipeline:
             raw = json.load(f)
             self.labels_dict: Dict[int, str] = {int(k): v for k, v in raw.items()}
         self.num_labels = config["num_labels"]
-
-        # Cell-type matching dict
-        self.cell_type_match_dict = config.get(
-            "cell_type_match_dict", LOYFER_CELL_TYPE_MATCH_DICT
-        )
 
         # Output paths
         self.output_dir = Path(config["output_dir"])
@@ -126,6 +121,7 @@ class PseudoBulkPipeline:
         # Filter columns to reduce memory usage
         self._filter_split_columns(splits_data)
 
+
         # Load target proportions
         target_proportions_per_split = self._load_target_proportions()
 
@@ -166,11 +162,8 @@ class PseudoBulkPipeline:
 
         splits_data = prepare_splits_for_pseudobulk(
             splits_data,
-            labels_dict=self.labels_dict,
             num_labels=self.num_labels,
-            generate_uxm_inputs=False,
             atlas_path=atlas_path,
-            cell_type_match_dict=self.cell_type_match_dict,
         )
         sizes = ", ".join(f"{name}={len(df)}" for name, df in splits_data.items())
         self.logger.info(f"  After preparation: {sizes}")
@@ -224,20 +217,31 @@ class PseudoBulkPipeline:
             for c in sample_df.columns
             if c.startswith("prediction_") and c[11:].isdigit()
         ]
+        dna_col = resolve_column(sample_df.columns, "input_ids")
+        meth_col = resolve_column(sample_df.columns, "methylation_ids")
 
         # Required columns for pseudobulk generation
         base_cols = [
+            dna_col,
+            meth_col,
             "original_label",
             "dmr_ctype_label",
             "dmr_ctype",
             "NCPGS",
             "total_marked_cpgs",
-            # "M_rate",
-            # "methylation_level",
             "chr",
             "chromosome",
-            "label",
+            "label"
         ]
+        if "trimmed_start" in sample_df.columns and "read_start" not in sample_df.columns:
+            base_cols.extend(["trimmed_start", "trimmed_end"])
+        elif "read_start" in sample_df.columns:
+            base_cols.extend(["read_start", "read_end"])
+        if "file" in sample_df.columns:
+            base_cols.append("file")
+        if "name" in sample_df.columns:
+            base_cols.append("name")
+
 
         for split_name, df in splits_data.items():
             keep_cols = [c for c in base_cols + pred_cols if c in df.columns]
