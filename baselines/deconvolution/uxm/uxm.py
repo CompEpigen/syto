@@ -2,6 +2,9 @@
 This module  reimplements pieces of UXM code from original work by Loyfer et. al: https://github.com/nloyfer/UXM_deconv.
 The focus is on creating a minimum setup sufficient to run deconvolution in python in a manner compatible with overall pipeline without introducing dependencies to original code.
 Some of the methods are directly copied while other are specific to this repo.
+
+Use and distribution of the original UXM_deconv code reproduced here is subject to the
+Software Research License included in LICENSE.md alongside this module.
 """
 
 import sys
@@ -153,6 +156,24 @@ def rearange_uxm_deconvolution_results(
     ]
     return uxm_proportions_aligned
 
+def mark_records_methyl_state(
+    reads_data,
+    methyl_tr = 0.75,
+    unmethyl_tr = 0.25
+):
+    reads_data["M"] = reads_data["pattern"].apply(lambda x: x.count("1"))
+    reads_data["U"] = reads_data["pattern"].apply(lambda x: x.count("0"))
+
+    # For classification, use only confident calls
+    reads_data["NCPGS"] = reads_data["M"] + reads_data["U"]
+    reads_data["M_rate"] = reads_data["M"] / reads_data["NCPGS"].replace(0, np.nan)
+
+    is_M = reads_data["M_rate"] >= methyl_tr
+    is_U = reads_data["M_rate"] <= unmethyl_tr
+    reads_data["record_M"] = is_M.astype(int)
+    reads_data["record_U"] = is_U.astype(int)
+    reads_data["record_X"] = (~is_M & ~is_U).astype(int)
+    return reads_data
 
 def prepare_reads_for_uxm(
     reads_data,
@@ -336,18 +357,7 @@ def prepare_reads_for_uxm(
 
     results = pd.DataFrame(results, columns=columns)
 
-    results["M"] = results["pattern"].apply(lambda x: x.count("1"))
-    results["U"] = results["pattern"].apply(lambda x: x.count("0"))
-
-    # For classification, use only confident calls
-    results["NCPGS"] = results["M"] + results["U"]
-    results["M_rate"] = results["M"] / results["NCPGS"].replace(0, np.nan)
-
-    is_M = results["M_rate"] >= methyl_tr
-    is_U = results["M_rate"] <= unmethyl_tr
-    results["record_M"] = is_M.astype(int)
-    results["record_U"] = is_U.astype(int)
-    results["record_X"] = (~is_M & ~is_U).astype(int)
+    results = mark_records_methyl_state(results, methyl_tr=methyl_tr, unmethyl_tr=unmethyl_tr)
 
     results = pd.merge(results, atlas[["name", "target"]], on="name")
     results.rename(columns={"target": "dmr_ctype"}, inplace=True)

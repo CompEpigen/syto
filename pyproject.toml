@@ -4,7 +4,7 @@ version = "0.5.0"
 description = ""
 authors = ["Dmytro Rizdvanetskyi", "Nathan Roos"]
 readme = "README.md"
-packages = [{include = "syto"}]
+packages = [{include = "syto"}, {include = "baselines"}]
 
 [tool.poetry.dependencies]
 python = "^3.11"
