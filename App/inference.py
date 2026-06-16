@@ -15,7 +15,6 @@ import logging
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 import torch
-from copy import deepcopy
 
 import numpy as np
 import pandas as pd
@@ -32,11 +31,12 @@ from syto.classification.prediction_aggregation import (
 from syto.classification.classifiers.lazy_classifier_factory import (
     read_classifier_factory,
 )
+from syto.data.atlases.uxm_atlases import UXMMethylationAtlas
 from baselines.deconvolution.uxm import (
-    prepare_reads_for_uxm,
+    build_uxm_input,
+    mark_records_methyl_state,
     uxm_deconvolution,
     rearange_uxm_deconvolution_results,
-    load_atlas,
 )
 from syto.deconvolution.feature_selection import apply_feature_mask
 from syto.deconvolution.least_squares_deconvolvers import (
@@ -95,9 +95,15 @@ class InferencePipeline:
 
         # ── Load atlas ──────────────────────────────────────────────────
         atlas_path = config["atlas_path"]
-        self.atlas = pd.read_csv(atlas_path, sep="\t")
+        atlas_name = config["atlas_name"]
+        self.atlas = UXMMethylationAtlas(
+            atlas_name=atlas_name,
+            reference_genome="hg38" if "hg38" in atlas_path else "hg19",
+            atlas_path=atlas_path,
+            sep="\t",
+        )
         self.logger.info(
-            f"Loaded atlas with {len(self.atlas)} regions from {atlas_path}"
+            f"Loaded atlas with {len(self.atlas.atlas)} regions from {atlas_path}"
         )
 
         # ── Placeholder attributes populated during run() ───────────────
@@ -308,51 +314,31 @@ class InferencePipeline:
     # ═══════════════════════════════════════════════════════════════════
 
     def _prepare_reads(self) -> pd.DataFrame:
-        """
-        Overlap processed reads with atlas regions and resolve DMR labels.
+        """Overlap processed reads with atlas regions and resolve DMR labels.
 
-        Uses ``prepare_reads_for_uxm`` which:
-        - iterates atlas regions and scans sorted reads for overlaps
-        - trims reads to region boundaries
-        - computes M / U / X counts
-        - resolves ``dmr_ctype_label`` via labels_dict_reversed and
-          cell_type_match_dict
-
-        Returns
-        -------
-        pd.DataFrame
-            Prepared reads with atlas-region annotations.  Column names
-            are kept as-is (``seq``, ``pattern``, …) so that the
-            :class:`AbstractReadClassifier` can handle any downstream
-            transformations internally.
+        Calls ``atlas.prepare_reads`` which:
+        - overlaps reads with atlas regions (adds ``name``, region coords)
+        - trims reads to region boundaries (coordinates, seq, pattern)
+        - resolves ``dmr_ctype_label`` via labels_dict and cell_type_match_dict
         """
         df = self.processed_reads.copy()
-
-        # Sort by chromosome and start position (required by prepare_reads_for_uxm)
         df = df.sort_values(["chromosome", "read_start"]).reset_index(drop=True)
 
-        # For inference from BAM, reads don't have ground-truth labels.
-        # Add dummy columns so prepare_reads_for_uxm doesn't break.
-        if "original_label" not in df.columns:
-            df["original_label"] = -1
-        if "label" not in df.columns:
-            df["label"] = -1
-
         self.logger.info("Overlapping reads with atlas regions ...")
-        prepared_uxm = prepare_reads_for_uxm(
-            reads_data=df,
-            atlas=self.atlas,
+        prepared = self.atlas.prepare_reads(
+            df,
+            trim=True,
             labels_dict=self.labels_dict,
             cell_type_match_dict=self.cell_type_match_dict,
         )
 
-        if len(prepared_uxm) == 0:
+        if len(prepared) == 0:
             raise RuntimeError(
                 "No reads overlapped with atlas regions. "
                 "Check that chromosome naming is consistent between BAM and atlas."
             )
 
-        return prepared_uxm
+        return prepared
 
     def _predict_classifier(self) -> pd.DataFrame:
         """
@@ -730,12 +716,11 @@ class InferencePipeline:
         """
         Run UXM deconvolution.
         """
-        # Load atlas for UXM (uses its own loader)
-        atlas_path = self.config["atlas_path"]
-        uxm_atlas, ref_cells = load_atlas(atlas_path)
+        uxm_atlas = self.atlas.atlas
+        ref_cells = self.atlas.ref_cells
 
-        # Build UXM-compatible input from the prepared reads
-        uxm_input = self._build_uxm_input(uxm_atlas, ref_cells)
+        reads = mark_records_methyl_state(self.prepared_reads.copy())
+        uxm_input = build_uxm_input(reads)
 
         # Run UXM deconvolution
         uxm_proportions = uxm_deconvolution(
@@ -756,40 +741,6 @@ class InferencePipeline:
 
         self.logger.debug(f"UXM proportions: {proportions_aligned}")
         return proportions_aligned
-
-    def _build_uxm_input(
-        self, uxm_atlas: pd.DataFrame, ref_cells: list
-    ) -> Dict[str, Any]:
-        """
-        Build UXM-compatible input from prepared reads.
-
-        Computes per-region scaling factors and methylation counts
-        in the format expected by ``decon_single_samp``.
-        """
-        prepared = self.prepared_reads.copy()
-
-        results_agg = (
-            prepared[prepared["NCPGS"] > 3]
-            .groupby("name")
-            .aggregate({"record_M": "sum", "record_U": "sum", "record_X": "sum"})
-            .reset_index()
-        )
-        results_agg["count"] = (
-            results_agg["record_M"] + results_agg["record_U"] + results_agg["record_X"]
-        )
-        results_agg["sf"] = results_agg["record_U"] / results_agg["count"]
-        results_agg["direction"] = "U"
-        sample_name = "sample"
-
-        sf = deepcopy(results_agg[["name", "direction"]])
-        sf[sample_name] = results_agg["sf"]
-        counts = results_agg[["name", "direction", "count"]]
-        counts.columns = ["name", "direction", sample_name]
-
-        return {
-            "scaling_factors": sf,
-            "counts": counts,
-        }
 
     # ═══════════════════════════════════════════════════════════════════
     #  Output

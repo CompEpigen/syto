@@ -144,27 +144,63 @@ def uxm_deconvolution(
 
 
 def rearange_uxm_deconvolution_results(
-    labels_dict_reversed, uxm_proportions, ref_cells
+    labels_dict_reversed, uxm_proportions, ref_cells, n_labels=None
 ):
     """
     The function rearanges uxm deconvolution results to match target labels order encoded in the input dictionary
     """
+    if n_labels is None:
+        n_labels = len(labels_dict_reversed)
     ref_pos = np.array([labels_dict_reversed.get(cell, -1) for cell in ref_cells])
     uxm_proportions_aligned = [
         uxm_proportions[i]
-        for i in [int(np.where(ref_pos == i)[0][0]) for i in range(0, 39)]
+        for i in [int(np.where(ref_pos == i)[0][0]) for i in range(n_labels)]
     ]
     return uxm_proportions_aligned
 
+def build_uxm_input(reads: pd.DataFrame) -> dict:
+    """
+    Build UXM-compatible scaling factors and counts from prepared reads.
+
+    Expects reads to already have NCPGS, record_M, record_U, record_X (from
+    mark_records_methyl_state) and a 'name' column identifying the atlas region.
+    """
+    from copy import deepcopy
+
+    results_agg = (
+        reads[reads["NCPGS"] > 3]
+        .groupby("name")
+        .aggregate({"record_M": "sum", "record_U": "sum", "record_X": "sum"})
+        .reset_index()
+    )
+    results_agg["count"] = (
+        results_agg["record_M"] + results_agg["record_U"] + results_agg["record_X"]
+    )
+    results_agg["sf"] = results_agg["record_U"] / results_agg["count"]
+    results_agg["direction"] = "U"
+
+    sf = deepcopy(results_agg[["name", "direction"]])
+    sf["sample"] = results_agg["sf"]
+    counts = results_agg[["name", "direction", "count"]].copy()
+    counts.columns = ["name", "direction", "sample"]
+
+    return {"scaling_factors": sf, "counts": counts}
+
+
 def mark_records_methyl_state(
     reads_data,
-    methyl_tr = 0.75,
-    unmethyl_tr = 0.25
+    methylation_pattern_column="pattern",
+    methyl_tr=0.75,
+    unmethyl_tr=0.25,
 ):
-    reads_data["M"] = reads_data["pattern"].apply(lambda x: x.count("1"))
-    reads_data["U"] = reads_data["pattern"].apply(lambda x: x.count("0"))
+    """Classify each CpG read as methylated (M), unmethylated (U), or ambiguous (X).
 
-    # For classification, use only confident calls
+    Adds columns ``M``, ``U``, ``NCPGS``, ``M_rate``, ``record_M``,
+    ``record_U``, ``record_X`` to ``reads_data`` in-place and returns it.
+    """
+    pat = reads_data[methylation_pattern_column]
+    reads_data["M"] = pat.apply(lambda x: x.count("1"))
+    reads_data["U"] = pat.apply(lambda x: x.count("0"))
     reads_data["NCPGS"] = reads_data["M"] + reads_data["U"]
     reads_data["M_rate"] = reads_data["M"] / reads_data["NCPGS"].replace(0, np.nan)
 
@@ -174,6 +210,7 @@ def mark_records_methyl_state(
     reads_data["record_U"] = is_U.astype(int)
     reads_data["record_X"] = (~is_M & ~is_U).astype(int)
     return reads_data
+
 
 def prepare_reads_for_uxm(
     reads_data,
