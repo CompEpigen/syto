@@ -158,12 +158,21 @@ class PseudoBulkPipeline:
         self, splits_data: Dict[str, pd.DataFrame]
     ) -> Dict[str, pd.DataFrame]:
         """Prepare reads for pseudobulk generation."""
+        from syto.data.atlases.uxm_atlases import UXMMethylationAtlas
+
         atlas_path = self.config["atlas_path"]
+        atlas_name = self.congig["atlas_name"]
+        atlas = UXMMethylationAtlas(
+            atlas_name="U25l4",
+            reference_genome="hg38" if "hg38" in atlas_path else "hg19",
+            atlas_path=atlas_path,
+            sep="\t",
+        )
 
         splits_data = prepare_splits_for_pseudobulk(
             splits_data,
             num_labels=self.num_labels,
-            atlas_path=atlas_path,
+            atlas=atlas,
         )
         sizes = ", ".join(f"{name}={len(df)}" for name, df in splits_data.items())
         self.logger.info(f"  After preparation: {sizes}")
