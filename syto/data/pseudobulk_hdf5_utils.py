@@ -1172,3 +1172,72 @@ class PseudobulkHDF5Reader:
                 )
                 reads = input_df.iloc[read_ids].reset_index(drop=True)
                 yield reads, target_proportions
+
+    def build_reconstruction_state(
+        self,
+        split_name: str,
+        class_label_column: str = "original_label",
+    ) -> "tuple[pd.DataFrame, Dict[tuple, np.ndarray]]":
+        """Load the shared state required to reconstruct pseudobulk read subsets.
+
+        Call this once per split before iterating with
+        :meth:`iter_pseudobulk_params`.  The returned objects are read-only and
+        safe to share across threads.
+
+        Args:
+            split_name: Name of the split (e.g. ``"train"``).
+            class_label_column: Column in the input DataFrame holding the
+                (integer) class index of each read.
+
+        Returns:
+            ``(input_df, indices_per_class_and_grg)`` where ``input_df`` is the
+            full per-split read DataFrame and ``indices_per_class_and_grg`` maps
+            ``(class_index, grg_index)`` to arrays of row positions for
+            ``DataFrame.iloc``.
+        """
+        input_df = self._read_input_dataframe(split_name)
+        grg_label_column = self._read_grg_label_column()
+        gr_groups_mapping = self._read_gr_groups_mapping()
+        indices_per_class_and_grg = self._build_indices_per_class_and_grg(
+            input_df, class_label_column, grg_label_column, gr_groups_mapping
+        )
+        return input_df, indices_per_class_and_grg
+
+    def iter_pseudobulk_params(
+        self,
+        split_name: str,
+    ) -> "Iterator[tuple[int, np.ndarray, np.ndarray]]":
+        """Yield the minimal per-pseudobulk parameters stored in the HDF5 file.
+
+        Unlike :meth:`iter_pseudobulk_read_subsets`, this method does **not**
+        reconstruct the read subset — it only reads the small arrays needed to
+        do so.  Pass the results together with the shared state from
+        :meth:`build_reconstruction_state` to a parallel worker that performs
+        the reconstruction and downstream processing.
+
+        Args:
+            split_name: Name of the split (e.g. ``"train"``).
+
+        Yields:
+            Tuples ``(seed, n_samples_per_class_per_grg, target_proportions)``
+            in pseudobulk index order.
+        """
+        pbs_group = PseudobulkHDF5Schema.pseudobulks_group(split_name)
+        with h5py.File(self.path, "r") as f:
+            if pbs_group not in f:
+                raise KeyError(
+                    f"No pseudobulks found for split '{split_name}' at "
+                    f"'{pbs_group}' in {self.path}."
+                )
+            pbs = f[pbs_group]
+            keys = sorted(pbs.keys(), key=lambda k: int(k.split("_")[1]))
+            for key in keys:
+                grp = pbs[key]
+                seed = int(grp.attrs[PseudobulkHDF5Schema.ATTR_SEED])
+                n_samples_per_class_per_grg = grp[
+                    PseudobulkHDF5Schema.DATASET_N_READS_PER_GR
+                ][...]
+                target_proportions = grp[
+                    PseudobulkHDF5Schema.DATASET_TARGET_PROPORTIONS
+                ][...]
+                yield seed, n_samples_per_class_per_grg, target_proportions
