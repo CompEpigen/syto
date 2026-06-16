@@ -38,6 +38,7 @@ parameterized = "^0.9.0"
 genbadge ="^1.1.0"
 defusedxml ="^0.7.0"
 pytest = "^9.0.3"
+jupyter = "^1.1.1"
 
 [tool.poetry.extras]
 eda = ["intervaltree", "plotly"]
