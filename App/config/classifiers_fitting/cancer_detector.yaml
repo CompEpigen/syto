@@ -1,0 +1,39 @@
+# Classifier Fitting - Cancer Detector (Bayesian Beta-distribution model)
+# ==========================================================================
+# Run with:
+#   python App/main.py --task classifier_fit --config App/config/classifiers_fitting/cancer_detector.yaml
+#
+# Expected data layout (datasets: all -> files directly under data_path):
+#   <data_path>/train.{parquet,csv,txt}
+#   <data_path>/valid.{parquet,csv,txt}   (optional, used for validation metrics)
+# Required columns: M, U (methylated/unmethylated CpG counts), original_label,
+# dmr_ctype_label (marker / DMR id)
+
+# Model Configuration
+model:
+  architecture: cancer_detector
+
+# Data Configuration
+data_path: /home/luna.kuleuven.be/u0169940/Data/Loyfer/
+max_sequence_length: 150
+prediction_batch_size: 16
+datasets: SoftLabelsTrainingData_205files_pooled_Jaccard_hg38_mincpg_4_minlen_10_no_data_leak_d041
+
+# Output Configuration
+output:
+  output_dir: tmp/classifier_fit_test/cancer_detector
+
+# MLflow Configuration
+mlflow:
+  enabled: true
+  experiment_name: classifier_fit_test_cancer_detector
+  tracking_uri: null  # Leave as null for local tracking or specify remote URI
+
+# Training Configuration (forwarded to CancerDetectorClassifier.fit_split -> fit)
+training:
+  col_n_meth_cpgs: M
+  col_n_unmeth_cpgs: U
+  col_label: label
+  col_marker_label: dmr_ctype_label
+  eps_beta_fit: 0.01
+  class_prior_type: train_freq  # "uniform" or "train_freq"

@@ -1,0 +1,47 @@
+# Classifier Fitting - Dismir
+# =============================
+# Run with:
+#   python App/main.py --task classifier_fit --config App/config/classifiers_fitting/dismir.yaml
+#
+# Expected data layout (datasets: all -> files directly under data_path):
+#   <data_path>/train.{parquet,csv,txt}
+#   <data_path>/valid.{parquet,csv,txt}   (optional, used for validation metrics)
+# Required columns: input_ids (or seq), methylation_ids (or pattern), label,
+# dmr_ctype_label (GRG/DMR id used by the grg_attention_based classifier head)
+
+# Model Configuration
+model:
+  architecture: dismir
+  flavor: lstm
+  num_labels: 39
+  classifier_head_implementation: grg_attention_based
+  num_grg_labels: 39
+  grg_label_column: dmr_ctype_label
+  soft_labels: true
+
+# Data Configuration
+data_path: /home/luna.kuleuven.be/u0169940/Data/Loyfer/
+max_sequence_length: 150
+prediction_batch_size: 128
+datasets: SoftLabelsForRRBSsplits_205files_pooled_Jaccard_hg38_mincpg_4_minlen_10_d041
+
+# Output Configuration
+output:
+  output_dir: tmp/classifier_fit_test/dismir
+
+# MLflow Configuration
+mlflow:
+  enabled: true
+  experiment_name: RRBS_Refactored
+  tracking_uri: null  # Leave as null for local tracking or specify remote URI
+
+# Training Configuration (forwarded to Dismir.fit_split / Dismir.train as kwargs)
+training:
+  epochs: 100
+  batch_size: 128
+  patience: 30
+  optimizer_type: ADAM
+  lr: 0.001
+  weight_decay: 1.0e-6
+  variable_length: false
+  verbose: 1
