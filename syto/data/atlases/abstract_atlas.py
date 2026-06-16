@@ -1,6 +1,7 @@
 """ """
 
 from abc import ABC, abstractmethod
+from typing import Dict, List
 
 import pandas as pd
 
@@ -17,30 +18,178 @@ class AbstractAtlas(ABC):
     @property
     @abstractmethod
     def reference_genome(self) -> str:
-        """
-        Return the reference genome associated with the atlas
-        """
+        """Return the reference genome associated with the atlas."""
 
     @property
     @abstractmethod
     def atlas(self) -> pd.DataFrame:
-        """
-        Return the atlas as a pandas DataFrame.
+        """Return the atlas as a pandas DataFrame.
 
         The atlas DataFrame should have at least the following columns:
         - 'chr': Chromosome name
-        - 'start': Start position of the genomic region
-        - 'end': End position of the genomic region
-        - 'name': the name of the genomic region (e.g. "chr1:1000-2000")
-        - 'target': the name of the group that is characteristic for the genomic region
-        (e.g. single cell type, set of cell type, tissue, etc.)
+        - 'start': Start position of the genomic region (1-based)
+        - 'end': End position of the genomic region (1-based, inclusive)
+        - 'name': Identifier of the genomic region (e.g. "chr1:1000-2000")
+        - 'target': The characteristic group for the region (e.g. cell type)
         """
+
+    # ------------------------------------------------------------------
+    # Reads preparation methods
+    # ------------------------------------------------------------------
+
+    def overlap_reads(
+        self,
+        df: pd.DataFrame,
+        seq_column: str = "seq",
+        methylation_pattern_column: str = "pattern",
+    ) -> pd.DataFrame:
+        """Annotate each read with the atlas region(s) it overlaps.
+
+        Reads not overlapping any atlas region are dropped.  A read
+        overlapping multiple regions is duplicated once per region.  All
+        original columns are preserved; three columns are added:
+
+        * ``name`` — atlas region identifier
+        * ``region_start``, ``region_end`` — region boundaries (1-based)
+
+        Coordinates and sequences are **not** modified here; call
+        :meth:`trim_reads` afterwards if clipping is required.
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            Input reads sorted by ``["chromosome", "read_start", "read_end"]``.
+        seq_column, methylation_pattern_column : str
+            Not used directly but forwarded by :meth:`prepare_reads`
+            conventions.
+
+        Returns
+        -------
+        pd.DataFrame
+            Annotated reads with ``name``, ``region_start``, ``region_end``.
+        """
+        atlas = self.atlas.sort_values(["chr", "start", "end"]).reset_index(drop=True)
+        n_records = len(df)
+
+        if n_records == 0 or len(atlas) == 0:
+            return df.iloc[0:0].copy()
+
+        # Build per-chromosome start pointer into the sorted reads DataFrame
+        chrom_start_idx: Dict[str, int] = {}
+        current_chrom = df.iloc[0]["chromosome"]
+        chrom_start_idx[current_chrom] = 0
+        for i in range(1, n_records):
+            chrom = df.iloc[i]["chromosome"]
+            if chrom != current_chrom:
+                chrom_start_idx[chrom] = i
+                current_chrom = chrom
+
+        chrom_base_pointer: Dict[str, int] = {}
+        row_indices: List[int] = []
+        names: List[str] = []
+        region_starts: List[int] = []
+        region_ends: List[int] = []
+
+        for _, region in atlas.iterrows():
+            chromosome = region["chr"]
+            start = region["start"] - 1  # 1-based → 0-based
+            end = region["end"]          # exclusive upper bound
+            name = region["name"]
+
+            if chromosome not in chrom_base_pointer:
+                chrom_base_pointer[chromosome] = chrom_start_idx.get(
+                    chromosome, n_records
+                )
+
+            base_ptr = chrom_base_pointer[chromosome]
+
+            # Advance past reads that can no longer overlap this or later regions
+            while base_ptr < n_records:
+                record = df.iloc[base_ptr]
+                if record["chromosome"] != chromosome:
+                    break
+                if record["read_end"] < start:
+                    base_ptr += 1
+                else:
+                    break
+
+            chrom_base_pointer[chromosome] = base_ptr
+
+            scan_ptr = base_ptr
+            while scan_ptr < n_records:
+                record = df.iloc[scan_ptr]
+                if record["chromosome"] != chromosome:
+                    break
+                if record["read_start"] >= end:
+                    break
+                if record["read_end"] >= start:
+                    row_indices.append(scan_ptr)
+                    names.append(name)
+                    region_starts.append(region["start"])
+                    region_ends.append(region["end"])
+                scan_ptr += 1
+
+        if not row_indices:
+            return df.iloc[0:0].copy()
+
+        overlapped = df.iloc[row_indices].copy().reset_index(drop=True)
+        overlapped["name"] = names
+        overlapped["region_start"] = region_starts
+        overlapped["region_end"] = region_ends
+        return overlapped
+
+    def trim_reads(self, df: pd.DataFrame, **kwargs) -> pd.DataFrame:
+        """Clip ``read_start`` and ``read_end`` to the overlapping region.
+
+        Operates row-wise on a DataFrame that has already been passed through
+        :meth:`overlap_reads` (so ``region_start`` and ``region_end`` are
+        present).  Coordinates only; sequences are left unchanged.
+
+        Subclasses may override to additionally clip sequence-level columns
+        (e.g. ``seq`` and ``pattern`` in :class:`UXMMethylationAtlas`).
+        """
+        df = df.copy()
+        region_start_0based = df["region_start"] - 1
+        df["read_start"] = df["read_start"].clip(lower=region_start_0based)
+        df["read_end"] = df["read_end"].clip(upper=df["region_end"] - 1)
+        return df
+
+    @abstractmethod
+    def prepare_reads(
+        self,
+        df: pd.DataFrame,
+        *,
+        trim: bool = True,
+        seq_column: str = "seq",
+        methylation_pattern_column: str = "pattern",
+        **kwargs,
+    ) -> pd.DataFrame:
+        """Prepare reads for atlas-based analysis.
+
+        Implementations must at minimum call :meth:`overlap_reads` to annotate
+        reads with atlas region identifiers, and optionally call
+        :meth:`trim_reads` (when ``trim=True``) before returning.
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            Input reads sorted by ``["chromosome", "read_start", "read_end"]``.
+        trim : bool
+            Whether to clip coordinates (and subclass-specific columns)
+            to region boundaries.  Default ``True``.
+        seq_column, methylation_pattern_column : str
+            Column names for sequence and methylation pattern.
+        **kwargs
+            Subclass-specific parameters.
+        """
+
+    # ------------------------------------------------------------------
+    # Validation helpers
+    # ------------------------------------------------------------------
 
     @classmethod
     def _check_atlas_format(cls, candidate_atlas: pd.DataFrame) -> None:
-        """
-        Check if the atlas DataFrame has the required format.
-        """
+        """Check if the atlas DataFrame has the required format."""
         cls._check_required_columns(candidate_atlas)
         cls._check_chromosomes(candidate_atlas)
 
@@ -83,11 +232,10 @@ class AbstractMethylationAtlas(AbstractAtlas):
     @property
     @abstractmethod
     def atlas(self) -> pd.DataFrame:
-        """
-        Return the atlas as a pandas DataFrame.
+        """Return the atlas as a pandas DataFrame.
 
-        In addition to the columns specified in the AbstractAtlas,
-        the methylation atlas DataFrame should also have the following columns:
+        In addition to the columns specified in AbstractAtlas, the methylation
+        atlas DataFrame should also have:
         - "startCpG": position of the first CpG site in the genomic region
         - "endCpG": position of the last CpG site in the genomic region
         """
