@@ -130,7 +130,11 @@ class AbstractAtlas(ABC):
                 scan_ptr += 1
 
         if not row_indices:
-            return df.iloc[0:0].copy()
+            empty = df.iloc[0:0].copy()
+            empty["name"] = pd.Series(dtype=str)
+            empty["region_start"] = pd.Series(dtype=int)
+            empty["region_end"] = pd.Series(dtype=int)
+            return empty
 
         overlapped = df.iloc[row_indices].copy().reset_index(drop=True)
         overlapped["name"] = names

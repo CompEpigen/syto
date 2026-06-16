@@ -1,12 +1,9 @@
-import tempfile
 import unittest
 
 import pandas as pd
 
-from syto.data.read_preparation import (
-    _trim_reads_by_atlas_overlap,
-    prepare_splits_for_pseudobulk,
-)
+from syto.data.atlases.abstract_atlas import AbstractAtlas
+from syto.data.read_preparation import prepare_splits_for_pseudobulk
 
 
 def _atlas_df():
@@ -23,20 +20,76 @@ def _atlas_df():
     )
 
 
-class TestTrimReadsByAtlasOverlap(unittest.TestCase):
-    """Tests for read_preparation._trim_reads_by_atlas_overlap."""
+class _MinimalAtlas(AbstractAtlas):
+    """Concrete atlas for testing: clips coordinates and sequence strings."""
+
+    def __init__(self, df):
+        self._df = df.sort_values(["chr", "start", "end"]).reset_index(drop=True)
+
+    @property
+    def reference_genome(self):
+        return "hg19"
+
+    @property
+    def atlas(self):
+        return self._df
+
+    def trim_reads(
+        self,
+        df,
+        seq_column="seq",
+        methylation_pattern_column="pattern",
+        **kwargs,
+    ):
+        orig_start = df["read_start"].copy()
+        df = super().trim_reads(df)
+        offsets = (df["read_start"] - orig_start).values
+        lengths = (df["read_end"] - df["read_start"] + 1).values
+        df[seq_column] = [
+            s[o : o + l] for s, o, l in zip(df[seq_column].tolist(), offsets, lengths)
+        ]
+        df[methylation_pattern_column] = [
+            s[o : o + l]
+            for s, o, l in zip(df[methylation_pattern_column].tolist(), offsets, lengths)
+        ]
+        return df
+
+    def prepare_reads(
+        self,
+        df,
+        *,
+        trim=True,
+        seq_column="seq",
+        methylation_pattern_column="pattern",
+        **kwargs,
+    ):
+        df = self.overlap_reads(
+            df,
+            seq_column=seq_column,
+            methylation_pattern_column=methylation_pattern_column,
+        )
+        if trim:
+            df = self.trim_reads(
+                df,
+                seq_column=seq_column,
+                methylation_pattern_column=methylation_pattern_column,
+            )
+        return df
+
+
+class TestAtlasOverlapAndTrim(unittest.TestCase):
+    """Tests for AbstractAtlas.overlap_reads + trim_reads."""
 
     def _trim(self, df):
-        atlas = (
-            _atlas_df()
-            .sort_values(by=["chr", "start", "end"])
-            .reset_index(drop=True)
-        )
+        atlas = _MinimalAtlas(_atlas_df())
         df_sorted = df.sort_values(
             by=["chromosome", "read_start", "read_end"]
         ).reset_index(drop=True)
-        return _trim_reads_by_atlas_overlap(
-            df_sorted, atlas, seq_column="seq", methylation_pattern_column="pattern"
+        overlapped = atlas.overlap_reads(
+            df_sorted, seq_column="seq", methylation_pattern_column="pattern"
+        )
+        return atlas.trim_reads(
+            overlapped, seq_column="seq", methylation_pattern_column="pattern"
         )
 
     def test_fully_contained_read_is_unchanged(self):
@@ -69,7 +122,7 @@ class TestTrimReadsByAtlasOverlap(unittest.TestCase):
                 "read_name": ["r_left"],
                 "read_start": [5],
                 "read_end": [20],
-                "seq": ["ABCDEFGHIJKLMNOP"],  # 16 chars, positions 5..20
+                "seq": ["ABCDEFGHIJKLMNOP"],  # 16 chars, positions 5..20 inclusive
                 "pattern": ["0123456789012345"],
             }
         )
@@ -80,8 +133,8 @@ class TestTrimReadsByAtlasOverlap(unittest.TestCase):
         row = res.iloc[0]
         self.assertEqual(row["read_start"], 10)
         self.assertEqual(row["read_end"], 19)
-        self.assertEqual(row["seq"], "FGHIJKLMNOP")
-        self.assertEqual(row["pattern"], "56789012345")
+        self.assertEqual(row["seq"], "FGHIJKLMNO")   # positions 10..19 = 10 chars
+        self.assertEqual(row["pattern"], "5678901234")
 
     def test_read_overlapping_two_regions_is_duplicated(self):
         """A read spanning two atlas regions produces one clipped row per region."""
@@ -91,7 +144,7 @@ class TestTrimReadsByAtlasOverlap(unittest.TestCase):
                 "read_name": ["r_multi"],
                 "read_start": [15],
                 "read_end": [25],
-                "seq": ["ABCDEFGHIJK"],  # 11 chars, positions 15..25
+                "seq": ["ABCDEFGHIJK"],  # 11 chars, positions 15..25 inclusive
                 "pattern": ["01234567890"],
                 "original_label": [3],
             }
@@ -105,12 +158,12 @@ class TestTrimReadsByAtlasOverlap(unittest.TestCase):
 
         region1 = res[res["read_start"] == 15].iloc[0]
         self.assertEqual(region1["read_end"], 19)
-        self.assertEqual(region1["seq"], "ABCDEF")
-        self.assertEqual(region1["pattern"], "012345")
+        self.assertEqual(region1["seq"], "ABCDE")    # positions 15..19 = 5 chars
+        self.assertEqual(region1["pattern"], "01234")
 
         region2 = res[res["read_start"] == 21].iloc[0]
         self.assertEqual(region2["read_end"], 25)
-        self.assertEqual(region2["seq"], "GHIJK")
+        self.assertEqual(region2["seq"], "GHIJK")    # positions 21..25 = 5 chars
         self.assertEqual(region2["pattern"], "67890")
 
     def test_reads_without_any_overlap_are_dropped(self):
@@ -134,12 +187,8 @@ class TestTrimReadsByAtlasOverlap(unittest.TestCase):
 class TestPrepareSplitsForPseudobulk(unittest.TestCase):
     """Tests for prepare_splits_for_pseudobulk."""
 
-    def _write_atlas(self):
-        f = tempfile.NamedTemporaryFile(
-            mode="w", suffix=".tsv", delete=False, newline=""
-        )
-        _atlas_df().to_csv(f.name, sep="\t", index=False)
-        return f.name
+    def _atlas(self):
+        return _MinimalAtlas(_atlas_df())
 
     def _splits(self):
         return {
@@ -157,30 +206,25 @@ class TestPrepareSplitsForPseudobulk(unittest.TestCase):
             )
         }
 
-    def test_atlas_path_required_when_trimming_enabled(self):
-        """trim_by_atlas_regions_overlap=True (the default) requires atlas_path."""
+    def test_atlas_required_when_trimming_enabled(self):
+        """trim=True (default) requires an atlas."""
         with self.assertRaises(ValueError):
             prepare_splits_for_pseudobulk(self._splits())
 
     def test_trimming_disabled_keeps_all_reads_untouched(self):
-        """trim_by_atlas_regions_overlap=False skips atlas trimming entirely."""
-        result = prepare_splits_for_pseudobulk(
-            self._splits(), trim_by_atlas_regions_overlap=False
-        )
+        """trim=False skips atlas overlap entirely."""
+        result = prepare_splits_for_pseudobulk(self._splits(), trim=False)
 
         df = result["train"]
         self.assertEqual(len(df), 3)
         self.assertEqual(set(df["read_name"]), {"r_contained", "r_left", "r_dropped"})
-        # Derived columns are still added.
         self.assertIn("is_cell_informative_region", df.columns)
         self.assertIn("chromosome", df.columns)
         self.assertEqual(df.loc[df["read_name"] == "r_left", "read_start"].iloc[0], 5)
 
     def test_trimming_enabled_clips_and_drops_reads(self):
-        """trim_by_atlas_regions_overlap=True clips reads to atlas regions and drops non-overlapping ones."""
-        atlas_path = self._write_atlas()
-
-        result = prepare_splits_for_pseudobulk(self._splits(), atlas_path=atlas_path)
+        """trim=True clips reads to atlas regions and drops non-overlapping ones."""
+        result = prepare_splits_for_pseudobulk(self._splits(), atlas=self._atlas())
 
         df = result["train"]
         self.assertEqual(set(df["read_name"]), {"r_contained", "r_left"})
@@ -188,7 +232,7 @@ class TestPrepareSplitsForPseudobulk(unittest.TestCase):
         left = df[df["read_name"] == "r_left"].iloc[0]
         self.assertEqual(left["read_start"], 10)
         self.assertEqual(left["read_end"], 19)
-        self.assertEqual(left["seq"], "FGHIJKLMNOP")
+        self.assertEqual(left["seq"], "FGHIJKLMNO")   # positions 10..19
 
         contained = df[df["read_name"] == "r_contained"].iloc[0]
         self.assertEqual(contained["read_start"], 12)
