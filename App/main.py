@@ -71,6 +71,12 @@ def validate_config(config: Dict[str, Any], task: str) -> None:
             "calibration_results_dir",
             "labels_dict_path",
         ],
+        "deconvolute_pseudobulk": [
+            "pseudobulk_h5_path",
+            "output_dir",
+            "labels_dict_path",
+            "model",
+        ],
     }
 
     if task not in required_fields:
@@ -87,6 +93,7 @@ def validate_config(config: Dict[str, Any], task: str) -> None:
         "fit_deconvolution",
         "fit_calibration",
         "confidence_intervals",
+        "deconvolute_pseudobulk",
     ):
         if task in ("classifier_fit", "pretrain"):
             model = config["model"]["architecture"].lower()
@@ -184,6 +191,15 @@ def run_calibration_fitting(config: Dict[str, Any], logger: logging.Logger) -> N
     pipeline.run()
 
 
+def run_pseudobulk_deconvolution(config: Dict[str, Any], logger: logging.Logger) -> None:
+    """Run baseline deconvolution on a pre-generated pseudobulk HDF5 file."""
+    from App.pseudobulk_deconvolution_pipeline import PseudobulkDeconvolutionPipeline
+
+    logger.info("Starting pseudobulk deconvolution pipeline (model: %s)", config["model"])
+    pipeline = PseudobulkDeconvolutionPipeline(config=config, logger=logger)
+    pipeline.run()
+
+
 def run_confidence_intervals(config: Dict[str, Any], logger: logging.Logger) -> None:
     """Recompute metrics with bootstrap confidence intervals."""
     from conf_interval_pipeline import ConfidenceIntervalPipeline
@@ -223,6 +239,7 @@ Examples:
             "fit_deconvolution",
             "fit_calibration",
             "confidence_intervals",
+            "deconvolute_pseudobulk",
         ],
         required=True,
         help="Task to perform",
@@ -376,6 +393,8 @@ Examples:
             run_calibration_fitting(config, logger)
         elif args.task == "confidence_intervals":
             run_confidence_intervals(config, logger)
+        elif args.task == "deconvolute_pseudobulk":
+            run_pseudobulk_deconvolution(config, logger)
 
         logger.info("Task completed successfully")
         return 0
