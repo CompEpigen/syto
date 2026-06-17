@@ -188,77 +188,115 @@ class CelfieISHMethylationAtlas(AbstractAtlas):
             "  ".join(f"{ct}={n:,}" for ct, n in reads_per_ctype.items()),
         )
 
-        # ---- Extract per-CpG observations --------------------------------
-        # Sort by (chromosome, name) so the downstream groupby is nearly free
-        # and iteration has good cache locality.
-        reads = reads.sort_values(["chromosome", "name"]).reset_index(drop=True)
+        # ---- Group-first aggregation -------------------------------------
+        # Key insight: building a 40M-row intermediate DataFrame and running
+        # groupby on it causes the hang (memory + time).  Instead, sort reads
+        # by (chromosome, name, cell_type) so the pandas groupby is a free
+        # label-split of a sorted array, then aggregate each small group
+        # in-place with np.bincount — a vectorised O(k) operation.
+        # The large intermediate DataFrame is never materialised.
+        #
+        # Two extraction paths:
+        #   cpg_sig  — pre-computed [(abs_pos, meth_state), …] per read,
+        #              already present in the pipeline output; fastest path.
+        #   pattern  — base-level string scan via numpy ASCII comparison;
+        #              fallback when cpg_sig is absent.
 
-        # Pull columns out as plain Python lists once — avoids creating a
-        # pandas Series per row (iterrows overhead) and a DataFrame per read
-        # (pd.concat of many tiny frames is O(n²) in allocation).
-        patterns   = reads["pattern"].tolist()
-        read_starts = reads["read_start"].tolist()
-        chroms     = reads["chromosome"].tolist()
-        names      = reads["name"].tolist()
-        cell_types = reads["cell_type"].tolist()
+        use_cpg_sig = "cpg_sig" in reads.columns
+        if use_cpg_sig:
+            _module_logger.info(
+                "Using pre-computed 'cpg_sig' column — skipping pattern scan."
+            )
+        else:
+            _module_logger.info(
+                "No 'cpg_sig' column found; scanning 'pattern' strings "
+                "(ASCII '0'=unmethylated, '1'=methylated)."
+            )
 
-        # ASCII codes: '0'=48 (unmethylated CpG), '1'=49 (methylated CpG).
+        reads = reads.sort_values(
+            ["chromosome", "name", "cell_type"]
+        ).reset_index(drop=True)
+
+        groups = list(reads.groupby(["chromosome", "name", "cell_type"], sort=False))
+        _module_logger.info(
+            "Processing %d (region × cell-type) group(s) …", len(groups)
+        )
+
         out_chroms: list = []
         out_starts: list = []
         out_names:  list = []
         out_cts:    list = []
         out_meths:  list = []
+        out_covs:   list = []
 
-        _module_logger.info("Scanning reads for CpG observations …")
-        for pattern, rs, chrom, name, ct in tqdm(
-            zip(patterns, read_starts, chroms, names, cell_types),
-            total=len(reads),
-            desc="Extracting CpG observations",
-            unit="read",
+        for (chrom, name, ct), group in tqdm(
+            groups,
+            desc="Aggregating groups",
+            unit="group",
         ):
-            arr = np.frombuffer(pattern.encode("ascii"), dtype=np.uint8)
-            cpg_mask = (arr == 48) | (arr == 49)
-            offsets = np.where(cpg_mask)[0]
-            if offsets.size == 0:
-                continue
-            n = offsets.size
-            positions = int(rs) + offsets
+            # -- Extract raw (positions, methylation) arrays for this group --
+            if use_cpg_sig:
+                pair_arrays = []
+                for sig in group["cpg_sig"]:
+                    if sig is not None and len(sig) > 0:
+                        pair_arrays.append(np.asarray(sig.tolist(), dtype=np.int64))
+                if not pair_arrays:
+                    continue
+                all_pairs = np.vstack(pair_arrays)   # (total_obs, 2)
+                positions = all_pairs[:, 0]
+                meths     = all_pairs[:, 1].astype(np.int32)
+            else:
+                pos_list:  list = []
+                meth_list: list = []
+                for pattern, rs in zip(
+                    group["pattern"].tolist(), group["read_start"].tolist()
+                ):
+                    arr = np.frombuffer(pattern.encode("ascii"), dtype=np.uint8)
+                    cpg_mask = (arr == 48) | (arr == 49)
+                    offsets = np.where(cpg_mask)[0]
+                    if offsets.size == 0:
+                        continue
+                    pos_list.append(int(rs) + offsets)
+                    meth_list.append((arr[cpg_mask] == 49).astype(np.int32))
+                if not pos_list:
+                    continue
+                positions = np.concatenate(pos_list)
+                meths     = np.concatenate(meth_list)
+
+            # -- Vectorised aggregation: np.unique + np.bincount -----------
+            # np.unique returns sorted unique positions and an inverse index;
+            # np.bincount accumulates meth and coverage counts in one pass.
+            unique_pos, inv = np.unique(positions, return_inverse=True)
+            n = len(unique_pos)
+            meth_counts = np.bincount(
+                inv, weights=meths.astype(float), minlength=n
+            ).astype(np.int32)
+            cov_counts = np.bincount(inv, minlength=n).astype(np.int32)
+
             out_chroms.extend([chrom] * n)
-            out_starts.append(positions)
+            out_starts.append(unique_pos)
             out_names.extend([name] * n)
             out_cts.extend([ct] * n)
-            out_meths.append((arr[cpg_mask] == 49).astype(np.int32))
+            out_meths.append(meth_counts)
+            out_covs.append(cov_counts)
 
         if not out_starts:
             raise ValueError("No CpG observations found in reads.")
 
         starts_cat = np.concatenate(out_starts)
-        long_df = pd.DataFrame(
+        agg = pd.DataFrame(
             {
                 "CHROM":     out_chroms,
                 "START":     starts_cat,
                 "END":       starts_cat + 1,
                 "name":      out_names,
                 "cell_type": out_cts,
-                "meth":      np.concatenate(out_meths),
+                "METH":      np.concatenate(out_meths),
+                "COV":       np.concatenate(out_covs),
             }
         )
-        _module_logger.info(
-            "Extracted %s CpG observations across %s unique positions.",
-            f"{len(long_df):,}",
-            f"{long_df[['CHROM', 'START']].drop_duplicates().shape[0]:,}",
-        )
 
-        # ---- Aggregate METH / COV per (CHROM, START, END, name, cell_type)
-        _module_logger.info("Aggregating methylation counts …")
-        agg = (
-            long_df.groupby(
-                ["CHROM", "START", "END", "name", "cell_type"], sort=True
-            )
-            .agg(METH=("meth", "sum"), COV=("meth", "count"))
-            .reset_index()
-        )
-        n_regions = agg["name"].nunique()
+        n_regions   = agg["name"].nunique()
         n_cpg_total = agg[["CHROM", "START"]].drop_duplicates().shape[0]
         _module_logger.info(
             "Aggregated: %d region(s) · %s CpG site(s) · mean coverage %.1f×",
