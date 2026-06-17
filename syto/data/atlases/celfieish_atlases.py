@@ -147,21 +147,34 @@ class CelfieISHMethylationAtlas(AbstractAtlas):
         -------
         CelfieISHMethylationAtlas
         """
+        from tqdm import tqdm
+
         required = {"pattern", "read_start", "chromosome", "name", "original_label"}
         missing = required - set(reads.columns)
         if missing:
             raise ValueError(f"reads DataFrame is missing required columns: {missing}")
 
+        # ---- Label resolution --------------------------------------------
         # Normalise labels_dict keys to int for lookup against original_label.
         int_labels: Dict[int, str] = {int(k): v for k, v in labels_dict.items()}
+        cell_type_names = list(dict.fromkeys(int_labels.values()))
+
+        _module_logger.info(
+            "Building atlas '%s' from %d reads · %d cell type(s): %s",
+            atlas_name,
+            len(reads),
+            len(cell_type_names),
+            ", ".join(cell_type_names),
+        )
 
         reads = reads.copy()
         reads["cell_type"] = reads["original_label"].map(int_labels)
         unmapped = reads["cell_type"].isna()
         if unmapped.any():
             _module_logger.warning(
-                "Dropping %d reads with labels not found in labels_dict: %s",
+                "Dropping %d / %d reads with labels not in labels_dict: %s",
                 int(unmapped.sum()),
+                len(reads),
                 reads.loc[unmapped, "original_label"].unique().tolist(),
             )
             reads = reads[~unmapped].copy()
@@ -169,36 +182,75 @@ class CelfieISHMethylationAtlas(AbstractAtlas):
         if reads.empty:
             raise ValueError("No reads remain after label mapping.")
 
-        # ---- Extract per-CpG observations --------------------------------
-        # For each read, numpy vectorises the inner scan over the pattern
-        # string: ASCII '0'=48 (unmethylated), '1'=49 (methylated).
+        reads_per_ctype = reads.groupby("cell_type").size().to_dict()
+        _module_logger.info(
+            "Reads per cell type: %s",
+            "  ".join(f"{ct}={n:,}" for ct, n in reads_per_ctype.items()),
+        )
 
-        def _extract(row) -> Optional[pd.DataFrame]:
-            arr = np.frombuffer(row["pattern"].encode("ascii"), dtype=np.uint8)
+        # ---- Extract per-CpG observations --------------------------------
+        # Sort by (chromosome, name) so the downstream groupby is nearly free
+        # and iteration has good cache locality.
+        reads = reads.sort_values(["chromosome", "name"]).reset_index(drop=True)
+
+        # Pull columns out as plain Python lists once — avoids creating a
+        # pandas Series per row (iterrows overhead) and a DataFrame per read
+        # (pd.concat of many tiny frames is O(n²) in allocation).
+        patterns   = reads["pattern"].tolist()
+        read_starts = reads["read_start"].tolist()
+        chroms     = reads["chromosome"].tolist()
+        names      = reads["name"].tolist()
+        cell_types = reads["cell_type"].tolist()
+
+        # ASCII codes: '0'=48 (unmethylated CpG), '1'=49 (methylated CpG).
+        out_chroms: list = []
+        out_starts: list = []
+        out_names:  list = []
+        out_cts:    list = []
+        out_meths:  list = []
+
+        _module_logger.info("Scanning reads for CpG observations …")
+        for pattern, rs, chrom, name, ct in tqdm(
+            zip(patterns, read_starts, chroms, names, cell_types),
+            total=len(reads),
+            desc="Extracting CpG observations",
+            unit="read",
+        ):
+            arr = np.frombuffer(pattern.encode("ascii"), dtype=np.uint8)
             cpg_mask = (arr == 48) | (arr == 49)
             offsets = np.where(cpg_mask)[0]
             if offsets.size == 0:
-                return None
-            positions = int(row["read_start"]) + offsets
-            return pd.DataFrame(
-                {
-                    "CHROM": row["chromosome"],
-                    "START": positions,
-                    "END": positions + 1,
-                    "name": row["name"],
-                    "cell_type": row["cell_type"],
-                    "meth": (arr[cpg_mask] == 49).astype(np.int32),
-                }
-            )
+                continue
+            n = offsets.size
+            positions = int(rs) + offsets
+            out_chroms.extend([chrom] * n)
+            out_starts.append(positions)
+            out_names.extend([name] * n)
+            out_cts.extend([ct] * n)
+            out_meths.append((arr[cpg_mask] == 49).astype(np.int32))
 
-        chunks = [_extract(row) for _, row in reads.iterrows()]
-        chunks = [c for c in chunks if c is not None]
-        if not chunks:
+        if not out_starts:
             raise ValueError("No CpG observations found in reads.")
 
-        long_df = pd.concat(chunks, ignore_index=True)
+        starts_cat = np.concatenate(out_starts)
+        long_df = pd.DataFrame(
+            {
+                "CHROM":     out_chroms,
+                "START":     starts_cat,
+                "END":       starts_cat + 1,
+                "name":      out_names,
+                "cell_type": out_cts,
+                "meth":      np.concatenate(out_meths),
+            }
+        )
+        _module_logger.info(
+            "Extracted %s CpG observations across %s unique positions.",
+            f"{len(long_df):,}",
+            f"{long_df[['CHROM', 'START']].drop_duplicates().shape[0]:,}",
+        )
 
         # ---- Aggregate METH / COV per (CHROM, START, END, name, cell_type)
+        _module_logger.info("Aggregating methylation counts …")
         agg = (
             long_df.groupby(
                 ["CHROM", "START", "END", "name", "cell_type"], sort=True
@@ -206,12 +258,26 @@ class CelfieISHMethylationAtlas(AbstractAtlas):
             .agg(METH=("meth", "sum"), COV=("meth", "count"))
             .reset_index()
         )
+        n_regions = agg["name"].nunique()
+        n_cpg_total = agg[["CHROM", "START"]].drop_duplicates().shape[0]
+        _module_logger.info(
+            "Aggregated: %d region(s) · %s CpG site(s) · mean coverage %.1f×",
+            n_regions,
+            f"{n_cpg_total:,}",
+            agg["COV"].mean(),
+        )
 
         # ---- Pivot to wide format ----------------------------------------
         # Cell types ordered as they appear in labels_dict for stable output.
-        label_order = list(dict.fromkeys(int_labels.values()))
-        cell_types = [ct for ct in label_order if ct in agg["cell_type"].unique()]
+        cell_types = [ct for ct in cell_type_names if ct in agg["cell_type"].unique()]
+        missing_ct = set(cell_type_names) - set(cell_types)
+        if missing_ct:
+            _module_logger.warning(
+                "No reads found for cell type(s): %s — excluded from atlas.",
+                ", ".join(sorted(missing_ct)),
+            )
 
+        _module_logger.info("Pivoting to wide format (%d cell type(s)) …", len(cell_types))
         index_cols = ["CHROM", "START", "END", "name"]
 
         meth_wide = (
@@ -242,13 +308,22 @@ class CelfieISHMethylationAtlas(AbstractAtlas):
         ordered_cols = index_cols + [
             col for ct in cell_types for col in (f"{ct}_METH", f"{ct}_COV")
         ]
-        atlas_df = atlas_df[ordered_cols].sort_values(
-            ["CHROM", "START"]
-        ).reset_index(drop=True)
+        atlas_df = (
+            atlas_df[ordered_cols]
+            .sort_values(["CHROM", "START"])
+            .reset_index(drop=True)
+        )
+
+        _module_logger.info(
+            "Atlas ready: %d row(s) × %d column(s).",
+            len(atlas_df),
+            len(atlas_df.columns),
+        )
 
         if output_path is not None:
+            _module_logger.info("Saving atlas to %s …", output_path)
             atlas_df.to_csv(output_path, sep=sep, index=False)
-            _module_logger.info("Atlas saved to %s", output_path)
+            _module_logger.info("Saved.")
 
         return cls(
             atlas_name=atlas_name,
