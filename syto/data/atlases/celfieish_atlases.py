@@ -1,18 +1,18 @@
 """ """
 
 import logging
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
 
-from syto.data.atlases.abstract_atlas import AbstractAtlas
+from syto.data.atlases.abstract_atlas import AbstractMethylationAtlas
 
 _module_logger = logging.getLogger(__name__)
 
 
-class CelfieISHMethylationAtlas(AbstractAtlas):
-    """Methylation atlas for CelFiE-ISH deconvolution.
+class CpGBetaCountsMethylationAtlas(AbstractMethylationAtlas):
+    """Per-CpG methylation atlas storing both beta values and raw counts.
 
     Loads a tab-separated meth/cov file where each row is one CpG site:
 
@@ -26,10 +26,13 @@ class CelfieISHMethylationAtlas(AbstractAtlas):
     * derives region boundaries (``chr``, ``start``, ``end``) for
       :meth:`overlap_reads` by grouping on ``name``;
     * builds a per-region CpG position lookup ``{START → column_index}``
-      used by :func:`build_celfieish_input` to align reads to the matrix;
-    * computes beta matrices ``ndarray(T, n_CpGs)`` as ``METH / COV``
-      (NaN where coverage is zero; pseudocounts are applied by
-      :class:`CelfieISH` at runtime).
+      used by :func:`build_celfieish_input` and :func:`build_celfie_input`;
+    * stores beta matrices ``ndarray(T, n_CpGs)`` as ``METH / COV``
+      (NaN where coverage is zero) for CelFiE-ISH;
+    * stores raw ``METH`` and ``COV`` count matrices for CelFiE.
+
+    Overlap, trimming, and base read preparation are inherited from
+    :class:`AbstractMethylationAtlas`.
     """
 
     # Does not include 'target' — added to the raw TSV in a future pass.
@@ -74,10 +77,12 @@ class CelfieISHMethylationAtlas(AbstractAtlas):
             region_df.sort_values(["chr", "start", "end"]).reset_index(drop=True)
         )
 
-        # Per-region CpG lookups and beta matrices.
+        # Per-region CpG lookups, beta matrices, and raw count matrices.
         self._cpg_lookup: Dict[str, Dict[int, int]] = {}
         self._n_cpgs: Dict[str, int] = {}
         self._beta_matrices: Dict[str, np.ndarray] = {}
+        self._meth_matrices: Dict[str, np.ndarray] = {}
+        self._cov_matrices:  Dict[str, np.ndarray] = {}
 
         T = len(self._cell_types)
         for region_name, group in raw.groupby("name", sort=False):
@@ -88,12 +93,18 @@ class CelfieISHMethylationAtlas(AbstractAtlas):
             self._cpg_lookup[region_name] = {pos: idx for idx, pos in enumerate(positions)}
             self._n_cpgs[region_name] = n_cpgs
 
-            beta = np.full((T, n_cpgs), np.nan)
+            meth_mat = np.full((T, n_cpgs), np.nan)
+            cov_mat  = np.full((T, n_cpgs), np.nan)
+            beta     = np.full((T, n_cpgs), np.nan)
             for t, cell_type in enumerate(self._cell_types):
                 meth = group_sorted[f"{cell_type}_METH"].values.astype(float)
-                cov = group_sorted[f"{cell_type}_COV"].values.astype(float)
+                cov  = group_sorted[f"{cell_type}_COV"].values.astype(float)
+                meth_mat[t, :] = meth
+                cov_mat[t, :]  = cov
                 with np.errstate(invalid="ignore", divide="ignore"):
                     beta[t, :] = np.where(cov > 0, meth / cov, np.nan)
+            self._meth_matrices[region_name] = meth_mat
+            self._cov_matrices[region_name]  = cov_mat
             self._beta_matrices[region_name] = beta
 
         super().__init__()
@@ -114,7 +125,7 @@ class CelfieISHMethylationAtlas(AbstractAtlas):
         labels_dict: Dict[Union[int, str], str],
         output_path: Optional[str] = None,
         sep: str = "\t",
-    ) -> "CelfieISHMethylationAtlas":
+    ) -> "CpGBetaCountsMethylationAtlas":
         """Build a CelFiE-ISH atlas by aggregating methylation counts from reads.
 
         For every CpG position covered by a read, records one (methylated /
@@ -145,7 +156,7 @@ class CelfieISHMethylationAtlas(AbstractAtlas):
 
         Returns
         -------
-        CelfieISHMethylationAtlas
+        CpGBetaCountsMethylationAtlas
         """
         from tqdm import tqdm
 
@@ -429,12 +440,7 @@ class CelfieISHMethylationAtlas(AbstractAtlas):
         return self._n_cpgs[region_name]
 
     def get_beta_for_regions(self, region_names: List[str]) -> List[np.ndarray]:
-        """Return beta matrices in the requested order.
-
-        Parameters
-        ----------
-        region_names : list of str
-            Must match the ``region_names`` key from :func:`build_celfieish_input`.
+        """Return beta (METH/COV) matrices in the requested order.
 
         Returns
         -------
@@ -442,85 +448,20 @@ class CelfieISHMethylationAtlas(AbstractAtlas):
         """
         return [self._beta_matrices[name] for name in region_names]
 
-    # ------------------------------------------------------------------
-    # Reads preparation
-    # ------------------------------------------------------------------
+    def get_meth_cov_for_regions(
+        self, region_names: List[str]
+    ) -> Tuple[List[np.ndarray], List[np.ndarray]]:
+        """Return raw methylated-count and coverage matrices in the requested order.
 
-    def trim_reads(
-        self,
-        df: pd.DataFrame,
-        seq_column: str = "seq",
-        methylation_pattern_column: str = "pattern",
-        **kwargs,
-    ) -> pd.DataFrame:
-        """Clip coordinates and re-slice ``pattern`` / ``seq`` to the region.
+        Used by CelFiE, which needs raw counts rather than pre-computed beta
+        values because its M-step jointly re-estimates gamma from counts.
 
-        Mirrors :meth:`UXMMethylationAtlas.trim_reads`: the base class clips
-        ``read_start`` and ``read_end`` to region boundaries; this override
-        additionally slices the string columns to match.
+        Returns
+        -------
+        meth_list : list of ndarray(T, n_CpGs)  — raw methylated counts
+        cov_list  : list of ndarray(T, n_CpGs)  — raw coverage counts
         """
-        orig_start = df["read_start"].copy()
-        df = super().trim_reads(df, **kwargs)
-
-        offsets = (df["read_start"] - orig_start).values
-        lengths = (df["read_end"] - df["read_start"] + 1).values
-
-        df[seq_column] = [
-            s[o: o + l]
-            for s, o, l in zip(df[seq_column].tolist(), offsets, lengths)
-        ]
-        df[methylation_pattern_column] = [
-            s[o: o + l]
-            for s, o, l in zip(
-                df[methylation_pattern_column].tolist(), offsets, lengths
-            )
-        ]
-        return df
-
-    def prepare_reads(
-        self,
-        df: pd.DataFrame,
-        *,
-        trim: bool = True,
-        seq_column: str = "seq",
-        methylation_pattern_column: str = "pattern",
-        labels_dict: Optional[Dict] = None,
-        cell_type_match_dict: Optional[Dict[str, str]] = None,
-    ) -> pd.DataFrame:
-        """Overlap reads with atlas regions and optionally trim to boundaries.
-
-        Steps:
-
-        1. :meth:`overlap_reads` — annotate reads with ``name``,
-           ``region_start``, ``region_end``.
-        2. :meth:`trim_reads` *(if trim=True)* — clip ``read_start``,
-           ``read_end``, ``seq_column``, and ``methylation_pattern_column``
-           to region boundaries.
-        3. DMR label annotation *(placeholder — requires* ``target`` *column,
-           added in a future atlas version)*.
-
-        Parameters
-        ----------
-        df : pd.DataFrame
-            Input reads sorted by ``["chromosome", "read_start", "read_end"]``.
-        trim : bool
-        seq_column, methylation_pattern_column : str
-        labels_dict : dict, optional
-            Reserved for future DMR label annotation.
-        cell_type_match_dict : dict, optional
-            Reserved for future DMR label annotation.
-        """
-        df = self.overlap_reads(
-            df,
-            seq_column=seq_column,
-            methylation_pattern_column=methylation_pattern_column,
+        return (
+            [self._meth_matrices[name] for name in region_names],
+            [self._cov_matrices[name]  for name in region_names],
         )
-
-        if trim:
-            df = self.trim_reads(
-                df,
-                seq_column=seq_column,
-                methylation_pattern_column=methylation_pattern_column,
-            )
-
-        return df

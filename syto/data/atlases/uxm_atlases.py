@@ -10,7 +10,9 @@ from syto.data.atlases.abstract_atlas import AbstractMethylationAtlas
 class UXMMethylationAtlas(AbstractMethylationAtlas):
     """Methylation atlases of the UXM paper."""
 
-    REQUIRED_COLUMNS = AbstractMethylationAtlas.REQUIRED_COLUMNS.union({"direction"})
+    REQUIRED_COLUMNS = AbstractMethylationAtlas.REQUIRED_COLUMNS.union(
+        {"startCpG", "endCpG", "direction"}
+    )
     VALID_DIRECTIONS = {"U", "M"}
     EXPECTED_CTYPE_COLUMNS = [
         "Adipocytes",
@@ -140,40 +142,6 @@ class UXMMethylationAtlas(AbstractMethylationAtlas):
     # Reads preparation
     # ------------------------------------------------------------------
 
-    def trim_reads(
-        self,
-        df: pd.DataFrame,
-        seq_column: str = "seq",
-        methylation_pattern_column: str = "pattern",
-        **kwargs,
-    ) -> pd.DataFrame:
-        """Clip coordinates **and** re-slice ``seq`` / ``pattern`` to the region.
-
-        Extends the base-class coordinate clipping with UXM-specific
-        sequence trimming: the methylation pattern and DNA sequence strings
-        are sliced to match the trimmed genomic span.
-
-        Expects ``df`` to already carry ``region_start`` and ``region_end``
-        columns (i.e. :meth:`overlap_reads` must have been called first).
-        """
-        orig_start = df["read_start"].copy()
-        df = super().trim_reads(df, **kwargs)   # clips read_start, read_end
-
-        offsets = (df["read_start"] - orig_start).values
-        lengths = (df["read_end"] - df["read_start"] + 1).values
-
-        df[seq_column] = [
-            s[o : o + l]
-            for s, o, l in zip(df[seq_column].tolist(), offsets, lengths)
-        ]
-        df[methylation_pattern_column] = [
-            s[o : o + l]
-            for s, o, l in zip(
-                df[methylation_pattern_column].tolist(), offsets, lengths
-            )
-        ]
-        return df
-
     def prepare_reads(
         self,
         df: pd.DataFrame,
@@ -184,21 +152,14 @@ class UXMMethylationAtlas(AbstractMethylationAtlas):
         labels_dict: Optional[Dict] = None,
         cell_type_match_dict: Optional[Dict[str, str]] = None,
     ) -> pd.DataFrame:
-        """Overlap reads with atlas regions and optionally trim to region boundaries.
+        """Overlap, trim, and optionally annotate reads with DMR labels.
 
-        Steps (in order):
-
-        1. :meth:`overlap_reads` — annotate each read with the atlas region
-           it overlaps (adds ``name``, ``region_start``, ``region_end``).
-        2. :meth:`trim_reads` *(if trim=True)* — clip ``read_start``,
-           ``read_end``, ``seq_column``, and ``methylation_pattern_column``
-           to the region boundaries.
-        3. DMR label annotation *(if labels_dict is provided)* — adds
-           ``dmr_ctype``, ``dmr_ctype_matched``, ``dmr_ctype_label``.
+        Delegates overlap and trimming to
+        :meth:`AbstractMethylationAtlas.prepare_reads`, then applies DMR
+        label annotation when ``labels_dict`` is provided.
 
         Note: M/U/X methylation state scoring (``mark_records_methyl_state``)
-        is UXM-algorithm-specific and must be applied separately by the caller
-        when UXM deconvolution is intended.
+        is UXM-algorithm-specific and must be applied separately by the caller.
 
         Parameters
         ----------
@@ -209,27 +170,19 @@ class UXMMethylationAtlas(AbstractMethylationAtlas):
         seq_column, methylation_pattern_column : str
             Column names for DNA sequence and CpG methylation pattern.
         labels_dict : dict, optional
-            Mapping ``label_id → cell_type_name``.  When provided, step 3
-            is executed.
+            ``label_id → cell_type_name``.  When provided, adds
+            ``dmr_ctype``, ``dmr_ctype_matched``, ``dmr_ctype_label``.
         cell_type_match_dict : dict, optional
             Atlas cell-type name → project cell-type name alias mapping.
         """
-        df = self.overlap_reads(
+        df = super().prepare_reads(
             df,
+            trim=trim,
             seq_column=seq_column,
             methylation_pattern_column=methylation_pattern_column,
         )
-
-        if trim:
-            df = self.trim_reads(
-                df,
-                seq_column=seq_column,
-                methylation_pattern_column=methylation_pattern_column,
-            )
-
         if labels_dict is not None:
             df = self._annotate_dmr_labels(df, labels_dict, cell_type_match_dict or {})
-
         return df
 
     def _annotate_dmr_labels(

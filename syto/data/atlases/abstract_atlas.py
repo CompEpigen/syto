@@ -227,19 +227,107 @@ class AbstractAtlas(ABC):
 
 
 class AbstractMethylationAtlas(AbstractAtlas):
-    """
-    Abstract base class for methylation atlases
-    """
+    """Abstract base class for per-CpG methylation atlases.
 
-    REQUIRED_COLUMNS = AbstractAtlas.REQUIRED_COLUMNS.union({"startCpG", "endCpG"})
+    Provides concrete implementations of :meth:`trim_reads` (coordinate +
+    string slicing) and :meth:`prepare_reads` (overlap → trim) that are
+    shared by all methylation atlas subclasses.  Subclasses that need DMR
+    label annotation (e.g. :class:`UXMMethylationAtlas`) wrap
+    ``super().prepare_reads()`` rather than re-implementing the core logic.
+
+    ``REQUIRED_COLUMNS`` intentionally stays the same as
+    :class:`AbstractAtlas` — subclasses add their own structural requirements
+    (e.g. ``startCpG``/``endCpG`` for UXM, or just ``name`` for CpG-count
+    atlases).
+    """
 
     @property
     @abstractmethod
     def atlas(self) -> pd.DataFrame:
-        """Return the atlas as a pandas DataFrame.
+        """Return the atlas as a pandas DataFrame."""
 
-        In addition to the columns specified in AbstractAtlas, the methylation
-        atlas DataFrame should also have:
-        - "startCpG": position of the first CpG site in the genomic region
-        - "endCpG": position of the last CpG site in the genomic region
+    # ------------------------------------------------------------------
+    # Shared reads-preparation logic
+    # ------------------------------------------------------------------
+
+    def trim_reads(
+        self,
+        df: pd.DataFrame,
+        seq_column: str = "seq",
+        methylation_pattern_column: str = "pattern",
+        **kwargs,
+    ) -> pd.DataFrame:
+        """Clip coordinates **and** re-slice ``seq`` / ``pattern`` to the region.
+
+        Extends the base-class coordinate clipping with methylation-atlas
+        specific string trimming: the methylation pattern and DNA sequence
+        strings are sliced to match the trimmed genomic span.
+
+        Expects ``df`` to carry ``region_start`` and ``region_end`` columns
+        (i.e. :meth:`overlap_reads` must have been called first).
         """
+        orig_start = df["read_start"].copy()
+        df = super().trim_reads(df, **kwargs)   # clips read_start, read_end
+
+        offsets = (df["read_start"] - orig_start).values
+        lengths = (df["read_end"] - df["read_start"] + 1).values
+
+        df[seq_column] = [
+            s[o: o + l]
+            for s, o, l in zip(df[seq_column].tolist(), offsets, lengths)
+        ]
+        df[methylation_pattern_column] = [
+            s[o: o + l]
+            for s, o, l in zip(
+                df[methylation_pattern_column].tolist(), offsets, lengths
+            )
+        ]
+        return df
+
+    def prepare_reads(
+        self,
+        df: pd.DataFrame,
+        *,
+        trim: bool = True,
+        seq_column: str = "seq",
+        methylation_pattern_column: str = "pattern",
+        **kwargs,
+    ) -> pd.DataFrame:
+        """Overlap reads with atlas regions and optionally trim to boundaries.
+
+        This concrete implementation is shared by all methylation atlas
+        subclasses.  It performs:
+
+        1. :meth:`overlap_reads` — annotate reads with ``name``,
+           ``region_start``, ``region_end``.
+        2. :meth:`trim_reads` *(if trim=True)* — clip ``read_start``,
+           ``read_end``, and the sequence / pattern strings to the region.
+
+        Subclasses that need DMR label annotation should override
+        ``prepare_reads`` to call ``super().prepare_reads(df, ...)`` first
+        and then apply their annotation step.
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            Input reads sorted by ``["chromosome", "read_start", "read_end"]``.
+        trim : bool
+            Clip reads to region boundaries.  Default ``True``.
+        seq_column, methylation_pattern_column : str
+            Column names for DNA sequence and CpG methylation pattern.
+        **kwargs
+            Forwarded to :meth:`trim_reads`.
+        """
+        df = self.overlap_reads(
+            df,
+            seq_column=seq_column,
+            methylation_pattern_column=methylation_pattern_column,
+        )
+        if trim:
+            df = self.trim_reads(
+                df,
+                seq_column=seq_column,
+                methylation_pattern_column=methylation_pattern_column,
+                **kwargs,
+            )
+        return df
