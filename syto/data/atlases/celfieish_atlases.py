@@ -1,0 +1,413 @@
+""" """
+
+import logging
+from typing import Dict, List, Optional, Union
+
+import numpy as np
+import pandas as pd
+
+from syto.data.atlases.abstract_atlas import AbstractAtlas
+
+_module_logger = logging.getLogger(__name__)
+
+
+class CelfieISHMethylationAtlas(AbstractAtlas):
+    """Methylation atlas for CelFiE-ISH deconvolution.
+
+    Loads a tab-separated meth/cov file where each row is one CpG site:
+
+        CHROM  START  END  name  {CellType}_METH  {CellType}_COV  ...
+
+    ``START`` and ``END`` follow BED convention (0-based, half-open).
+    ``name`` identifies the genomic region this CpG belongs to.
+
+    At load time the class:
+
+    * derives region boundaries (``chr``, ``start``, ``end``) for
+      :meth:`overlap_reads` by grouping on ``name``;
+    * builds a per-region CpG position lookup ``{START → column_index}``
+      used by :func:`build_celfieish_input` to align reads to the matrix;
+    * computes beta matrices ``ndarray(T, n_CpGs)`` as ``METH / COV``
+      (NaN where coverage is zero; pseudocounts are applied by
+      :class:`CelfieISH` at runtime).
+    """
+
+    # Does not include 'target' — added to the raw TSV in a future pass.
+    REQUIRED_COLUMNS = {"chr", "start", "end", "name"}
+
+    _RAW_REQUIRED = {"CHROM", "START", "END", "name"}
+
+    def __init__(
+        self,
+        atlas_name: str,
+        reference_genome: str,
+        atlas_path: Optional[str] = None,
+        atlas_df: Optional[pd.DataFrame] = None,
+        sep: str = "\t",
+    ):
+        if atlas_path is not None and atlas_df is not None:
+            raise ValueError("Only one of atlas_path or atlas_df should be provided.")
+        elif atlas_path is not None:
+            raw = pd.read_csv(atlas_path, sep=sep)
+        elif atlas_df is not None:
+            raw = atlas_df.copy()
+        else:
+            raise ValueError("Either atlas_path or atlas_df must be provided.")
+
+        self._check_raw_format(raw)
+
+        # Extract ordered cell type names from *_METH column suffixes.
+        meth_cols = [c for c in raw.columns if c.endswith("_METH")]
+        self._cell_types: List[str] = [c[:-5] for c in meth_cols]
+
+        # Build region-level DataFrame for overlap_reads.
+        # atlas uses 1-based start convention (overlap_reads does start - 1).
+        region_df = (
+            raw.groupby("name", sort=False)
+            .agg(chr=("CHROM", "first"), start=("START", "min"), end=("END", "max"))
+            .reset_index()
+        )
+        region_df["start"] = region_df["start"] + 1  # BED 0-based → 1-based
+        # END is START+1 in BED; max(END) = last_cpg_START + 1, which is
+        # already correct as the 1-based inclusive last position.
+        self._atlas = (
+            region_df.sort_values(["chr", "start", "end"]).reset_index(drop=True)
+        )
+
+        # Per-region CpG lookups and beta matrices.
+        self._cpg_lookup: Dict[str, Dict[int, int]] = {}
+        self._n_cpgs: Dict[str, int] = {}
+        self._beta_matrices: Dict[str, np.ndarray] = {}
+
+        T = len(self._cell_types)
+        for region_name, group in raw.groupby("name", sort=False):
+            group_sorted = group.sort_values("START").reset_index(drop=True)
+            positions = group_sorted["START"].tolist()
+            n_cpgs = len(positions)
+
+            self._cpg_lookup[region_name] = {pos: idx for idx, pos in enumerate(positions)}
+            self._n_cpgs[region_name] = n_cpgs
+
+            beta = np.full((T, n_cpgs), np.nan)
+            for t, cell_type in enumerate(self._cell_types):
+                meth = group_sorted[f"{cell_type}_METH"].values.astype(float)
+                cov = group_sorted[f"{cell_type}_COV"].values.astype(float)
+                with np.errstate(invalid="ignore", divide="ignore"):
+                    beta[t, :] = np.where(cov > 0, meth / cov, np.nan)
+            self._beta_matrices[region_name] = beta
+
+        super().__init__()
+        self.atlas_name = atlas_name
+        self._reference_genome = reference_genome
+        self._check_atlas_format(self._atlas)
+
+    # ------------------------------------------------------------------
+    # Factory: build atlas from labeled reads
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def from_reads(
+        cls,
+        reads: pd.DataFrame,
+        atlas_name: str,
+        reference_genome: str,
+        labels_dict: Dict[Union[int, str], str],
+        output_path: Optional[str] = None,
+        sep: str = "\t",
+    ) -> "CelfieISHMethylationAtlas":
+        """Build a CelFiE-ISH atlas by aggregating methylation counts from reads.
+
+        For every CpG position covered by a read, records one (methylated /
+        total) observation keyed by ``(CHROM, START, name, cell_type)``.
+        Accumulating across all reads for each cell type produces the per-CpG
+        ``METH`` and ``COV`` counts that define the atlas.
+
+        Parameters
+        ----------
+        reads : pd.DataFrame
+            Must contain at least ``pattern``, ``read_start``,
+            ``chromosome``, ``name``, ``original_label``.
+
+            ``pattern`` uses **Syto encoding** per base:
+            ``'0'`` = unmethylated CpG, ``'1'`` = methylated CpG,
+            ``'2'`` (or any other character) = non-CpG / no data.
+        atlas_name : str
+        reference_genome : str
+        labels_dict : dict
+            ``{label_id → cell_type_name}`` used to resolve
+            ``original_label`` to a cell-type string.  Keys may be
+            integers or strings (e.g. from a JSON file).
+        output_path : str, optional
+            If given, write the resulting meth/cov TSV to this path so
+            the atlas can be reloaded with :meth:`__init__`.
+        sep : str
+            Column separator for the optional output file.
+
+        Returns
+        -------
+        CelfieISHMethylationAtlas
+        """
+        required = {"pattern", "read_start", "chromosome", "name", "original_label"}
+        missing = required - set(reads.columns)
+        if missing:
+            raise ValueError(f"reads DataFrame is missing required columns: {missing}")
+
+        # Normalise labels_dict keys to int for lookup against original_label.
+        int_labels: Dict[int, str] = {int(k): v for k, v in labels_dict.items()}
+
+        reads = reads.copy()
+        reads["cell_type"] = reads["original_label"].map(int_labels)
+        unmapped = reads["cell_type"].isna()
+        if unmapped.any():
+            _module_logger.warning(
+                "Dropping %d reads with labels not found in labels_dict: %s",
+                int(unmapped.sum()),
+                reads.loc[unmapped, "original_label"].unique().tolist(),
+            )
+            reads = reads[~unmapped].copy()
+
+        if reads.empty:
+            raise ValueError("No reads remain after label mapping.")
+
+        # ---- Extract per-CpG observations --------------------------------
+        # For each read, numpy vectorises the inner scan over the pattern
+        # string: ASCII '0'=48 (unmethylated), '1'=49 (methylated).
+
+        def _extract(row) -> Optional[pd.DataFrame]:
+            arr = np.frombuffer(row["pattern"].encode("ascii"), dtype=np.uint8)
+            cpg_mask = (arr == 48) | (arr == 49)
+            offsets = np.where(cpg_mask)[0]
+            if offsets.size == 0:
+                return None
+            positions = int(row["read_start"]) + offsets
+            return pd.DataFrame(
+                {
+                    "CHROM": row["chromosome"],
+                    "START": positions,
+                    "END": positions + 1,
+                    "name": row["name"],
+                    "cell_type": row["cell_type"],
+                    "meth": (arr[cpg_mask] == 49).astype(np.int32),
+                }
+            )
+
+        chunks = [_extract(row) for _, row in reads.iterrows()]
+        chunks = [c for c in chunks if c is not None]
+        if not chunks:
+            raise ValueError("No CpG observations found in reads.")
+
+        long_df = pd.concat(chunks, ignore_index=True)
+
+        # ---- Aggregate METH / COV per (CHROM, START, END, name, cell_type)
+        agg = (
+            long_df.groupby(
+                ["CHROM", "START", "END", "name", "cell_type"], sort=True
+            )
+            .agg(METH=("meth", "sum"), COV=("meth", "count"))
+            .reset_index()
+        )
+
+        # ---- Pivot to wide format ----------------------------------------
+        # Cell types ordered as they appear in labels_dict for stable output.
+        label_order = list(dict.fromkeys(int_labels.values()))
+        cell_types = [ct for ct in label_order if ct in agg["cell_type"].unique()]
+
+        index_cols = ["CHROM", "START", "END", "name"]
+
+        meth_wide = (
+            agg.pivot_table(
+                index=index_cols, columns="cell_type", values="METH", fill_value=0
+            )
+            .reindex(columns=cell_types, fill_value=0)
+            .reset_index()
+        )
+        meth_wide.columns.name = None
+        meth_wide = meth_wide.rename(columns={ct: f"{ct}_METH" for ct in cell_types})
+
+        cov_wide = (
+            agg.pivot_table(
+                index=index_cols, columns="cell_type", values="COV", fill_value=0
+            )
+            .reindex(columns=cell_types, fill_value=0)
+            .reset_index()
+        )
+        cov_wide.columns.name = None
+        cov_wide = cov_wide.rename(columns={ct: f"{ct}_COV" for ct in cell_types})
+
+        atlas_df = meth_wide.merge(
+            cov_wide[index_cols + [f"{ct}_COV" for ct in cell_types]], on=index_cols
+        )
+
+        # Interleave _METH / _COV columns per cell type for readability.
+        ordered_cols = index_cols + [
+            col for ct in cell_types for col in (f"{ct}_METH", f"{ct}_COV")
+        ]
+        atlas_df = atlas_df[ordered_cols].sort_values(
+            ["CHROM", "START"]
+        ).reset_index(drop=True)
+
+        if output_path is not None:
+            atlas_df.to_csv(output_path, sep=sep, index=False)
+            _module_logger.info("Atlas saved to %s", output_path)
+
+        return cls(
+            atlas_name=atlas_name,
+            reference_genome=reference_genome,
+            atlas_df=atlas_df,
+        )
+
+    # ------------------------------------------------------------------
+    # Validation
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def _check_raw_format(cls, raw: pd.DataFrame) -> None:
+        missing = cls._RAW_REQUIRED - set(raw.columns)
+        if missing:
+            raise ValueError(
+                f"Atlas DataFrame is missing required columns: {missing}"
+            )
+        meth_cell_types = {c[:-5] for c in raw.columns if c.endswith("_METH")}
+        cov_cell_types = {c[:-4] for c in raw.columns if c.endswith("_COV")}
+        if not meth_cell_types:
+            raise ValueError("No *_METH columns found in atlas.")
+        unpaired_meth = meth_cell_types - cov_cell_types
+        unpaired_cov = cov_cell_types - meth_cell_types
+        if unpaired_meth:
+            raise ValueError(f"Missing _COV columns for: {unpaired_meth}")
+        if unpaired_cov:
+            raise ValueError(f"Missing _METH columns for: {unpaired_cov}")
+
+    # ------------------------------------------------------------------
+    # AbstractAtlas interface
+    # ------------------------------------------------------------------
+
+    @property
+    def reference_genome(self) -> str:
+        return self._reference_genome
+
+    @property
+    def atlas(self) -> pd.DataFrame:
+        """Region-level DataFrame with columns ``chr``, ``start``, ``end``, ``name``.
+
+        ``start`` is 1-based (as required by :meth:`overlap_reads`).
+        ``end`` is the 1-based inclusive last CpG position of the region.
+        """
+        return self._atlas
+
+    @property
+    def ref_cells(self) -> List[str]:
+        """Ordered list of cell-type names (axis-0 of all beta matrices)."""
+        return list(self._cell_types)
+
+    # ------------------------------------------------------------------
+    # CpG-level accessors (used by build_celfieish_input)
+    # ------------------------------------------------------------------
+
+    def __contains__(self, region_name: str) -> bool:
+        return region_name in self._beta_matrices
+
+    def get_cpg_lookup(self, region_name: str) -> Dict[int, int]:
+        """Return ``{START_0based → column_index}`` for a region."""
+        return self._cpg_lookup[region_name]
+
+    def get_n_cpgs(self, region_name: str) -> int:
+        """Return the number of CpG sites in the region."""
+        return self._n_cpgs[region_name]
+
+    def get_beta_for_regions(self, region_names: List[str]) -> List[np.ndarray]:
+        """Return beta matrices in the requested order.
+
+        Parameters
+        ----------
+        region_names : list of str
+            Must match the ``region_names`` key from :func:`build_celfieish_input`.
+
+        Returns
+        -------
+        list of ndarray(T, n_CpGs)
+        """
+        return [self._beta_matrices[name] for name in region_names]
+
+    # ------------------------------------------------------------------
+    # Reads preparation
+    # ------------------------------------------------------------------
+
+    def trim_reads(
+        self,
+        df: pd.DataFrame,
+        seq_column: str = "seq",
+        methylation_pattern_column: str = "pattern",
+        **kwargs,
+    ) -> pd.DataFrame:
+        """Clip coordinates and re-slice ``pattern`` / ``seq`` to the region.
+
+        Mirrors :meth:`UXMMethylationAtlas.trim_reads`: the base class clips
+        ``read_start`` and ``read_end`` to region boundaries; this override
+        additionally slices the string columns to match.
+        """
+        orig_start = df["read_start"].copy()
+        df = super().trim_reads(df, **kwargs)
+
+        offsets = (df["read_start"] - orig_start).values
+        lengths = (df["read_end"] - df["read_start"] + 1).values
+
+        df[seq_column] = [
+            s[o: o + l]
+            for s, o, l in zip(df[seq_column].tolist(), offsets, lengths)
+        ]
+        df[methylation_pattern_column] = [
+            s[o: o + l]
+            for s, o, l in zip(
+                df[methylation_pattern_column].tolist(), offsets, lengths
+            )
+        ]
+        return df
+
+    def prepare_reads(
+        self,
+        df: pd.DataFrame,
+        *,
+        trim: bool = True,
+        seq_column: str = "seq",
+        methylation_pattern_column: str = "pattern",
+        labels_dict: Optional[Dict] = None,
+        cell_type_match_dict: Optional[Dict[str, str]] = None,
+    ) -> pd.DataFrame:
+        """Overlap reads with atlas regions and optionally trim to boundaries.
+
+        Steps:
+
+        1. :meth:`overlap_reads` — annotate reads with ``name``,
+           ``region_start``, ``region_end``.
+        2. :meth:`trim_reads` *(if trim=True)* — clip ``read_start``,
+           ``read_end``, ``seq_column``, and ``methylation_pattern_column``
+           to region boundaries.
+        3. DMR label annotation *(placeholder — requires* ``target`` *column,
+           added in a future atlas version)*.
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            Input reads sorted by ``["chromosome", "read_start", "read_end"]``.
+        trim : bool
+        seq_column, methylation_pattern_column : str
+        labels_dict : dict, optional
+            Reserved for future DMR label annotation.
+        cell_type_match_dict : dict, optional
+            Reserved for future DMR label annotation.
+        """
+        df = self.overlap_reads(
+            df,
+            seq_column=seq_column,
+            methylation_pattern_column=methylation_pattern_column,
+        )
+
+        if trim:
+            df = self.trim_reads(
+                df,
+                seq_column=seq_column,
+                methylation_pattern_column=methylation_pattern_column,
+            )
+
+        return df
