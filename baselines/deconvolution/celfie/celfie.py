@@ -274,29 +274,52 @@ def build_celfie_input(
         cpg_lookup = atlas.get_cpg_lookup(region_name)
         n_cpgs = atlas.get_n_cpgs(region_name)
 
-        x_meth = np.zeros(n_cpgs, dtype=np.float64)
-        x_cov  = np.zeros(n_cpgs, dtype=np.float64)
+        # ---- Batch all observations for this region, then do one bincount ----
 
         if use_cpg_sig:
-            for sig in group["cpg_sig"]:
-                if sig is None or len(sig) == 0:
-                    continue
-                for entry in sig:
-                    pos, meth_state = int(entry[0]), int(entry[1])
-                    col = cpg_lookup.get(pos)
-                    if col is not None:
-                        x_meth[col] += meth_state   # 1 if methylated, 0 if not
-                        x_cov[col]  += 1
+            # Collect every (abs_position, meth_state) pair across all reads at once.
+            arrays = [
+                np.asarray(sig.tolist(), dtype=np.int64)
+                for sig in group["cpg_sig"]
+                if sig is not None and len(sig) > 0
+            ]
+            if not arrays:
+                continue
+            all_pairs = np.vstack(arrays)   # (total_obs, 2)
+            positions = all_pairs[:, 0]
+            meths     = all_pairs[:, 1]
         else:
-            for _, row in group.iterrows():
-                pattern      = row[methylation_pattern_column]
-                trimmed_start = int(row["read_start"])
-                for char_offset, char in enumerate(pattern):
-                    if char in ("0", "1"):
-                        col = cpg_lookup.get(trimmed_start + char_offset)
-                        if col is not None:
-                            x_meth[col] += int(char == "1")
-                            x_cov[col]  += 1
+            # Scan pattern strings with numpy ASCII ops — avoids iterrows and
+            # per-character Python iteration.
+            pos_list  = []
+            meth_list = []
+            for pattern, rs in zip(
+                group[methylation_pattern_column].tolist(),
+                group["read_start"].tolist(),
+            ):
+                arr      = np.frombuffer(pattern.encode("ascii"), dtype=np.uint8)
+                cpg_mask = (arr == 48) | (arr == 49)   # ord('0')=48, ord('1')=49
+                offsets  = np.where(cpg_mask)[0]
+                if offsets.size == 0:
+                    continue
+                pos_list.append(int(rs) + offsets)
+                meth_list.append((arr[cpg_mask] == 49).astype(np.int32))
+            if not pos_list:
+                continue
+            positions = np.concatenate(pos_list)
+            meths     = np.concatenate(meth_list)
+
+        # Vectorised position → column-index mapping via pandas dict map,
+        # then a single bincount replaces O(N) individual array increments.
+        col_indices = pd.Series(positions).map(cpg_lookup)
+        valid       = col_indices.notna().values
+        if not valid.any():
+            continue
+        cols = col_indices[valid].astype(np.intp).values
+        m    = meths[valid]
+
+        x_meth = np.bincount(cols, weights=m.astype(np.float64), minlength=n_cpgs)
+        x_cov  = np.bincount(cols, minlength=n_cpgs).astype(np.float64)
 
         region_names.append(region_name)
         x_meth_list.append(x_meth.reshape(1, -1))

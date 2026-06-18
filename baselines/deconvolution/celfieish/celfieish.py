@@ -312,19 +312,37 @@ def build_celfieish_input(
 
         matrix = np.full((n_reads, n_cpgs), NOVAL, dtype=np.int8)
 
-        for row_idx, (_, row) in enumerate(group.iterrows()):
-            pattern = row[methylation_pattern_column]
-            trimmed_start = int(row["read_start"])  # 0-based
+        # Scan all reads with numpy ASCII ops, collecting (row_idx, abs_pos, meth)
+        # triples across the whole region.  A single pd.Series.map call then
+        # resolves all positions to column indices before one fancy-index write.
+        all_abs_pos: List[np.ndarray] = []
+        all_row_idx: List[np.ndarray] = []
+        all_meths:   List[np.ndarray] = []
 
-            for char_offset, char in enumerate(pattern):
-                if char == "0":
-                    col = cpg_lookup.get(trimmed_start + char_offset)
-                    if col is not None:
-                        matrix[row_idx, col] = UNMETHYLATED
-                elif char == "1":
-                    col = cpg_lookup.get(trimmed_start + char_offset)
-                    if col is not None:
-                        matrix[row_idx, col] = METHYLATED
+        for row_idx, (pattern, rs) in enumerate(
+            zip(group[methylation_pattern_column].tolist(), group["read_start"].tolist())
+        ):
+            arr      = np.frombuffer(pattern.encode("ascii"), dtype=np.uint8)
+            cpg_mask = (arr == 48) | (arr == 49)   # ord('0')=48, ord('1')=49
+            offsets  = np.where(cpg_mask)[0]
+            if offsets.size == 0:
+                continue
+
+            n = offsets.size
+            all_abs_pos.append(int(rs) + offsets)
+            all_row_idx.append(np.full(n, row_idx, dtype=np.intp))
+            all_meths.append((arr[cpg_mask] == 49).astype(np.int8))  # 1=METHYLATED, 0=UNMETHYLATED
+
+        if all_abs_pos:
+            positions   = np.concatenate(all_abs_pos)
+            row_indices = np.concatenate(all_row_idx)
+            meth_states = np.concatenate(all_meths)
+
+            col_series  = pd.Series(positions).map(cpg_lookup)   # one call per region
+            valid       = col_series.notna().values
+            if valid.any():
+                col_indices = col_series[valid].astype(np.intp).values
+                matrix[row_indices[valid], col_indices] = meth_states[valid]
 
         region_names.append(region_name)
         matrices.append(matrix)
