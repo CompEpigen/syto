@@ -23,7 +23,7 @@ if TYPE_CHECKING:
     from syto.data.atlases.celfieish_atlases import CpGBetaCountsMethylationAtlas
 
 _module_logger = logging.getLogger(__name__)
-
+from syto.data.dataset import resolve_column
 
 # ---------------------------------------------------------------------------
 # Core EM (adapted from Caggiano et al. 2021, GNU AGPL v3)
@@ -212,9 +212,7 @@ def em_with_checkpoints(
 def prepare_reads_for_celfie(
     reads_data: pd.DataFrame,
     atlas: "CpGBetaCountsMethylationAtlas",
-    trim: bool = True,
-    seq_column: str = "seq",
-    methylation_pattern_column: str = "pattern",
+    trim: bool = True
 ) -> pd.DataFrame:
     """Overlap reads with atlas regions and trim to region boundaries.
 
@@ -224,16 +222,13 @@ def prepare_reads_for_celfie(
     """
     return atlas.prepare_reads(
         reads_data,
-        trim=trim,
-        seq_column=seq_column,
-        methylation_pattern_column=methylation_pattern_column,
+        trim=trim
     )
 
 
 def build_celfie_input(
     reads: pd.DataFrame,
     atlas: "CpGBetaCountsMethylationAtlas",
-    methylation_pattern_column: str = "pattern",
 ) -> Dict:
     """Build per-region aggregated count vectors for CelFiE.
 
@@ -251,8 +246,6 @@ def build_celfie_input(
         (pre-extracted ``[(abs_pos, meth_state), …]`` per read), it is used
         directly instead of scanning the pattern string.
     atlas : CpGBetaCountsMethylationAtlas
-    methylation_pattern_column : str
-        Column holding the base-level methylation pattern string.
 
     Returns
     -------
@@ -265,7 +258,7 @@ def build_celfie_input(
     region_names: List[str] = []
     x_meth_list: List[np.ndarray] = []
     x_cov_list:  List[np.ndarray] = []
-
+    methylation_pattern_column = resolve_column(reads.columns, "methylation_ids")
     for region_name, group in reads.groupby("name", sort=False):
         if region_name not in atlas:
             _module_logger.warning("Region %s not in atlas; skipping.", region_name)
@@ -384,6 +377,85 @@ def celfie_deconvolution(
             best_alpha = alpha
 
     return best_alpha.flatten()
+
+
+def run_celfie_deconvolution(
+    reads: pd.DataFrame,
+    atlas: "CpGBetaCountsMethylationAtlas",
+    labels_dict_reversed: Dict[str, int],
+    n_labels: Optional[int] = None,
+    prepare_reads: bool = True,
+    num_iterations: int = 50,
+    convergence_criteria: float = 0.001,
+    random_restarts: int = 1,
+    checkpoints: Optional[List[int]] = None,
+):
+    """Sort reads, optionally prepare with atlas, build input, deconvolve, align proportions.
+
+    Parameters
+    ----------
+    reads : pd.DataFrame
+        Raw processed reads (when prepare_reads=True) or atlas-annotated reads
+        (when prepare_reads=False, must already have a ``name`` column).
+    atlas : CpGBetaCountsMethylationAtlas
+    labels_dict_reversed : dict
+        ``cell_type_name → label_index`` mapping.
+    n_labels : int, optional
+        Defaults to ``len(labels_dict_reversed)``.
+    prepare_reads : bool
+        When True, calls ``atlas.prepare_reads`` to overlap and trim reads.
+        Set False when reads already carry atlas-region annotations.
+    num_iterations, convergence_criteria, random_restarts
+        Passed to :func:`celfie_deconvolution` (convergence mode).
+    checkpoints : list of int, optional
+        When provided, runs exactly ``max(checkpoints)`` EM iterations.
+
+    Returns
+    -------
+    list of float
+        Proportions aligned to label order when checkpoints is None.
+    list of (int, list of float)
+        ``[(n_steps, proportions), …]`` when checkpoints is provided.
+    None
+        If no atlas regions overlap the reads.
+    """
+    reads_sorted = reads.sort_values(
+        ["chromosome", "read_start", "read_end"]
+    ).reset_index(drop=True).copy()
+    reads_sorted["read_start"] = reads_sorted["read_start"].astype("int64")
+    reads_sorted["read_end"] = reads_sorted["read_end"].astype("int64")
+
+    prepared = atlas.prepare_reads(reads_sorted) if prepare_reads else reads_sorted
+    if prepared.empty:
+        return None
+
+    celfie_in = build_celfie_input(prepared, atlas)
+    if not celfie_in["x_meth"]:
+        return None
+
+    y_list, y_cov_list = atlas.get_meth_cov_for_regions(celfie_in["region_names"])
+    result = celfie_deconvolution(
+        celfie_in["x_meth"], celfie_in["x_cov"],
+        y_list, y_cov_list,
+        num_iterations=num_iterations,
+        convergence_criteria=convergence_criteria,
+        random_restarts=random_restarts,
+        checkpoints=checkpoints,
+    )
+
+    ref_cells = atlas.ref_cells
+
+    if checkpoints is not None:
+        return [
+            (n_steps, rearange_celfie_deconvolution_results(
+                labels_dict_reversed, alpha, ref_cells, n_labels=n_labels
+            ))
+            for n_steps, alpha in result
+        ]
+
+    return rearange_celfie_deconvolution_results(
+        labels_dict_reversed, result, ref_cells, n_labels=n_labels
+    )
 
 
 def rearange_celfie_deconvolution_results(

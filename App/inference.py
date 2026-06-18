@@ -18,6 +18,7 @@ import torch
 
 import numpy as np
 import pandas as pd
+from baselines.deconvolution.uxm import mark_records_methyl_state
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -32,12 +33,6 @@ from syto.classification.classifiers.lazy_classifier_factory import (
     read_classifier_factory,
 )
 from syto.data.atlases.uxm_atlases import UXMMethylationAtlas
-from baselines.deconvolution.uxm import (
-    build_uxm_input,
-    mark_records_methyl_state,
-    uxm_deconvolution,
-    rearange_uxm_deconvolution_results,
-)
 from syto.deconvolution.feature_selection import apply_feature_mask
 from syto.deconvolution.least_squares_deconvolvers import (
     PSLSDeconvolver,
@@ -50,6 +45,8 @@ from syto.deconvolution.xgbdeconvolver import (
 )
 from syto.calibration.linear_calibrator import LinearCalibrator
 from syto.calibration.vector_scaling_calibrator import VectorScalingCalibrator
+
+from syto.data.dataset import resolve_column
 
 LINEAR_NORM_METHODS = ["clip-normalize", "simplex-projection"]
 
@@ -95,7 +92,7 @@ class InferencePipeline:
 
         # ── Load atlas ──────────────────────────────────────────────────
         atlas_path = config["atlas_path"]
-        atlas_name = config["atlas_name"]
+        atlas_name = config.get("atlas_name", Path(atlas_path).stem)
         self.atlas = UXMMethylationAtlas(
             atlas_name=atlas_name,
             reference_genome="hg38" if "hg38" in atlas_path else "hg19",
@@ -105,6 +102,9 @@ class InferencePipeline:
         self.logger.info(
             f"Loaded atlas with {len(self.atlas.atlas)} regions from {atlas_path}"
         )
+
+        # ── Load baseline atlas states ───────────────────────────────
+        self._baseline_states = self._load_baseline_states()
 
         # ── Placeholder attributes populated during run() ───────────────
         self.processed_reads: Optional[pd.DataFrame] = None
@@ -332,6 +332,8 @@ class InferencePipeline:
             cell_type_match_dict=self.cell_type_match_dict,
         )
 
+        prepared = mark_records_methyl_state(prepared)
+
         if len(prepared) == 0:
             raise RuntimeError(
                 "No reads overlapped with atlas regions. "
@@ -374,10 +376,10 @@ class InferencePipeline:
         )
 
         self.logger.info("Running classifier predictions ...")
-        result_df = read_classifier.predict_split(self.prepared_reads, **classifier_cfg)
 
+        result_df = read_classifier.predict_split(self.prepared_reads, **classifier_cfg)
         result_df = result_df.dropna(
-            subset=result_df.columns.difference(["soft_label"])
+            subset=result_df.columns.difference(["soft_label", "ctype"])
         )
         if "M_rate" in result_df.columns:
             result_df.rename(columns={"M_rate": "methylation_level"}, inplace=True)
@@ -385,57 +387,43 @@ class InferencePipeline:
         return result_df
 
     def _load_or_compute_uniform_prior(self) -> pd.DataFrame:
-        """Load or compute the uniform prior matrix for missing-label substitution.
+        """Load the uniform prior matrix from the pseudobulk HDF5 file.
 
-        Resolution order:
-        1. ``uniform_prior_path`` — load from pre-computed ``.npz``.
-        2. ``pure_profiles_path`` — load pure profiles ``.pkl``, compute the
-           prior on-the-fly, and optionally cache it next to the profiles.
+        Reads ``outputs/{split}/pure_profiles/uniform_prior`` from the HDF5
+        produced by the pseudobulk generation pipeline and returns it as a
+        DataFrame with a ``dmr_ctype_label`` column, ready for
+        :func:`aggregate_predictions_by_grg`.
+
+        Config keys
+        -----------
+        pseudobulk_h5_path : str
+            Path to the pseudobulk HDF5 file containing pure profiles.
+        pure_profiles_split : str, optional
+            Split name from which to read the prior (default ``"train"``).
 
         Raises
         ------
         ValueError
-            If neither path is configured.
+            If ``pseudobulk_h5_path`` is not configured.
+        KeyError
+            If the HDF5 file has no pure profiles for the requested split.
         """
-        from syto.data.pure_profile_generation import (
-            compute_uniform_prior_matrix,
-            load_uniform_prior,
-            save_uniform_prior,
-        )
+        from syto.data.pseudobulk_hdf5_utils import PseudobulkHDF5Reader
 
-        uniform_prior_path = self.config.get("uniform_prior_path", None)
-        pure_profiles_path = self.config.get("pure_profiles_path", None)
-
-        # Option 1: direct .npz
-        if uniform_prior_path and os.path.exists(uniform_prior_path):
-            self.logger.info(f"Loading uniform prior from {uniform_prior_path}")
-            return load_uniform_prior(uniform_prior_path)
-
-        # Option 2: compute from pure profiles pickle
-        if pure_profiles_path and os.path.exists(pure_profiles_path):
-            self.logger.info(
-                f"Computing uniform prior from pure profiles: " f"{pure_profiles_path}"
-            )
-            with open(pure_profiles_path, "rb") as f:
-                pure_profiles = pickle.load(f)
-
-            split_key = self.config.get("pure_profiles_split_key", "train")
-            prior = compute_uniform_prior_matrix(
-                pure_profiles,
-                split_key=split_key,
-                num_input_labels=len(self.labels_dict),
+        h5_path = self.config.get("pseudobulk_h5_path")
+        if not h5_path:
+            raise ValueError(
+                f"missing_label_strategy='{self.missing_label_strategy}' requires "
+                "'pseudobulk_h5_path' in config pointing to a pseudobulk HDF5 file "
+                "with pre-computed pure profiles."
             )
 
-            # Cache for future runs
-            cache_path = str(Path(pure_profiles_path).parent / "uniform_prior.npz")
-            save_uniform_prior(prior, cache_path)
-            self.logger.info(f"Cached uniform prior to {cache_path}")
-            return prior
-
-        raise ValueError(
-            f"missing_label_strategy='{self.missing_label_strategy}' requires "
-            f"either 'uniform_prior_path' or 'pure_profiles_path' in config."
+        split = self.config.get("pure_profiles_split", "train")
+        self.logger.info(
+            "Loading uniform prior from pseudobulk HDF5 (split=%r): %s", split, h5_path
         )
+        reader = PseudobulkHDF5Reader(h5_path, logger=self.logger)
+        return reader.read_uniform_prior(split)
 
     # ═════════════════════════════════════════════════════════════════
     #  Stage 4: aggregate predictions by DMR
@@ -481,11 +469,10 @@ class InferencePipeline:
             or "None", proportions array).
         """
         deconv_cfg = self.config.get("deconvolution", {})
-        methods = deconv_cfg.get("methods", [])
-
         results: List[Tuple[str, str, np.ndarray]] = []
 
-        for method_cfg in methods:
+        # ── Syto feature-based methods ──────────────────────────────────
+        for method_cfg in deconv_cfg.get("methods", []):
             if not method_cfg.get("enabled", False):
                 continue
 
@@ -499,8 +486,6 @@ class InferencePipeline:
 
                 if name == "xgboost":
                     proportions = self._run_xgboost_deconvolution(method_cfg)
-                elif name == "uxm":
-                    proportions = self._run_uxm_deconvolution(method_cfg)
                 elif name in ["3Layer_MLP", "Shallow_Wide_Network"]:
                     proportions = self._run_nn_deconvolution(method_cfg)
                 elif name == "ls":
@@ -511,26 +496,44 @@ class InferencePipeline:
                     )
                     continue
 
-                # Uncalibrated result
                 results.append((base_name, "None", proportions))
 
-                # ── Apply all discovered calibrators ────────────────────
                 calibrators_dir = method_cfg.get("calibrators_dir", None)
-                # Legacy single-calibrator fallback
-                if calibrators_dir is None and method_cfg.get(
-                    "use_callibration", False
-                ):
+                if calibrators_dir is None and method_cfg.get("use_callibration", False):
                     calibrators_dir = str(Path(method_cfg["callibrator_path"]).parent)
-
                 if calibrators_dir is not None:
-                    calibrated = self._apply_all_calibrators(
-                        proportions, calibrators_dir, base_name
+                    results.extend(
+                        self._apply_all_calibrators(proportions, calibrators_dir, base_name)
                     )
-                    results.extend(calibrated)
 
             except Exception as e:  # pylint: disable=broad-exception-caught
                 self.logger.error(
                     f"Deconvolution method '{name}' failed: {e}", exc_info=True
+                )
+
+        # ── Read-based baseline methods ─────────────────────────────────
+        for baseline_state in self._baseline_states:
+            model = baseline_state["name"]
+            self.logger.info(f"Running baseline deconvolution: {model}")
+
+            try:
+                if model == "uxm":
+                    proportions = self._run_uxm_deconvolution(baseline_state)
+                    if proportions is not None:
+                        results.append(("uxm", "None", proportions))
+
+                elif model == "celfieish":
+                    results.extend(self._run_celfieish_baseline(baseline_state))
+
+                elif model == "celfie":
+                    results.extend(self._run_celfie_baseline(baseline_state))
+
+                else:
+                    self.logger.warning(f"Unknown baseline model: {model}, skipping")
+
+            except Exception as e:  # pylint: disable=broad-exception-caught
+                self.logger.error(
+                    f"Baseline method '{model}' failed: {e}", exc_info=True
                 )
 
         return results
@@ -712,35 +715,146 @@ class InferencePipeline:
 
         return proportions
 
-    def _run_uxm_deconvolution(self, method_cfg: Dict[str, Any]) -> np.ndarray:
-        """
-        Run UXM deconvolution.
-        """
-        uxm_atlas = self.atlas.atlas
-        ref_cells = self.atlas.ref_cells
+    def _load_baseline_states(self) -> List[Dict[str, Any]]:
+        """Load atlas objects for all baselines listed under deconvolution.baselines."""
+        baselines_cfg = self.config.get("deconvolution", {}).get("baselines", [])
+        states: List[Dict[str, Any]] = []
 
-        reads = mark_records_methyl_state(self.prepared_reads.copy())
-        uxm_input = build_uxm_input(reads)
+        for cfg in baselines_cfg:
+            if not cfg.get("enabled", True):
+                continue
+            model = cfg["model"]
 
-        # Run UXM deconvolution
-        uxm_proportions = uxm_deconvolution(
-            atlas=uxm_atlas,
-            ref_cells=ref_cells,
-            sf=uxm_input["scaling_factors"],
-            counts=uxm_input["counts"],
-            sample_names=["sample"],
-        )[0]
+            if model == "uxm":
+                from baselines.deconvolution.uxm.uxm import load_atlas
 
-        # Align proportions to match labels_dict order
-        ref_cells = [x for x in ref_cells if x != "Megakaryocytes"]
+                atlas_df, ref_cells_all = load_atlas(cfg["atlas_path"])
+                ignore_cells = cfg.get("ignore_cells", [])
+                ref_cells = [c for c in ref_cells_all if c not in ignore_cells]
+                self.logger.info("UXM baseline: %d reference cell types", len(ref_cells))
+                states.append({"name": "uxm", "atlas_df": atlas_df, "ref_cells": ref_cells})
 
-        proportions_aligned = rearange_uxm_deconvolution_results(
-            self.labels_dict_reversed, uxm_proportions, ref_cells
+            elif model in ("celfieish", "celfie"):
+                from syto.data.atlases.celfieish_atlases import CpGBetaCountsMethylationAtlas
+
+                atlas_path = cfg["atlas_path"]
+                atlas = CpGBetaCountsMethylationAtlas(
+                    atlas_name=cfg.get("atlas_name", Path(atlas_path).stem),
+                    reference_genome=cfg.get("reference_genome", "hg38"),
+                    atlas_path=atlas_path,
+                )
+                state: Dict[str, Any] = {
+                    "name": model,
+                    "atlas": atlas,
+                    "ref_cells": atlas.ref_cells,
+                    "em_checkpoints": cfg.get("em_checkpoints"),
+                    "num_iterations": cfg.get("num_iterations", 50),
+                    "convergence_criteria": cfg.get("convergence_criteria", 0.001),
+                }
+                if model == "celfie":
+                    state["random_restarts"] = cfg.get("random_restarts", 1)
+                self.logger.info(
+                    "%s baseline: %d reference cell types", model.upper(), len(atlas.ref_cells)
+                )
+                states.append(state)
+
+            else:
+                self.logger.warning("Unknown baseline model %r in config; skipping.", model)
+
+        return states
+
+    def _run_uxm_deconvolution(self, baseline_state: Dict[str, Any]) -> Optional[np.ndarray]:
+        """Run UXM baseline deconvolution using the pre-loaded atlas state."""
+        from baselines.deconvolution.uxm.uxm import run_uxm_deconvolution
+
+        aligned = run_uxm_deconvolution(
+            self.prepared_reads,
+            baseline_state["atlas_df"],
+            baseline_state["ref_cells"],
+            self.labels_dict_reversed,
+            n_labels=self.num_labels,
         )
-        proportions_aligned = np.round(np.array(proportions_aligned), 4)
+        if aligned is None:
+            self.logger.warning("UXM: no overlapping reads, skipping.")
+            return None
+        proportions = np.round(np.array(aligned), 4)
+        self.logger.debug("UXM proportions: %s", proportions)
+        return proportions
 
-        self.logger.debug(f"UXM proportions: {proportions_aligned}")
-        return proportions_aligned
+    def _run_celfieish_baseline(
+        self, baseline_state: Dict[str, Any]
+    ) -> List[Tuple[str, str, np.ndarray]]:
+        """Run CelFiE-ISH baseline deconvolution; returns result tuples ready for results list."""
+        from baselines.deconvolution.celfieish.celfieish import run_celfieish_deconvolution
+
+        if self.processed_reads is None:
+            self.logger.warning(
+                "CelFiE-ISH: requires processed_reads (not available for predicted_reads input); skipping."
+            )
+            return []
+
+        em_checkpoints = baseline_state.get("em_checkpoints")
+        result = run_celfieish_deconvolution(
+            self.processed_reads,
+            baseline_state["atlas"],
+            self.labels_dict_reversed,
+            n_labels=self.num_labels,
+            prepare_reads=True,
+            num_iterations=baseline_state.get("num_iterations", 50),
+            convergence_criteria=baseline_state.get("convergence_criteria", 0.001),
+            checkpoints=em_checkpoints,
+        )
+        if result is None:
+            self.logger.warning("CelFiE-ISH: no overlapping reads, skipping.")
+            return []
+
+        if em_checkpoints is not None:
+            out = []
+            for n_steps, aligned in result:
+                name = f"celfieish_{n_steps}_steps"
+                out.append((name, "None", np.round(np.array(aligned), 4)))
+            return out
+
+        self.logger.debug("CelFiE-ISH proportions: %s", result)
+        return [("celfieish", "None", np.round(np.array(result), 4))]
+
+    def _run_celfie_baseline(
+        self, baseline_state: Dict[str, Any]
+    ) -> List[Tuple[str, str, np.ndarray]]:
+        """Run CelFiE baseline deconvolution; returns result tuples ready for results list."""
+        from baselines.deconvolution.celfie.celfie import run_celfie_deconvolution
+
+        if self.processed_reads is None:
+            self.logger.warning(
+                "CelFiE: requires processed_reads (not available for predicted_reads input); skipping."
+            )
+            return []
+
+        em_checkpoints = baseline_state.get("em_checkpoints")
+        result = run_celfie_deconvolution(
+            self.processed_reads,
+            baseline_state["atlas"],
+            self.labels_dict_reversed,
+            n_labels=self.num_labels,
+            prepare_reads=True,
+            num_iterations=baseline_state.get("num_iterations", 50),
+            convergence_criteria=baseline_state.get("convergence_criteria", 0.001),
+            random_restarts=baseline_state.get("random_restarts", 1),
+            checkpoints=em_checkpoints,
+        )
+        if result is None:
+            self.logger.warning("CelFiE: no overlapping reads, skipping.")
+            return []
+
+        if em_checkpoints is not None:
+            out = []
+            for n_steps, aligned in result:
+                name = f"celfie_{n_steps}_steps"
+                out.append((name, "None", np.round(np.array(aligned), 4)))
+            return out
+
+        self.logger.debug("CelFiE proportions: %s", result)
+        return [("celfie", "None", np.round(np.array(result), 4))]
 
     # ═══════════════════════════════════════════════════════════════════
     #  Output

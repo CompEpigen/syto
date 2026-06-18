@@ -71,32 +71,14 @@ def _run_uxm_on_reads(
     pb_index: int,
     target_proportions: np.ndarray,
 ) -> Dict[str, List[Dict[str, Any]]]:
-    from baselines.deconvolution.uxm.uxm import (
-        build_uxm_input,
-        mark_records_methyl_state,
-        rearange_uxm_deconvolution_results,
-        uxm_deconvolution,
+    from baselines.deconvolution.uxm.uxm import run_uxm_deconvolution
+
+    aligned = run_uxm_deconvolution(
+        reads, model_cfg["atlas_df"], model_cfg["ref_cells"],
+        s["labels_dict_reversed"], n_labels=s["n_labels"],
     )
-
-    reads = mark_records_methyl_state(reads.copy())
-    uxm_in = build_uxm_input(reads)
-    proportions = uxm_deconvolution(
-        model_cfg["atlas_df"],
-        model_cfg["ref_cells"],
-        uxm_in["scaling_factors"],
-        uxm_in["counts"],
-        sample_names=["sample"],
-    )[0]
-
-    if not isinstance(proportions, np.ndarray):
+    if aligned is None:
         return {}
-
-    aligned = rearange_uxm_deconvolution_results(
-        s["labels_dict_reversed"],
-        proportions,
-        model_cfg["ref_cells"],
-        n_labels=s["n_labels"],
-    )
     return {
         "uxm": _make_rows(
             pb_index, "uxm", aligned, target_proportions, s["labels_dict"], s["n_labels"]
@@ -110,59 +92,33 @@ def _run_celfieish_on_reads(
     s: Dict[str, Any],
     pb_index: int,
     target_proportions: np.ndarray,
-    prepare_reads: bool = True
+    prepare_reads: bool = True,
 ) -> Dict[str, List[Dict[str, Any]]]:
-    from baselines.deconvolution.celfieish.celfieish import (
-        build_celfieish_input,
-        celfieish_deconvolution,
-        rearange_celfieish_deconvolution_results,
-    )
+    from baselines.deconvolution.celfieish.celfieish import run_celfieish_deconvolution
 
-    atlas = model_cfg["atlas"]
-    ref_cells = model_cfg["ref_cells"]
     em_checkpoints = model_cfg.get("em_checkpoints")
-
-    reads_sorted = reads.sort_values(
-        ["chromosome", "read_start", "read_end"]
-    ).reset_index(drop=True)
-    reads_sorted["read_start"] = reads_sorted["read_start"].astype("int64")
-    reads_sorted["read_end"] = reads_sorted["read_end"].astype("int64")
-    prepared = reads_sorted
-    if prepare_reads:
-        prepared = atlas.prepare_reads(reads_sorted)
-
-    celfieish_in = build_celfieish_input(prepared, atlas)
-    if not celfieish_in["matrices"]:
-        return {}
-
-    beta_matrices = atlas.get_beta_for_regions(celfieish_in["region_names"])
-    result = celfieish_deconvolution(
-        celfieish_in["matrices"],
-        beta_matrices,
+    result = run_celfieish_deconvolution(
+        reads, model_cfg["atlas"], s["labels_dict_reversed"],
+        n_labels=s["n_labels"], prepare_reads=prepare_reads,
         num_iterations=model_cfg.get("num_iterations", 50),
         convergence_criteria=model_cfg.get("convergence_criteria", 0.001),
         checkpoints=em_checkpoints,
     )
+    if result is None:
+        return {}
 
     if em_checkpoints is not None:
         out: Dict[str, List[Dict[str, Any]]] = {}
-        for n_steps, alpha in result:
+        for n_steps, aligned in result:
             col = f"celfieish_{n_steps}_steps"
-            aligned = rearange_celfieish_deconvolution_results(
-                s["labels_dict_reversed"], alpha, ref_cells, n_labels=s["n_labels"]
-            )
             out[col] = _make_rows(
                 pb_index, col, aligned, target_proportions, s["labels_dict"], s["n_labels"]
             )
         return out
 
-    col = "celfieish"
-    aligned = rearange_celfieish_deconvolution_results(
-        s["labels_dict_reversed"], result, ref_cells, n_labels=s["n_labels"]
-    )
     return {
-        col: _make_rows(
-            pb_index, col, aligned, target_proportions, s["labels_dict"], s["n_labels"]
+        "celfieish": _make_rows(
+            pb_index, "celfieish", result, target_proportions, s["labels_dict"], s["n_labels"]
         )
     }
 
@@ -173,64 +129,34 @@ def _run_celfie_on_reads(
     s: Dict[str, Any],
     pb_index: int,
     target_proportions: np.ndarray,
-    prepare_reads: bool = True
+    prepare_reads: bool = True,
 ) -> Dict[str, List[Dict[str, Any]]]:
-    from baselines.deconvolution.celfie.celfie import (
-        build_celfie_input,
-        celfie_deconvolution,
-        rearange_celfie_deconvolution_results,
-    )
+    from baselines.deconvolution.celfie.celfie import run_celfie_deconvolution
 
-    atlas = model_cfg["atlas"]
-    ref_cells = model_cfg["ref_cells"]
     em_checkpoints = model_cfg.get("em_checkpoints")
-
-    reads_sorted = reads.sort_values(
-        ["chromosome", "read_start", "read_end"]
-    ).reset_index(drop=True)
-    reads_sorted["read_start"] = reads_sorted["read_start"].astype("int64")
-    reads_sorted["read_end"] = reads_sorted["read_end"].astype("int64")
-    prepared = reads_sorted
-    if prepare_reads:
-        prepared = atlas.prepare_reads(reads_sorted)
-    if prepared.empty:
-        return {}
-
-    celfie_in = build_celfie_input(prepared, atlas)
-    if not celfie_in["x_meth"]:
-        return {}
-
-    y_list, y_cov_list = atlas.get_meth_cov_for_regions(celfie_in["region_names"])
-    result = celfie_deconvolution(
-        celfie_in["x_meth"],
-        celfie_in["x_cov"],
-        y_list,
-        y_cov_list,
+    result = run_celfie_deconvolution(
+        reads, model_cfg["atlas"], s["labels_dict_reversed"],
+        n_labels=s["n_labels"], prepare_reads=prepare_reads,
         num_iterations=model_cfg.get("num_iterations", 50),
         convergence_criteria=model_cfg.get("convergence_criteria", 0.001),
         random_restarts=model_cfg.get("random_restarts", 1),
         checkpoints=em_checkpoints,
     )
+    if result is None:
+        return {}
 
     if em_checkpoints is not None:
         out: Dict[str, List[Dict[str, Any]]] = {}
-        for n_steps, alpha in result:
+        for n_steps, aligned in result:
             col = f"celfie_{n_steps}_steps"
-            aligned = rearange_celfie_deconvolution_results(
-                s["labels_dict_reversed"], alpha, ref_cells, n_labels=s["n_labels"]
-            )
             out[col] = _make_rows(
                 pb_index, col, aligned, target_proportions, s["labels_dict"], s["n_labels"]
             )
         return out
 
-    col = "celfie"
-    aligned = rearange_celfie_deconvolution_results(
-        s["labels_dict_reversed"], result, ref_cells, n_labels=s["n_labels"]
-    )
     return {
-        col: _make_rows(
-            pb_index, col, aligned, target_proportions, s["labels_dict"], s["n_labels"]
+        "celfie": _make_rows(
+            pb_index, "celfie", result, target_proportions, s["labels_dict"], s["n_labels"]
         )
     }
 

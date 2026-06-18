@@ -4,19 +4,18 @@
 
 # Model Configuration
 classifier:
-  classifier_type: "lookup"  # "methylbert", "dismir", "cancer_detector", "lookup"
+  classifier_type: "dismir"  # "methylbert", "dismir", "cancer_detector", "lookup"
   # MethylBERT-specific:
   foundation_model: "hanyangii/methylbert_hg19_12l"
-  classifier_head_implementation: "dmr_attention_based"
+  classifier_head_implementation: "grg_attention_based"
   # Dismir-specific:
   dismir_flavor: "lstm"          # or "mingru"
   # Shared:
-  soft_labels: false
+  soft_labels: true
 
 
 # Path to fine-tuned classifier checkpoint
-checkpoint_path: /data/dmytro/Experiments/ExtendedProportions/rrbs/Hg19_LookupClassifier_HardLabels/lookup_hard_hg19_cfsort_rrbs.pkl
-
+checkpoint_path: /home/luna.kuleuven.be/u0169940/Repos/syto/tmp/classifier_fit_test/dismir/SoftLabelsForRRBSsplits_205files_pooled_Jaccard_hg38_mincpg_4_minlen_10_d041/weight.pt
 # Labels dictionary: JSON file mapping int label -> cell type name
 # e.g. {"0": "B-cells", "1": "T-cells", ...}
 labels_dict_path: App/labels_dict.json
@@ -28,10 +27,12 @@ features_mask_path: /data/dmytro/Experiments/ExtendedProportions/rrbs/Hg19_Looku
 cell_type_match_dict_path: null
 
 # Number of labels in classification model
-num_labels: 40
+num_labels: 39
 
-# Atlas file (TSV with columns: chr, start, end, name, target, ...)
+# Atlas for the syto pipeline: used for read preparation (stage 2 overlap/trim)
+# and shared by all syto feature-based deconvolution methods.
 atlas_path: ../UXM_deconv/supplemental/Atlas.U25.l4.hg19.full.tsv
+atlas_name: Atlas.U25.l4.hg19
 
 # Input configuration
 input:
@@ -69,47 +70,83 @@ prediction_batch_size: 2200
 # If enabled, the final dmr prediction matrix will be augmented with 0-predictions rows for every missing cell-specific region
 fill_in_missing_labels: true
 missing_label_strategy: prior_blending # prior_blending, zeroes or prior_imputation
-pure_profiles_path: /data/dmytro/Experiments/ExtendedProportions/rrbs/Hg19_LookupClassifier_HardLabels/pseudobulk/fitted_deconvolvers_unifrorm_multinomial_all_top156features/pure_profiles.pkl 
 
-# Path to pre-computed uniform prior matrix (.npz). Required for prior_blending / prior_imputation
-uniform_prior_path: /data/dmytro/Experiments/ExtendedProportions/rrbs/Hg19_LookupClassifier_HardLabels/pseudobulk/fitted_deconvolvers_unifrorm_multinomial_all_top156features/uniform_prior.npz
+# Path to pseudobulk HDF5 produced by generate_pseudobulk.
+# Required when missing_label_strategy is prior_blending or prior_imputation —
+# the uniform prior is read from the pure_profiles stored inside this file.
+pseudobulk_h5_path: /home/luna.kuleuven.be/u0169940/Repos/syto/tmp/pseudobulk_generation/pseudobulk.h5
+
+# Split from which to read the uniform prior (default: train).
+# pure_profiles_split: train
 
 # Deconvolution configuration
 deconvolution:
-  methods:
-    - name: xgboost
+
+  # ── Syto feature-based deconvolvers ─────────────────────────────────────────
+  # These operate on the DMR-aggregated prediction matrix built by stage 4.
+  # They share the syto atlas defined at the top of this file.
+  # methods:
+  #   - name: xgboost
+  #     enabled: true
+  #     use_callibration: true
+  #     checkpoint_path: /data/dmytro/Experiments/ExtendedProportions/rrbs/Hg19_LookupClassifier_HardLabels/pseudobulk/fitted_deconvolvers_unifrorm_multinomial_all_top156features/xgb_deconvolver.joblib
+  #     calibrators_dir: /data/dmytro/Experiments/ExtendedProportions/rrbs/Hg19_LookupClassifier_HardLabels/pseudobulk/fitted_deconvolvers_unifrorm_multinomial_all_top156features/calibration/xgb_calibrators_and_predictions
+  #   - name: 3Layer_MLP
+  #     enabled: true
+  #     use_callibration: true
+  #     checkpoint_path: /data/dmytro/Experiments/ExtendedProportions/rrbs/Hg19_LookupClassifier_HardLabels/pseudobulk/fitted_deconvolvers_unifrorm_multinomial_all_top156features/mlp_best_deconvolver.pt
+  #     calibrators_dir: /data/dmytro/Experiments/ExtendedProportions/rrbs/Hg19_LookupClassifier_HardLabels/pseudobulk/fitted_deconvolvers_unifrorm_multinomial_all_top156features/calibration/mlp_calibrators_and_predictions
+  #   - name: Shallow_Wide_Network
+  #     enabled: true
+  #     use_callibration: true
+  #     checkpoint_path: /data/dmytro/Experiments/ExtendedProportions/rrbs/Hg19_LookupClassifier_HardLabels/pseudobulk/fitted_deconvolvers_unifrorm_multinomial_all_top156features/swn_best_deconvolver.pt
+  #     calibrators_dir: /data/dmytro/Experiments/ExtendedProportions/rrbs/Hg19_LookupClassifier_HardLabels/pseudobulk/fitted_deconvolvers_unifrorm_multinomial_all_top156features/calibration/swn_calibrators_and_predictions
+  #   - name: ls
+  #     flavor: nnls
+  #     enabled: true
+  #     use_callibration: true
+  #     checkpoint_path: /data/dmytro/Experiments/ExtendedProportions/rrbs/Hg19_LookupClassifier_HardLabels/pseudobulk/fitted_deconvolvers_unifrorm_multinomial_all_top156features/nnls_deconvolver.joblib
+  #     calibrators_dir: /data/dmytro/Experiments/ExtendedProportions/rrbs/hg19_LookupClassifier_HardLabels/pseudobulk/fitted_deconvolvers_unifrorm_multinomial_all_top156features/calibration/nnls_calibrators_and_predictions
+  #   - name: ls
+  #     flavor: psls
+  #     enabled: true
+  #     use_callibration: true
+  #     checkpoint_path: /data/dmytro/Experiments/ExtendedProportions/rrbs/Hg19_LookupClassifier_HardLabels/pseudobulk/fitted_deconvolvers_unifrorm_multinomial_all_top156features/psls_deconvolver.joblib
+  #     calibrators_dir: /data/dmytro/Experiments/ExtendedProportions/rrbs/Hg19_LookupClassifier_HardLabels/pseudobulk/fitted_deconvolvers_unifrorm_multinomial_all_top156features/calibration/psls_calibrators_and_predictions
+
+  # ── Read-based baseline deconvolvers ─────────────────────────────────────────
+  # Each baseline defines its own atlas.  UXM uses the same atlas as the syto
+  # pipeline above; CelFiE-ISH and CelFiE use a CpGBetaCountsMethylationAtlas.
+  # Set enabled: false to skip a baseline without removing its config block.
+  baselines:
+    - model: uxm
       enabled: true
-      use_callibration: true
-      checkpoint_path: /data/dmytro/Experiments/ExtendedProportions/rrbs/Hg19_LookupClassifier_HardLabels/pseudobulk/fitted_deconvolvers_unifrorm_multinomial_all_top156features/xgb_deconvolver.joblib
-      calibrators_dir: /data/dmytro/Experiments/ExtendedProportions/rrbs/Hg19_LookupClassifier_HardLabels/pseudobulk/fitted_deconvolvers_unifrorm_multinomial_all_top156features/calibration/xgb_calibrators_and_predictions
-    - name: 3Layer_MLP
+      atlas_path: ../UXM_deconv/supplemental/Atlas.U25.l4.hg19.full.tsv
+      ignore_cells: ["Megakaryocytes"]
+
+    - model: celfieish
       enabled: true
-      use_callibration: true
-      checkpoint_path: /data/dmytro/Experiments/ExtendedProportions/rrbs/Hg19_LookupClassifier_HardLabels/pseudobulk/fitted_deconvolvers_unifrorm_multinomial_all_top156features/mlp_best_deconvolver.pt
-      calibrators_dir: /data/dmytro/Experiments/ExtendedProportions/rrbs/Hg19_LookupClassifier_HardLabels/pseudobulk/fitted_deconvolvers_unifrorm_multinomial_all_top156features/calibration/mlp_calibrators_and_predictions
-    - name: Shallow_Wide_Network
+      atlas_path: /home/luna.kuleuven.be/u0169940/Repos/syto/baselines/deconvolution/celfieish/UXMU25_hg19_l1.txt   # CpGBetaCountsMethylationAtlas TSV
+      reference_genome: hg19
+      num_iterations: 400
+      convergence_criteria: 0.001
+      # em_checkpoints: [10, 50]   # uncomment to use checkpoint mode
+
+    - model: celfie
       enabled: true
-      use_callibration: true
-      checkpoint_path: /data/dmytro/Experiments/ExtendedProportions/rrbs/Hg19_LookupClassifier_HardLabels/pseudobulk/fitted_deconvolvers_unifrorm_multinomial_all_top156features/swn_best_deconvolver.pt
-      calibrators_dir: /data/dmytro/Experiments/ExtendedProportions/rrbs/Hg19_LookupClassifier_HardLabels/pseudobulk/fitted_deconvolvers_unifrorm_multinomial_all_top156features/calibration/swn_calibrators_and_predictions
-    - name: ls
-      flavor: nnls
-      enabled: true
-      use_callibration: true
-      checkpoint_path: /data/dmytro/Experiments/ExtendedProportions/rrbs/Hg19_LookupClassifier_HardLabels/pseudobulk/fitted_deconvolvers_unifrorm_multinomial_all_top156features/nnls_deconvolver.joblib
-      calibrators_dir: /data/dmytro/Experiments/ExtendedProportions/rrbs/hg19_LookupClassifier_HardLabels/pseudobulk/fitted_deconvolvers_unifrorm_multinomial_all_top156features/calibration/nnls_calibrators_and_predictions
-    - name: ls
-      flavor: psls
-      enabled: true
-      use_callibration: true
-      checkpoint_path: /data/dmytro/Experiments/ExtendedProportions/rrbs/Hg19_LookupClassifier_HardLabels/pseudobulk/fitted_deconvolvers_unifrorm_multinomial_all_top156features/psls_deconvolver.joblib
-      calibrators_dir: /data/dmytro/Experiments/ExtendedProportions/rrbs/Hg19_LookupClassifier_HardLabels/pseudobulk/fitted_deconvolvers_unifrorm_multinomial_all_top156features/calibration/psls_calibrators_and_predictions
- 
+      atlas_path: /home/luna.kuleuven.be/u0169940/Repos/syto/baselines/deconvolution/celfieish/UXMU25_hg19_l1.txt      # same format as celfieish
+      reference_genome: hg19
+      num_iterations: 400
+      convergence_criteria: 0.001
+      random_restarts: 1
+      # em_checkpoints: [10, 50]
+
 
 # Output configuration
+output_dir: /home/luna.kuleuven.be/u0169940/Repos/syto/tmp
 output:
   # output_dir: /data/dmytro/Experiments/ExtendedProportions/rrbs/MethylBert_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels_canonical/pseudobulk/fitted_deconvolvers_unifrorm_multinomial_all_top156features//deconvolutions/GSM7427265_GTEX-14JG1-0826-SM-L36ZF
-  output_dir: /data/dmytro/Experiments/ExtendedProportions/rrbs/Hg19_LookupClassifier_HardLabels/pseudobulk/fitted_deconvolvers_unifrorm_multinomial_all_top156features/deconvolutions_prior_blending
+  # output_dir: /data/dmytro/Experiments/ExtendedProportions/rrbs/Hg19_LookupClassifier_HardLabels/pseudobulk/fitted_deconvolvers_unifrorm_multinomial_all_top156features/deconvolutions_prior_blending
   save_processed_reads: false   # Save processed reads as pickle
   save_predictions: true       # Save predictions as pickle
   save_deconvolution: true     # Save deconvolution proportions as CSV

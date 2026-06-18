@@ -957,6 +957,40 @@ class PseudobulkHDF5Reader:
         pred_idx = self._prediction_indices(columns, num_pred_classes)
         return feature_matrices[:, :, pred_idx]
 
+    def read_uniform_prior(self, split_name: str) -> pd.DataFrame:
+        """Read the uniform prior matrix for a split from the HDF5 file.
+
+        The uniform prior is stored as the per-GR-group average of all
+        pure-profile feature matrices (i.e. ``feature_matrices.mean(axis=0)``
+        over cell types).  Row index 0 … n_gr_groups-1 corresponds directly
+        to ``dmr_ctype_label`` values used in the aggregated prediction DataFrames.
+
+        Args:
+            split_name: Name of the split (e.g. ``"train"``).
+
+        Returns:
+            DataFrame with columns from ``numeric_columns`` plus a
+            ``dmr_ctype_label`` integer column, suitable for passing to
+            :func:`aggregate_predictions_by_grg`.
+
+        Raises:
+            KeyError: If no pure profiles are found for *split_name*.
+        """
+        pp_group = PseudobulkHDF5Schema.pure_profiles_group(split_name)
+        with h5py.File(self.path, "r") as f:
+            if pp_group not in f:
+                raise KeyError(
+                    f"No pure profiles found for split '{split_name}' at "
+                    f"'{pp_group}' in {self.path}."
+                )
+            grp = f[pp_group]
+            uniform_prior = grp[PseudobulkHDF5Schema.DATASET_UNIFORM_PRIOR][...]
+            columns = self._decode_columns(grp.attrs["numeric_columns"])
+
+        df = pd.DataFrame(uniform_prior, columns=columns)
+        # df.insert(0, "dmr_ctype_label", range(len(df)))
+        return df
+
     def read_pseudobulk_matrices(
         self, split_name: str, num_pred_classes: int
     ) -> "tuple[np.ndarray, np.ndarray]":

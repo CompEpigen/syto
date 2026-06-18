@@ -147,8 +147,6 @@ class UXMMethylationAtlas(AbstractMethylationAtlas):
         df: pd.DataFrame,
         *,
         trim: bool = True,
-        seq_column: str = "seq",
-        methylation_pattern_column: str = "pattern",
         labels_dict: Optional[Dict] = None,
         cell_type_match_dict: Optional[Dict[str, str]] = None,
     ) -> pd.DataFrame:
@@ -177,9 +175,7 @@ class UXMMethylationAtlas(AbstractMethylationAtlas):
         """
         df = super().prepare_reads(
             df,
-            trim=trim,
-            seq_column=seq_column,
-            methylation_pattern_column=methylation_pattern_column,
+            trim=trim
         )
         if labels_dict is not None:
             df = self._annotate_dmr_labels(df, labels_dict, cell_type_match_dict or {})
@@ -195,8 +191,15 @@ class UXMMethylationAtlas(AbstractMethylationAtlas):
         labels_dict_reversed: Dict[str, int] = {
             v: int(k) for k, v in labels_dict.items()
         }
+        # Drop any pre-existing annotation columns so the merge below cannot
+        # produce duplicate column names (e.g. when the input reads were
+        # previously annotated and already carry these columns).
+        stale_cols = [c for c in ("target", "dmr_ctype", "dmr_ctype_matched", "dmr_ctype_label") if c in df.columns]
+        if stale_cols:
+            df = df.drop(columns=stale_cols)
         df = pd.merge(df, self._atlas[["name", "target"]], on="name", how="left")
         df.rename(columns={"target": "dmr_ctype"}, inplace=True)
+
         df["dmr_ctype_matched"] = df["dmr_ctype"].apply(
             lambda x: cell_type_match_dict.get(x, x)
         )

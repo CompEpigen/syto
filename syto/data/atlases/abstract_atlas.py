@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 from typing import Dict, List
 
 import pandas as pd
+from syto.data.dataset import resolve_column
 
 
 class AbstractAtlas(ABC):
@@ -39,9 +40,7 @@ class AbstractAtlas(ABC):
 
     def overlap_reads(
         self,
-        df: pd.DataFrame,
-        seq_column: str = "seq",
-        methylation_pattern_column: str = "pattern",
+        df: pd.DataFrame
     ) -> pd.DataFrame:
         """Annotate each read with the atlas region(s) it overlaps.
 
@@ -164,8 +163,6 @@ class AbstractAtlas(ABC):
         df: pd.DataFrame,
         *,
         trim: bool = True,
-        seq_column: str = "seq",
-        methylation_pattern_column: str = "pattern",
         **kwargs,
     ) -> pd.DataFrame:
         """Prepare reads for atlas-based analysis.
@@ -289,8 +286,6 @@ class AbstractMethylationAtlas(AbstractAtlas):
         df: pd.DataFrame,
         *,
         trim: bool = True,
-        seq_column: str = "seq",
-        methylation_pattern_column: str = "pattern",
         **kwargs,
     ) -> pd.DataFrame:
         """Overlap reads with atlas regions and optionally trim to boundaries.
@@ -318,16 +313,16 @@ class AbstractMethylationAtlas(AbstractAtlas):
         **kwargs
             Forwarded to :meth:`trim_reads`.
         """
+        dna_col = resolve_column(df.columns, "input_ids")
+        meth_col = resolve_column(df.columns, "methylation_ids")
         df = self.overlap_reads(
-            df,
-            seq_column=seq_column,
-            methylation_pattern_column=methylation_pattern_column,
+            df
         )
         if trim:
             df = self.trim_reads(
                 df,
-                seq_column=seq_column,
-                methylation_pattern_column=methylation_pattern_column,
+                seq_column=dna_col,
+                methylation_pattern_column=meth_col,
                 **kwargs,
             )
         return df

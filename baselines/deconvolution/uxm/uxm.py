@@ -14,6 +14,7 @@ import logging
 import pandas as pd
 import numpy as np
 from scipy import optimize
+from syto.data.dataset import resolve_column
 
 ### Selected original deconvolution code from https://github.com/nloyfer/UXM_deconv ###
 
@@ -189,7 +190,6 @@ def build_uxm_input(reads: pd.DataFrame) -> dict:
 
 def mark_records_methyl_state(
     reads_data,
-    methylation_pattern_column="pattern",
     methyl_tr=0.75,
     unmethyl_tr=0.25,
 ):
@@ -198,7 +198,8 @@ def mark_records_methyl_state(
     Adds columns ``M``, ``U``, ``NCPGS``, ``M_rate``, ``record_M``,
     ``record_U``, ``record_X`` to ``reads_data`` in-place and returns it.
     """
-    pat = reads_data[methylation_pattern_column]
+    meth_col = resolve_column(reads_data.columns, "methylation_ids")
+    pat = reads_data[meth_col]
     reads_data["M"] = pat.apply(lambda x: x.count("1"))
     reads_data["U"] = pat.apply(lambda x: x.count("0"))
     reads_data["NCPGS"] = reads_data["M"] + reads_data["U"]
@@ -210,6 +211,32 @@ def mark_records_methyl_state(
     reads_data["record_U"] = is_U.astype(int)
     reads_data["record_X"] = (~is_M & ~is_U).astype(int)
     return reads_data
+
+
+def run_uxm_deconvolution(
+    reads: pd.DataFrame,
+    atlas_df: pd.DataFrame,
+    ref_cells: list,
+    labels_dict_reversed: dict,
+    n_labels: int = None,
+):
+    """Mark read methylation state, build UXM input, deconvolve, and align proportions.
+
+    Returns a list of floats (one per label in labels_dict order), or None if
+    deconvolution fails (e.g. no overlapping reads).
+    """
+    reads = mark_records_methyl_state(reads.copy())
+    uxm_in = build_uxm_input(reads)
+    proportions = uxm_deconvolution(
+        atlas_df, ref_cells,
+        uxm_in["scaling_factors"], uxm_in["counts"],
+        sample_names=["sample"],
+    )[0]
+    if not isinstance(proportions, np.ndarray):
+        return None
+    return rearange_uxm_deconvolution_results(
+        labels_dict_reversed, proportions, ref_cells, n_labels=n_labels
+    )
 
 
 def prepare_reads_for_uxm(
