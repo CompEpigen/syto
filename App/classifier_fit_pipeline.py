@@ -127,7 +127,7 @@ class ClassifierFittingPipeline:
         if not self.mlflow_cfg.get("enabled", True):
             return
 
-        import mlflow
+        import mlflow  # pylint: disable=import-outside-toplevel
 
         tracking_uri = self.mlflow_cfg.get("tracking_uri")
         if tracking_uri:

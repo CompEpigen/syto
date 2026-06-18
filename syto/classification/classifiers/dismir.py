@@ -1,6 +1,4 @@
-import os
 import os.path
-from datetime import datetime
 import time
 from collections import defaultdict
 from typing import Union
@@ -281,7 +279,6 @@ class DISMIRNet(nn.Module):
 class VariableLengthDataset(Dataset):
     """
     Custom dataset for variable-length sequences that handles chunking.
-    TODO: Initialization via providing dataset from RAM instead of from disk
     """
 
     def __init__(self, data_path_or_df, max_sequence_length, conv_onehot_func):

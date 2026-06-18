@@ -33,7 +33,7 @@ for _key, _entry in _CLF_REGISTRY.items():
 def read_classifier_factory(name: str, path: str, **kwargs) -> AbstractReadClassifier:
     """
     Factory function to load a read classifier from a checkpoint or initiate a fresh
-    instance, in case the path is not provided (delegated to implementation level)
+    instance, in case the path is not provided (delegated to implementation level).
 
     Args:
         name: Identifier for the classifier type (e.g. "methylbert").
