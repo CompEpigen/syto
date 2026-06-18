@@ -363,6 +363,10 @@ class CpGBetaCountsMethylationAtlas(AbstractMethylationAtlas):
             .reset_index(drop=True)
         )
 
+        # pivot_table promotes integer values to float64; restore integer counts.
+        count_cols = [c for c in atlas_df.columns if c.endswith(("_METH", "_COV"))]
+        atlas_df[count_cols] = atlas_df[count_cols].astype(np.int32)
+
         _module_logger.info(
             "Atlas ready: %d row(s) × %d column(s).",
             len(atlas_df),

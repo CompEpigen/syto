@@ -10,7 +10,7 @@ Encoding convention (Syto):
 
 import logging
 from itertools import compress
-from typing import TYPE_CHECKING, Dict, List, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -162,6 +162,38 @@ class CelfieISH:
             self.alpha = new_alpha
         return self.alpha, i
 
+    def run_with_checkpoints(self, checkpoints: List[int]) -> List[Tuple[int, np.ndarray]]:
+        """Run EM for exactly max(checkpoints) iterations, snapshotting alpha at each checkpoint.
+
+        Unlike :meth:`two_step`, convergence is never checked — the loop always
+        runs for ``max(checkpoints)`` steps so that results at every requested
+        iteration are directly comparable across pseudobulks.
+
+        Parameters
+        ----------
+        checkpoints : list of int
+            1-based iteration numbers at which to record alpha.
+
+        Returns
+        -------
+        list of (iteration, alpha) tuples in ascending iteration order.
+        """
+        if self.alpha is None:
+            self._init_alpha()
+
+        checkpoint_set = set(checkpoints)
+        max_iter = max(checkpoints)
+        results: List[Tuple[int, np.ndarray]] = []
+
+        for i in range(1, max_iter + 1):
+            z = self._log_expectation(self.alpha)
+            new_alpha = self._maximization(z)
+            self.alpha = new_alpha
+            if i in checkpoint_set:
+                results.append((i, self.alpha.copy()))
+
+        return results
+
     def log_likelihood(self):
         ll = 0
         for w in range(len(self.x)):
@@ -305,8 +337,9 @@ def celfieish_deconvolution(
     beta_matrices: List[np.ndarray],
     num_iterations: int = 50,
     convergence_criteria: float = 0.001,
-) -> np.ndarray:
-    """Run CelFiE-ISH EM deconvolution and return cell-type proportions.
+    checkpoints: Optional[List[int]] = None,
+):
+    """Run CelFiE-ISH EM deconvolution.
 
     Parameters
     ----------
@@ -316,12 +349,20 @@ def celfieish_deconvolution(
         Per-region atlas beta matrices from
         :meth:`CelfieISHMethylationAtlas.get_beta_for_regions`.
     num_iterations : int
+        Max EM iterations when ``checkpoints`` is ``None``.
     convergence_criteria : float
+        Early-stop threshold when ``checkpoints`` is ``None``.
+    checkpoints : list of int, optional
+        When provided, runs exactly ``max(checkpoints)`` iterations without
+        early stopping and returns proportions at each requested step.
 
     Returns
     -------
     ndarray(T,)
-        Cell-type proportions summing to 1.
+        Cell-type proportions when ``checkpoints`` is ``None``.
+    list of (iteration, ndarray(T,))
+        Snapshot proportions when ``checkpoints`` is provided,
+        in ascending iteration order.
     """
     model = CelfieISH(
         mixture_matrices,
@@ -329,6 +370,8 @@ def celfieish_deconvolution(
         num_iterations=num_iterations,
         convergence_criteria=convergence_criteria,
     )
+    if checkpoints is not None:
+        return model.run_with_checkpoints(checkpoints)
     alpha, _ = model.two_step()
     return alpha
 

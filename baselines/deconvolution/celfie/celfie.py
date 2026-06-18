@@ -131,9 +131,10 @@ def em(
     alpha = np.random.uniform(size=(x.shape[0], y.shape[0]))
     alpha /= np.sum(alpha, axis=1)[:, np.newaxis]
 
-    _add_pseudocounts(1, np.nan_to_num(y / y_depths), y, y_depths)
-    _add_pseudocounts(0, np.nan_to_num(y / y_depths), y, y_depths)
-    gamma = y / y_depths
+    with np.errstate(invalid="ignore", divide="ignore"):
+        _add_pseudocounts(1, np.nan_to_num(y / y_depths), y, y_depths)
+        _add_pseudocounts(0, np.nan_to_num(y / y_depths), y, y_depths)
+        gamma = y / y_depths
 
     i = 0
     for i in range(num_iterations):
@@ -151,6 +152,56 @@ def em(
 
     ll = _log_likelihood(p0, p1, x_depths, x, y_depths, y, gamma, alpha)
     return alpha, gamma, ll, i
+
+
+def em_with_checkpoints(
+    x: np.ndarray,
+    x_depths: np.ndarray,
+    y: np.ndarray,
+    y_depths: np.ndarray,
+    checkpoints: List[int],
+) -> List[Tuple[int, np.ndarray]]:
+    """Run CelFiE EM for max(checkpoints) iterations, snapshotting alpha at each checkpoint.
+
+    Unlike :func:`em`, convergence is never checked — the loop always runs for
+    ``max(checkpoints)`` steps so that results at every iteration are directly
+    comparable across pseudobulks.
+
+    Parameters
+    ----------
+    x : ndarray(1, n_sites)
+    x_depths : ndarray(1, n_sites)
+    y : ndarray(T, n_sites)  — copied internally so the caller's array is unmodified.
+    y_depths : ndarray(T, n_sites)  — same.
+    checkpoints : list of int
+        1-based iteration numbers at which to record alpha.
+
+    Returns
+    -------
+    list of (iteration, ndarray(T,)) in ascending iteration order.
+    """
+    y = y.copy()
+    y_depths = y_depths.copy()
+
+    alpha = np.random.uniform(size=(x.shape[0], y.shape[0]))
+    alpha /= np.sum(alpha, axis=1)[:, np.newaxis]
+
+    with np.errstate(invalid="ignore", divide="ignore"):
+        _add_pseudocounts(1, np.nan_to_num(y / y_depths), y, y_depths)
+        _add_pseudocounts(0, np.nan_to_num(y / y_depths), y, y_depths)
+        gamma = y / y_depths
+
+    checkpoint_set = set(checkpoints)
+    max_iter = max(checkpoints)
+    results: List[Tuple[int, np.ndarray]] = []
+
+    for i in range(1, max_iter + 1):
+        p0, p1 = _expectation(gamma, alpha)
+        alpha, gamma = _maximization(p0, p1, x, x_depths, y, y_depths)
+        if i in checkpoint_set:
+            results.append((i, alpha.flatten().copy()))
+
+    return results
 
 
 # ---------------------------------------------------------------------------
@@ -262,8 +313,9 @@ def celfie_deconvolution(
     num_iterations: int = 50,
     convergence_criteria: float = 0.001,
     random_restarts: int = 1,
-) -> np.ndarray:
-    """Run CelFiE EM deconvolution and return cell-type proportions.
+    checkpoints: Optional[List[int]] = None,
+):
+    """Run CelFiE EM deconvolution.
 
     Parameters
     ----------
@@ -272,21 +324,32 @@ def celfie_deconvolution(
     y_list, y_cov_list : list of ndarray(T, n_CpGs)
         Per-region reference counts from
         :meth:`CpGBetaCountsMethylationAtlas.get_meth_cov_for_regions`.
-    num_iterations, convergence_criteria : EM stopping criteria.
+    num_iterations : int
+        Max EM iterations when ``checkpoints`` is ``None``.
+    convergence_criteria : float
+        Early-stop threshold when ``checkpoints`` is ``None``.
     random_restarts : int
-        Number of independent EM runs; the run with the highest
-        log-likelihood is returned.  Meaningful because EM is sensitive
-        to random alpha initialisation.
+        Independent EM runs; the best log-likelihood wins.
+        Ignored when ``checkpoints`` is provided (single run).
+    checkpoints : list of int, optional
+        When provided, runs exactly ``max(checkpoints)`` iterations without
+        early stopping or random restarts and returns proportions at each step.
 
     Returns
     -------
     ndarray(T,)
-        Cell-type proportions summing to 1.
+        Cell-type proportions when ``checkpoints`` is ``None``.
+    list of (iteration, ndarray(T,))
+        Snapshot proportions when ``checkpoints`` is provided,
+        in ascending iteration order.
     """
-    x        = np.hstack(x_meth_list)   # (1, total_CpGs)
+    x        = np.hstack(x_meth_list)
     x_depths = np.hstack(x_cov_list)
-    y        = np.hstack(y_list)         # (T, total_CpGs)
+    y        = np.hstack(y_list)
     y_depths = np.hstack(y_cov_list)
+
+    if checkpoints is not None:
+        return em_with_checkpoints(x, x_depths, y, y_depths, checkpoints)
 
     best_ll    = -np.inf
     best_alpha = None

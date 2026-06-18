@@ -75,7 +75,6 @@ def validate_config(config: Dict[str, Any], task: str) -> None:
             "pseudobulk_h5_path",
             "output_dir",
             "labels_dict_path",
-            "model",
         ],
     }
 
@@ -195,7 +194,7 @@ def run_pseudobulk_deconvolution(config: Dict[str, Any], logger: logging.Logger)
     """Run baseline deconvolution on a pre-generated pseudobulk HDF5 file."""
     from App.pseudobulk_deconvolution_pipeline import PseudobulkDeconvolutionPipeline
 
-    logger.info("Starting pseudobulk deconvolution pipeline (model: %s)", config["model"])
+    logger.info("Starting pseudobulk deconvolution pipeline")
     pipeline = PseudobulkDeconvolutionPipeline(config=config, logger=logger)
     pipeline.run()
 
