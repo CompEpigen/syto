@@ -57,3 +57,28 @@ def get_sig_from_idx(idx, sig_length, return_str=False):
     if return_str:
         return "".join(map(str, sig))
     return np.array(sig)
+
+
+def nrmse(y_true, y_pred) -> float:
+    """
+    Compute the NRMSE (Normalized Root Mean Squared Error) between the true and predicted probability distributions,
+    for all sample in y_pred.
+    The normalization is done by dividing the RMSE by the worst possible RMSE for each sample.
+    We return the average NRMSE over all samples.
+
+    It is expected that all rows of y_true and y_pred sum to 1, and that they have the same shape.
+
+    Args:
+        y_true (np.ndarray): True probability distributions, shape (n_samples, n_classes)
+        y_pred (np.ndarray): Predicted probability distributions, shape (n_samples, n_classes)
+    """
+    assert y_true.shape == y_pred.shape, "y_true and y_pred must have the same shape"
+    assert y_true.ndim == 2, "y_true and y_pred must be 2D arrays"
+    rmse_per_sample = np.sqrt(np.mean((y_true - y_pred) ** 2, axis=1))
+    # the worst possible prediction is the one that predicts 1 for the class
+    # with the lowest probability in y_true for each sample, and 0 for all other classes. This is equivalent to predicting the argmin of y_true for each sample.
+    worst_possible_prediction_per_sample = np.zeros_like(y_true)
+    worst_possible_prediction_per_sample[np.arange(y_true.shape[0]), y_true.argmin(axis=1)] = 1
+    worst_possible_rmse = np.sqrt(np.mean((y_true - worst_possible_prediction_per_sample) ** 2, axis=1))
+    avg_nrmse = np.mean(rmse_per_sample / worst_possible_rmse)
+    return avg_nrmse
