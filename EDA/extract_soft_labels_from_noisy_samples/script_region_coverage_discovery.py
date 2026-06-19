@@ -1,7 +1,7 @@
 """
-In this script, 
+In this script,
 
-we compute, for every dmr region in the atlas Data/Atlas.U25.l4.hg38.full.tsv, 
+we compute, for every dmr region in the atlas Data/Atlas.U25.l4.hg38.full.tsv,
 the read coverage of every cell type.
 
 The cell type files are located in /staging/leuven/stg_00118/methylDL/data/loyfer2023/hg38/data.
@@ -33,9 +33,15 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
-PATH_TO_DATA = Path("/staging/leuven/stg_00118/methylDL/data/loyfer2023/hg38/data/GSE186458")
-PATH_TO_ATLAS = Path("/data/leuven/389/vsc38912/Projects/syto/Data/Atlas.U25.l4.hg38.full.tsv")
-OUTPUT_CSV = Path("/data/leuven/389/vsc38912/Projects/syto/EDA/extract_soft_labels_from_noisy_samples/data/region_coverage.csv")
+PATH_TO_DATA = Path(
+    "/staging/leuven/stg_00118/methylDL/data/loyfer2023/hg38/data/GSE186458"
+)
+PATH_TO_ATLAS = Path(
+    "/data/leuven/389/vsc38912/Projects/syto/Data/Atlas.U25.l4.hg38.full.tsv"
+)
+OUTPUT_CSV = Path(
+    "/data/leuven/389/vsc38912/Projects/syto/EDA/extract_soft_labels_from_noisy_samples/data/region_coverage.csv"
+)
 
 # How many CpG positions to look back before the region start to capture reads
 # that begin upstream but still overlap the DMR region.
@@ -164,9 +170,7 @@ def main() -> None:
         )
         ctype_coverage: dict[int, int] = {}
         for file_idx, pat_file in enumerate(files, start=1):
-            log.debug(
-                "  [%d/%d] Reading %s", file_idx, len(files), pat_file.name
-            )
+            log.debug("  [%d/%d] Reading %s", file_idx, len(files), pat_file.name)
             file_cov = compute_coverage_for_file(pat_file, regions_by_chrom)
             for region_idx, cov in file_cov.items():
                 ctype_coverage[region_idx] = ctype_coverage.get(region_idx, 0) + cov
@@ -182,7 +186,12 @@ def main() -> None:
     output_df = pd.concat([atlas, coverage_df], axis=1)
 
     output_df.to_csv(OUTPUT_CSV, index=False)
-    log.info("Saved output (%d regions × %d columns) to %s", len(output_df), len(output_df.columns), OUTPUT_CSV)
+    log.info(
+        "Saved output (%d regions × %d columns) to %s",
+        len(output_df),
+        len(output_df.columns),
+        OUTPUT_CSV,
+    )
 
 
 if __name__ == "__main__":
