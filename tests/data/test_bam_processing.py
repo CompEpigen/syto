@@ -418,24 +418,23 @@ class TestProcessTabularChunk(unittest.TestCase):
 
     def test_requires_reference_path_for_wgbs_chunks(self):
         """Raise an error when a WGBS chunk is requested without a reference FASTA path."""
-        args = (
-            "chr1",
-            0,
-            100,
-            "fake.bam",
-            ["chr1"],
-            False,
-            122,
-            "wgbs",
-            None,
-            10,
-            3,
-            1796,
-            1,
+        task = bp.ChunkTask(
+            chromosome="chr1",
+            chunk_start=0,
+            chunk_end=100,
+            bam_path="fake.bam",
+            interesting_chromosomes=["chr1"],
+            methyl_tr=122,
+            data_type="wgbs",
+            reference_path=None,
+            min_mapq=10,
+            require_flags=3,
+            exclude_flags=1796,
+            min_cpgs=1,
         )
 
         with self.assertRaisesRegex(ValueError, "Reference genome path"):
-            bp.process_tabular_chunk(args)
+            bp.process_tabular_chunk(task)
 
     def test_processes_only_reads_starting_inside_the_chunk(self):
         """Skip overlapping reads that started in a previous chunk and close the FASTA handle afterward."""
@@ -448,20 +447,19 @@ class TestProcessTabularChunk(unittest.TestCase):
         fake_bam = FakeAlignmentFile(fetch_reads=reads)
         fake_fasta = FakeFastaFile()
 
-        args = (
-            "chr1",
-            100,
-            200,
-            "fake.bam",
-            ["chr1"],
-            False,
-            122,
-            "wgbs",
-            "ref.fa",
-            10,
-            3,
-            1796,
-            1,
+        task = bp.ChunkTask(
+            chromosome="chr1",
+            chunk_start=100,
+            chunk_end=200,
+            bam_path="fake.bam",
+            interesting_chromosomes=["chr1"],
+            methyl_tr=122,
+            data_type="wgbs",
+            reference_path="ref.fa",
+            min_mapq=10,
+            require_flags=3,
+            exclude_flags=1796,
+            min_cpgs=1,
         )
 
         with patch.object(
@@ -471,7 +469,7 @@ class TestProcessTabularChunk(unittest.TestCase):
             "process_single_read",
             side_effect=lambda **kwargs: [{"read_name": kwargs["read"].query_name}],
         ) as process_mock:
-            result = bp.process_tabular_chunk(args)
+            result = bp.process_tabular_chunk(task)
 
         # bam.fetch returns overlapping reads, so the chunk code must gate on reference_start
         # to avoid double-counting the same fragment in neighboring chunks.
@@ -526,7 +524,9 @@ class TestProcessBamWithChunking(unittest.TestCase):
 
         detect_mock.assert_called_once_with("fake.bam")
         self.assertEqual(chunk_mock.call_count, 3)
-        self.assertEqual(len(chunk_mock.call_args_list[0].args[0]), 13)
+        first_task = chunk_mock.call_args_list[0].args[0]
+        self.assertIsInstance(first_task, bp.ChunkTask)
+        self.assertEqual(first_task.chromosome, "chr1")
         merge_mock.assert_called_once()
         self.assertTrue(result.equals(merged_df))
 
@@ -540,7 +540,7 @@ class TestProcessBamWithChunking(unittest.TestCase):
             self.assertEqual(n_jobs, 2)
             return pool_instance
 
-        with patch("multiprocessing.pool.Pool", side_effect=pool_factory), patch.object(
+        with patch.object(bp, "Pool", side_effect=pool_factory), patch.object(
             bp.pysam, "AlignmentFile", return_value=fake_bam
         ), patch.object(bp, "merge_paired_reads") as merge_mock:
             result = bp.process_bam_with_chunking(
@@ -594,43 +594,43 @@ class TestMergePairedReads(unittest.TestCase):
         result = bp.merge_paired_reads(df, verbose=False)
         self.assertTrue(result.equals(df))
 
-    def test_groups_by_read_name_and_dmr_label_when_present(self):
-        """Merge exact mate pairs per DMR while preserving singletons and multiplets."""
+    def test_groups_by_read_name_and_grg_label_when_present(self):
+        """Merge exact mate pairs per GRG while preserving singletons and multiplets."""
         df = pd.DataFrame(
             [
                 {
                     "read_name": "single",
-                    "dmr_label": "A",
+                    "grg_label": "A",
                     "read_start": 10,
                     "payload": "single",
                 },
                 {
                     "read_name": "pair",
-                    "dmr_label": "A",
+                    "grg_label": "A",
                     "read_start": 20,
                     "payload": "mate2",
                 },
                 {
                     "read_name": "pair",
-                    "dmr_label": "A",
+                    "grg_label": "A",
                     "read_start": 10,
                     "payload": "mate1",
                 },
                 {
                     "read_name": "multi",
-                    "dmr_label": "A",
+                    "grg_label": "A",
                     "read_start": 1,
                     "payload": "m1",
                 },
                 {
                     "read_name": "multi",
-                    "dmr_label": "A",
+                    "grg_label": "A",
                     "read_start": 2,
                     "payload": "m2",
                 },
                 {
                     "read_name": "multi",
-                    "dmr_label": "A",
+                    "grg_label": "A",
                     "read_start": 3,
                     "payload": "m3",
                 },
@@ -647,8 +647,8 @@ class TestMergePairedReads(unittest.TestCase):
         self.assertEqual(merge_mock.call_args.args[0]["payload"], "mate1")
         self.assertEqual(merge_mock.call_args.args[1]["payload"], "mate2")
 
-    def test_groups_only_by_read_name_when_dmr_columns_are_absent(self):
-        """Fallback to read-name grouping when no DMR annotation columns exist."""
+    def test_groups_only_by_read_name_when_grg_columns_are_absent(self):
+        """Fallback to read-name grouping when no GRG annotation columns exist."""
         df = pd.DataFrame(
             [
                 {"read_name": "pair", "read_start": 8, "payload": "mate2"},
@@ -685,11 +685,11 @@ class TestMergeMatePair(unittest.TestCase):
                 "mapping_quality": 40,
                 "is_reverse": False,
                 "data_type": "wgbs",
-                "overlaps_dmr": True,
-                "dmr_label": "dmr-1",
-                "dmr_type": "hyper",
-                "dmr_start": 101,
-                "dmr_end": 108,
+                "overlaps_grg": True,
+                "grg_label": "grg-1",
+                "grg_type": "hyper",
+                "grg_start": 101,
+                "grg_end": 108,
             }
         )
         mate2 = pd.Series(
@@ -706,11 +706,11 @@ class TestMergeMatePair(unittest.TestCase):
                 "mapping_quality": 35,
                 "is_reverse": True,
                 "data_type": "wgbs",
-                "overlaps_dmr": False,
-                "dmr_label": "dmr-1",
-                "dmr_type": "hyper",
-                "dmr_start": 101,
-                "dmr_end": 108,
+                "overlaps_grg": False,
+                "grg_label": "grg-1",
+                "grg_type": "hyper",
+                "grg_start": 101,
+                "grg_end": 108,
             }
         )
 
@@ -756,7 +756,7 @@ class TestMergeMatePair(unittest.TestCase):
     def test_falls_back_to_precomputed_clipped_counts_when_clipped_sequences_are_missing(
         self,
     ):
-        """Use stored clipped counts and legacy DMR keys when clipped sequences are unavailable."""
+        """Use stored clipped counts and legacy GRG keys when clipped sequences are unavailable."""
         mate1 = pd.Series(
             {
                 "read_name": "pair",
@@ -768,9 +768,9 @@ class TestMergeMatePair(unittest.TestCase):
                 "mapping_quality": 30,
                 "is_reverse": False,
                 "data_type": "ont",
-                "overlaps_dmr": False,
-                "dmr_labels": "legacy-dmr",
-                "dmr_types": "hypo",
+                "overlaps_grg": False,
+                "grg_labels": "legacy-grg",
+                "grg_types": "hypo",
                 "clipped_methylated": 1,
                 "clipped_unmethylated": 2,
             }
@@ -786,7 +786,7 @@ class TestMergeMatePair(unittest.TestCase):
                 "mapping_quality": 20,
                 "is_reverse": True,
                 "data_type": "ont",
-                "overlaps_dmr": True,
+                "overlaps_grg": True,
                 "clipped_methylated": 2,
                 "clipped_unmethylated": 1,
             }
@@ -807,9 +807,9 @@ class TestMergeMatePair(unittest.TestCase):
         ):
             merged = bp._merge_mate_pair(mate1, mate2)
 
-        self.assertEqual(merged["dmr_label"], "legacy-dmr")
-        self.assertEqual(merged["dmr_type"], "hypo")
-        self.assertTrue(merged["overlaps_dmr"])
+        self.assertEqual(merged["grg_label"], "legacy-grg")
+        self.assertEqual(merged["grg_type"], "hypo")
+        self.assertTrue(merged["overlaps_grg"])
         self.assertEqual(merged["clipped_total"], 6)
         self.assertEqual(merged["seq_clipped"], "")
         self.assertEqual(merged["methylation_clipped"], "")
