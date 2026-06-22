@@ -68,6 +68,7 @@ class AbstractAtlas(ABC):
             Annotated reads with ``name``, ``region_start``, ``region_end``.
         """
         atlas = self.atlas.sort_values(["chr", "start", "end"]).reset_index(drop=True)
+        df = df.sort_values(["chromosome", "read_start", "read_end"]).reset_index(drop=True)
         n_records = len(df)
 
         if n_records == 0 or len(atlas) == 0:
