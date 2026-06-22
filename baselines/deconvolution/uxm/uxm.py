@@ -15,6 +15,7 @@ import pandas as pd
 import numpy as np
 from scipy import optimize
 from syto.data.dataset import resolve_column
+from baselines.deconvolution.utils import rearange_deconvolution_results
 
 ### Selected original deconvolution code from https://github.com/nloyfer/UXM_deconv ###
 
@@ -144,21 +145,6 @@ def uxm_deconvolution(
 ### Additional utilities, specific to this repo ###
 
 
-def rearange_uxm_deconvolution_results(
-    labels_dict_reversed, uxm_proportions, ref_cells, n_labels=None
-):
-    """
-    The function rearanges uxm deconvolution results to match target labels order encoded in the input dictionary
-    """
-    if n_labels is None:
-        n_labels = len(labels_dict_reversed)
-    ref_pos = np.array([labels_dict_reversed.get(cell, -1) for cell in ref_cells])
-    uxm_proportions_aligned = [
-        uxm_proportions[i]
-        for i in [int(np.where(ref_pos == i)[0][0]) for i in range(n_labels)]
-    ]
-    return uxm_proportions_aligned
-
 
 def build_uxm_input(reads: pd.DataFrame, min_cpgs_count=4) -> dict:
     """
@@ -237,7 +223,7 @@ def run_uxm_deconvolution(
     )[0]
     if not isinstance(proportions, np.ndarray):
         return None
-    return rearange_uxm_deconvolution_results(
+    return rearange_deconvolution_results(
         labels_dict_reversed, proportions, ref_cells, n_labels=n_labels
     )
 

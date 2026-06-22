@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 
 from baselines.deconvolution.uxm import uxm
+from baselines.deconvolution.utils import rearange_deconvolution_results
 
 
 def _make_valid_atlas_df():
@@ -282,20 +283,20 @@ class TestUxmDeconvolution(unittest.TestCase):
         self.assertAlmostEqual(float(arr[1][1]), 0.9, places=6)
 
 
-class TestRearangeUxmDeconvolutionResults(unittest.TestCase):
-    """Tests for uxm.rearange_uxm_deconvolution_results."""
+class TestRearangeDeconvolutionResults(unittest.TestCase):
+    """Tests for rearange_deconvolution_results."""
 
-    def test_rearange_uxm_deconvolution_results(self):
+    def test_rearange_deconvolution_results(self):
         """Reorder proportions to align with label index order from 0 to 38."""
         labels_dict_reversed = {f"ct{i}": i for i in range(39)}
         # Build a non-trivial order to ensure reordering is actually tested.
         perm = list(range(38, -1, -1))
         ref_cells = [f"ct{i}" for i in perm]
-        uxm_proportions = [i / 100.0 for i in perm]
+        proportions = [i / 100.0 for i in perm]
 
-        out = uxm.rearange_uxm_deconvolution_results(
+        out = rearange_deconvolution_results(
             labels_dict_reversed=labels_dict_reversed,
-            uxm_proportions=uxm_proportions,
+            proportions=proportions,
             ref_cells=ref_cells,
         )
 

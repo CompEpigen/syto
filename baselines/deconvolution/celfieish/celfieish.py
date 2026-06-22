@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
+from baselines.deconvolution.utils import rearange_deconvolution_results
 from scipy.special import logsumexp
 
 if TYPE_CHECKING:
@@ -459,46 +460,13 @@ def run_celfieish_deconvolution(
         return [
             (
                 n_steps,
-                rearange_celfieish_deconvolution_results(
+                rearange_deconvolution_results(
                     labels_dict_reversed, alpha, ref_cells, n_labels=n_labels
                 ),
             )
             for n_steps, alpha in result
         ]
 
-    return rearange_celfieish_deconvolution_results(
+    return rearange_deconvolution_results(
         labels_dict_reversed, result, ref_cells, n_labels=n_labels
     )
-
-
-def rearange_celfieish_deconvolution_results(
-    labels_dict_reversed: Dict[str, int],
-    celfieish_proportions: np.ndarray,
-    ref_cells: List[str],
-    n_labels: Optional[int] = None,
-) -> List[float]:
-    """Reorder CelFiE-ISH proportions to match the project's label index order.
-
-    Parameters
-    ----------
-    labels_dict_reversed : dict
-        ``cell_type_name → label_index`` mapping.
-    celfieish_proportions : ndarray(T,)
-        Proportions in atlas cell-type order (``ref_cells`` ordering).
-    ref_cells : list of str
-        Cell-type names corresponding to axes of ``celfieish_proportions``.
-    n_labels : int, optional
-        Number of labels; defaults to ``len(labels_dict_reversed)``.
-
-    Returns
-    -------
-    list of float
-        Proportions reindexed to ``label_index`` order (0 … n_labels-1).
-    """
-    if n_labels is None:
-        n_labels = len(labels_dict_reversed)
-    ref_pos = np.array([labels_dict_reversed.get(cell, -1) for cell in ref_cells])
-    return [
-        celfieish_proportions[int(np.where(ref_pos == i)[0][0])]
-        for i in range(n_labels)
-    ]

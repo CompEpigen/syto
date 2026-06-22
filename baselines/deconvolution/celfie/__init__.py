@@ -3,13 +3,13 @@ from baselines.deconvolution.celfie.celfie import (
     celfie_deconvolution,
     em,
     prepare_reads_for_celfie,
-    rearange_celfie_deconvolution_results,
 )
+from baselines.deconvolution.utils import rearange_deconvolution_results
 
 __all__ = [
     "build_celfie_input",
     "celfie_deconvolution",
     "em",
     "prepare_reads_for_celfie",
-    "rearange_celfie_deconvolution_results",
+    "rearange_deconvolution_results",
 ]

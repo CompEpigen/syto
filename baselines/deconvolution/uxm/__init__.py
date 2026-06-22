@@ -4,11 +4,11 @@ from baselines.deconvolution.uxm.uxm import (
     load_atlas,
     mark_records_methyl_state,
     prepare_reads_for_uxm,
-    rearange_uxm_deconvolution_results,
     uxm_deconvolution,
     validate_file,
     validate_ref_tissues,
 )
+from baselines.deconvolution.utils import rearange_deconvolution_results
 
 __all__ = [
     "build_uxm_input",
@@ -16,7 +16,7 @@ __all__ = [
     "load_atlas",
     "mark_records_methyl_state",
     "prepare_reads_for_uxm",
-    "rearange_uxm_deconvolution_results",
+    "rearange_deconvolution_results",
     "uxm_deconvolution",
     "validate_file",
     "validate_ref_tissues",

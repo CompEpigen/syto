@@ -6,8 +6,8 @@ from baselines.deconvolution.celfieish.celfieish import (
     build_celfieish_input,
     celfieish_deconvolution,
     prepare_reads_for_celfieish,
-    rearange_celfieish_deconvolution_results,
 )
+from baselines.deconvolution.utils import rearange_deconvolution_results
 
 __all__ = [
     "CelfieISH",
@@ -17,5 +17,5 @@ __all__ = [
     "build_celfieish_input",
     "celfieish_deconvolution",
     "prepare_reads_for_celfieish",
-    "rearange_celfieish_deconvolution_results",
+    "rearange_deconvolution_results",
 ]
