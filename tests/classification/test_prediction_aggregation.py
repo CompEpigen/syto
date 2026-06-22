@@ -6,7 +6,6 @@ import pandas as pd
 from syto.classification.prediction_aggregation import (
     aggregate_chuncked_predictions_weighted,
     aggregate_predictions_by_grg,
-    aggregate_predictions_by_grg_optimized,
     get_final_prediction,
     fill_in_missing_gr_groups,
 )
@@ -320,72 +319,6 @@ class TestAggregatePredictionsByDmr(PredictionAggregationDataFrameTestBase):
         self.assertEqual(len(result), 1)
         self.assertEqual(result.iloc[0]["dmr_ctype_label"], 0)
         self.assertEqual(result.iloc[0]["dmr_ctype"], "ctype_a")
-
-
-class TestAggregatePredictionsByDmrOptimized(PredictionAggregationDataFrameTestBase):
-    """Validate the vectorized aggregation implementation and its error path."""
-
-    def test_aggregate_predictions_by_grg_optimized_matches_expected_weighted_outputs(
-        self,
-    ):
-        """Compute weighted averages, counts, and metadata with the optimized code path."""
-        result = aggregate_predictions_by_grg_optimized(
-            self.read_level_prediction_df,
-            group_cols=["dmr_label", "file", "original_label"],
-        )
-
-        dmr_a = result[result["dmr_label"] == "dmr_a"].iloc[0]
-        self.assertAlmostEqual(dmr_a["prediction_0_wavg"], 0.5)
-        self.assertAlmostEqual(dmr_a["prediction_1_wavg"], 0.5)
-        self.assertAlmostEqual(dmr_a["methylation_level_wavg"], 0.375)
-        self.assertEqual(dmr_a["n_reads"], 2)
-        self.assertAlmostEqual(dmr_a["total_weight"], 8.0)
-
-        dmr_b = result[result["dmr_label"] == "dmr_b"].iloc[0]
-        self.assertAlmostEqual(dmr_b["prediction_0_wavg"], 0.5)
-        self.assertAlmostEqual(dmr_b["prediction_1_wavg"], 0.5)
-        self.assertAlmostEqual(dmr_b["methylation_level_wavg"], 11 / 30)
-        self.assertEqual(dmr_b["total_weight"], 3)
-        self.assertEqual(dmr_b["n_reads"], 2)
-
-    def test_aggregate_predictions_by_grg_optimized_handles_zero_sum_weights_after_float_cast(
-        self,
-    ):
-        """Use clipped float weights so the optimized path also returns valid averages."""
-        result = aggregate_predictions_by_grg_optimized(
-            self.zero_weight_prediction_df,
-            group_cols=["dmr_label", "file", "original_label"],
-        )
-
-        row = result.iloc[0]
-        # As in the non-optimized path, equal fallback weights reduce the weighted
-        # averages to the same values as the simple per-group means.
-        self.assertAlmostEqual(row["prediction_0_wavg"], 0.6)
-        self.assertAlmostEqual(row["prediction_1_wavg"], 0.4)
-        self.assertAlmostEqual(row["methylation_level_wavg"], 0.5)
-        self.assertEqual(row["total_weight"], 0)
-        self.assertEqual(row["n_reads"], 2)
-
-    def test_aggregate_predictions_by_grg_optimized_raises_when_weight_is_missing(self):
-        """Raise a clear error when no usable weight information exists."""
-        df = pd.DataFrame(
-            [
-                {
-                    "group": "g1",
-                    "prediction_0": 0.2,
-                    "prediction_1": 0.8,
-                    "methylation_level": 0.5,
-                }
-            ]
-        )
-
-        with self.assertRaises(ValueError) as context:
-            aggregate_predictions_by_grg_optimized(df, group_cols=["group"])
-
-        self.assertIn(
-            "Weight column 'total_marked_cpgs' not found", str(context.exception)
-        )
-
 
 class TestAggregateChunkedPredictionsWeighted(unittest.TestCase):
     """Cover weighted aggregation for chunked per-read predictions."""
