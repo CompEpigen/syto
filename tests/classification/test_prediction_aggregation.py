@@ -28,9 +28,7 @@ def build_read_level_prediction_df() -> pd.DataFrame:
                 "methylation_level": 0.75,
                 "methylated_CpGs": 1,
                 "unmethylated_CpGs": 1,
-                "ctype": "meta_a",
-                "label": 7,
-                "chromosome": "chr1",
+                "ctype": "meta_a"
             },
             {
                 "dmr_label": "dmr_a",
@@ -45,8 +43,6 @@ def build_read_level_prediction_df() -> pd.DataFrame:
                 "methylated_CpGs": 2,
                 "unmethylated_CpGs": 4,
                 "ctype": "meta_a",
-                "label": 7,
-                "chromosome": "chr1",
             },
             {
                 "dmr_label": "dmr_b",
@@ -61,8 +57,6 @@ def build_read_level_prediction_df() -> pd.DataFrame:
                 "methylated_CpGs": 1,
                 "unmethylated_CpGs": 0,
                 "ctype": "meta_b",
-                "label": 3,
-                "chromosome": "chr2",
             },
             {
                 "dmr_label": "dmr_b",
@@ -77,8 +71,6 @@ def build_read_level_prediction_df() -> pd.DataFrame:
                 "methylated_CpGs": 0,
                 "unmethylated_CpGs": 2,
                 "ctype": "meta_b",
-                "label": 3,
-                "chromosome": "chr2",
             },
         ]
     )
@@ -155,7 +147,7 @@ class TestAggregatePredictionsByDmr(PredictionAggregationDataFrameTestBase):
 
     def test_aggregate_predictions_by_grg_with_defaults(self):
         """Aggregate with inferred prediction columns and weights created from CpG counts."""
-        result = aggregate_predictions_by_grg(self.read_level_prediction_df)
+        result = aggregate_predictions_by_grg(self.read_level_prediction_df, group_cols=["dmr_label", "original_label", "dmr_ctype"])
 
         self.assertNotIn("index", result.columns)
         self.assertEqual(len(result), 2)
@@ -169,10 +161,7 @@ class TestAggregatePredictionsByDmr(PredictionAggregationDataFrameTestBase):
         self.assertAlmostEqual(dmr_a["methylation_level_wavg"], 0.375)
         self.assertAlmostEqual(dmr_a["total_weight"], 8.0)
         self.assertEqual(dmr_a["n_reads"], 2)
-        self.assertEqual(dmr_a["ctype"], "meta_a")
         self.assertEqual(dmr_a["dmr_ctype"], "ctype_a")
-        self.assertEqual(dmr_a["label"], 7)
-        self.assertEqual(dmr_a["chromosome"], "chr1")
 
         dmr_b = result[result["dmr_label"] == "dmr_b"].iloc[0]
         self.assertAlmostEqual(dmr_b["prediction_0_avg"], 0.6)
@@ -270,8 +259,6 @@ class TestAggregatePredictionsByDmr(PredictionAggregationDataFrameTestBase):
                 "methylation_level",
                 "methylated_CpGs",
                 "unmethylated_CpGs",
-                "label",
-                "chromosome",
             ],
         ]
 
@@ -294,8 +281,6 @@ class TestAggregatePredictionsByDmr(PredictionAggregationDataFrameTestBase):
         self.assertAlmostEqual(existing_row["methylation_level_wavg"], 0.375)
         self.assertEqual(existing_row["n_reads"], 2)
         self.assertAlmostEqual(existing_row["total_weight"], 8.0)
-        self.assertEqual(existing_row["label"], 7)
-        self.assertEqual(existing_row["chromosome"], "chr1")
 
         missing_row = result[result["dmr_ctype_label"] == 1].iloc[0]
         self.assertEqual(missing_row["dmr_ctype"], "ctype_b")
@@ -304,9 +289,6 @@ class TestAggregatePredictionsByDmr(PredictionAggregationDataFrameTestBase):
         self.assertEqual(missing_row["prediction_0_wavg"], 0.5)
         self.assertEqual(missing_row["prediction_1_wavg"], 0.5)
         self.assertEqual(missing_row["n_reads"], 0)
-        self.assertEqual(missing_row["label"], -1)
-        self.assertEqual(missing_row["chromosome"], 0)
-        # self.assertEqual(missing_row["total_weight"], ???)
 
     def test_aggregate_predictions_by_grg_keeps_original_rows_when_no_labels_are_missing(
         self,
@@ -355,8 +337,6 @@ class TestAggregatePredictionsByDmrOptimized(PredictionAggregationDataFrameTestB
         self.assertAlmostEqual(dmr_a["methylation_level_wavg"], 0.375)
         self.assertEqual(dmr_a["n_reads"], 2)
         self.assertAlmostEqual(dmr_a["total_weight"], 8.0)
-        self.assertEqual(dmr_a["label"], 7)
-        self.assertEqual(dmr_a["chromosome"], "chr1")
 
         dmr_b = result[result["dmr_label"] == "dmr_b"].iloc[0]
         self.assertAlmostEqual(dmr_b["prediction_0_wavg"], 0.5)
@@ -561,8 +541,6 @@ def _build_aggregated_with_missing_label() -> tuple:
                 "prediction_1": 0.2,
                 "methylation_level": 0.6,
                 "total_weight": 5.0,
-                "label": 0,
-                "chromosome": "chr1",
             },
             {
                 "dmr_ctype_label": 0,
@@ -571,8 +549,6 @@ def _build_aggregated_with_missing_label() -> tuple:
                 "prediction_1": 0.3,
                 "methylation_level": 0.6,
                 "total_weight": 5.0,
-                "label": 0,
-                "chromosome": "chr1",
             },
         ]
     )

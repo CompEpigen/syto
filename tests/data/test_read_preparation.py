@@ -88,10 +88,10 @@ class TestAtlasOverlapAndTrim(unittest.TestCase):
             by=["chromosome", "read_start", "read_end"]
         ).reset_index(drop=True)
         overlapped = atlas.overlap_reads(
-            df_sorted, seq_column="seq", methylation_pattern_column="pattern"
+            df_sorted
         )
         return atlas.trim_reads(
-            overlapped, seq_column="seq", methylation_pattern_column="pattern"
+            overlapped
         )
 
     def test_fully_contained_read_is_unchanged(self):
