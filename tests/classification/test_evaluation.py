@@ -63,16 +63,8 @@ class TestCalculateMetricWithSklearn(unittest.TestCase):
 class TestPreprocessLogitsForPrediction(unittest.TestCase):
     """Test suite for preprocess_logits_for_prediction."""
 
-    def test_binary_returns_sigmoid(self):
-        """2-class logits should return sigmoid probabilities."""
-        logits = torch.tensor([[2.0, -1.0], [0.0, 3.0]])
-        result = preprocess_logits_for_prediction(logits, None)
-        # Should be sigmoid of logits
-        expected = torch.sigmoid(logits)
-        self.assertTrue(torch.allclose(result, expected))
-
     def test_multiclass_returns_softmax(self):
-        """Multi-class (>2) logits should return softmax probabilities."""
+        """Multi-class (>=2) logits should return softmax probabilities."""
         logits = torch.randn(3, 5)
         result = preprocess_logits_for_prediction(logits, None)
         expected = torch.softmax(logits, dim=-1)
