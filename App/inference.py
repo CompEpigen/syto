@@ -112,7 +112,6 @@ class InferencePipeline:
         self.predictions_df: Optional[pd.DataFrame] = None
         self.dmr_aggregated: Optional[pd.DataFrame] = None
         self.deconvolution_results: Dict[str, Any] = {}
-        self.features_mask = np.load(config["features_mask_path"])["features_mask"]
 
         # By default the algorithm assumes that we have at least some data for each DMR group.
         self.fill_in_missing_labels = self.config.get("fill_in_missing_labels", False)
@@ -136,8 +135,12 @@ class InferencePipeline:
             self.num_labels = len(self.labels_dict)
         else:
             self.num_labels = self.config["num_labels"]
+        deconv_cfg = self.config.get("deconvolution", {})
+        self.syto_methods_enabled = deconv_cfg.get("syto", False)
+        if self.syto_methods_enabled:
+            self.features_mask = np.load(config["features_mask_path"])["features_mask"]
+            self.input_length = int(np.sum(self.features_mask))
 
-        self.input_length = int(np.sum(self.features_mask))
 
     # ═══════════════════════════════════════════════════════════════════
     #  Public API
@@ -146,8 +149,15 @@ class InferencePipeline:
     def run(self) -> List[Tuple[str, str, np.ndarray]]:
         """Execute the full inference pipeline end-to-end."""
         # pylint: disable=attribute-defined-outside-init
-
         self.skip_classification = False
+        self.skip_reads_processing = False
+        self.skip_aggregation_for_syto = False
+        self.logger.info(f"The config doesn't feature syto methods --> related classification and feature extraction methods will be skipped")
+
+        if not self.syto_methods_enabled:
+            self.skip_classification = True
+            self.skip_aggregation_for_syto = True
+
         # ── Stage 1: obtain processed reads ─────────────────────────────
         input_cfg = self.config["input"]
         if input_cfg["type"] == "bam":
@@ -164,13 +174,14 @@ class InferencePipeline:
                 f"Classified reads were provided: {len(self.predictions_df)} processed reads. Proceeding with deconvolution."
             )
             self.skip_classification = True
+            self.skip_reads_processing = True
         else:
             raise ValueError(
                 f"Unknown input type: {input_cfg['type']}. "
                 "Must be 'bam' or 'parsed_reads' or 'predicted_reads'."
             )
         if not self.processed_reads is None:
-            if not self.skip_classification:
+            if not self.skip_reads_processing:
                 self.logger.info(
                     f"Stage 1 complete: {len(self.processed_reads)} processed reads"
                 )
@@ -182,16 +193,22 @@ class InferencePipeline:
                 )
 
                 # ── Stage 3: classifier predictions ─────────────────────────────
-                self.predictions_df = self._predict_classifier()
-                self.logger.info(
-                    f"Stage 3 complete: predictions for {len(self.predictions_df)} reads"
-                )
+                if not self.skip_classification:
+                    self.predictions_df = self._predict_classifier()
+                    self.logger.info(
+                        f"Stage 3 complete: predictions for {len(self.predictions_df)} reads"
+                    )
 
         # ── Stage 4: aggregate to DMR level ────────────────────────────
-        self.dmr_aggregated = self._aggregate_to_dmr()
-        self.logger.info(
-            f"Stage 4 complete: {len(self.dmr_aggregated)} DMR-level aggregations"
-        )
+        if not self.skip_aggregation_for_syto:
+            self.dmr_aggregated = self._aggregate_to_dmr()
+            self.logger.info(
+                f"Stage 4 complete: {len(self.dmr_aggregated)} DMR-level aggregations"
+            )
+        else: 
+             self.logger.info(
+                f"Stage 4 is skipped as no prediction aggregation is required for baseline methods"
+            )
         # ── Stage 5: deconvolution ─────────────────────────────────────
         self.deconvolution_results = self._run_deconvolution()
         self.logger.info(
@@ -472,7 +489,7 @@ class InferencePipeline:
         results: List[Tuple[str, str, np.ndarray]] = []
 
         # ── Syto feature-based methods ──────────────────────────────────
-        for method_cfg in deconv_cfg.get("methods", []):
+        for method_cfg in deconv_cfg.get("syto", []):
             if not method_cfg.get("enabled", False):
                 continue
 
@@ -863,7 +880,7 @@ class InferencePipeline:
     def _save_results(self) -> None:
         """Save all pipeline outputs to the configured output directory."""
         output_cfg = self.config.get("output", {})
-        output_dir = output_cfg.get("output_dir", "./inference_output")
+        output_dir = self.config.get("output_dir", "./inference_output")
         os.makedirs(output_dir, exist_ok=True)
 
         # ── Processed reads (pickle) ───────────────────────────────────
