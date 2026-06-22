@@ -19,9 +19,7 @@ def prepare_splits_for_pseudobulk(
     target_columns: Optional[List[str]] = None,
     num_labels: int = 39,
     trim: bool = True,
-    atlas: Optional["AbstractAtlas"] = None,
-    seq_column: str = "seq",
-    methylation_pattern_column: str = "pattern",
+    atlas: Optional["AbstractAtlas"] = None
 ) -> Dict[str, pd.DataFrame]:
     """Add derived columns needed by the pseudobulk generator and optionally
     overlap reads with atlas regions.
@@ -92,14 +90,10 @@ def prepare_splits_for_pseudobulk(
                 by=["chromosome", "read_start", "read_end"], ascending=True
             ).reset_index(drop=True)
             overlapped = atlas.overlap_reads(
-                df_sorted,
-                seq_column=seq_column,
-                methylation_pattern_column=methylation_pattern_column,
+                df_sorted
             )
             splits_copy[split_name] = atlas.trim_reads(
-                overlapped,
-                seq_column=seq_column,
-                methylation_pattern_column=methylation_pattern_column,
+                overlapped
             )
 
     return splits_copy
