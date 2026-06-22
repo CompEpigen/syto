@@ -240,5 +240,6 @@ class TestTrainXGBDeconvolverConvenience(unittest.TestCase):
         self.assertIsInstance(history, DeconvolutionHistory)
         self.assertEqual(history.train_loss, [0.2])
 
+
 if __name__ == "__main__":
     unittest.main()

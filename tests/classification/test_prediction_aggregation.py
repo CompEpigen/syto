@@ -320,6 +320,7 @@ class TestAggregatePredictionsByDmr(PredictionAggregationDataFrameTestBase):
         self.assertEqual(result.iloc[0]["dmr_ctype_label"], 0)
         self.assertEqual(result.iloc[0]["dmr_ctype"], "ctype_a")
 
+
 class TestAggregateChunkedPredictionsWeighted(unittest.TestCase):
     """Cover weighted aggregation for chunked per-read predictions."""
 
