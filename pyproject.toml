@@ -4,7 +4,7 @@ version = "0.5.0"
 description = ""
 authors = ["Dmytro Rizdvanetskyi", "Nathan Roos"]
 readme = "README.md"
-packages = [{include = "syto"}]
+packages = [{include = "syto"}, {include = "baselines"}]
 
 [tool.poetry.dependencies]
 python = "^3.11"
@@ -52,8 +52,11 @@ priority = "explicit"
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
 [tool.coverage.run]
-source_pkgs = ["syto"]
+source_pkgs = ["syto", "baselines"]
 omit = [
     "*/tests/*",
     "*/test_*",

@@ -167,10 +167,10 @@ class ClassifierFittingPipeline:
     def _load_split(base_path: Path, split: str) -> pd.DataFrame:
         """Load a split data file (try parquet, csv, txt)."""
         if (base_path / f"{split}.parquet").exists():
-            return pd.read_parquet(base_path / f"{split}.parquet")[:100000]
+            return pd.read_parquet(base_path / f"{split}.parquet")
         if (base_path / f"{split}.csv").exists():
-            return pd.read_csv(base_path / f"{split}.csv")[:100000]
+            return pd.read_csv(base_path / f"{split}.csv")
         if (base_path / f"{split}.txt").exists():
-            return pd.read_csv(base_path / f"{split}.txt", sep="\t")[:100000]
+            return pd.read_csv(base_path / f"{split}.txt", sep="\t")
 
         raise FileNotFoundError(f"Could not find {split} split in {base_path}")

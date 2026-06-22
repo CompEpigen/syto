@@ -71,6 +71,11 @@ def validate_config(config: Dict[str, Any], task: str) -> None:
             "calibration_results_dir",
             "labels_dict_path",
         ],
+        "deconvolute_pseudobulk": [
+            "pseudobulk_h5_path",
+            "output_dir",
+            "labels_dict_path",
+        ],
     }
 
     if task not in required_fields:
@@ -87,6 +92,7 @@ def validate_config(config: Dict[str, Any], task: str) -> None:
         "fit_deconvolution",
         "fit_calibration",
         "confidence_intervals",
+        "deconvolute_pseudobulk",
     ):
         if task in ("classifier_fit", "pretrain"):
             model = config["model"]["architecture"].lower()
@@ -184,6 +190,17 @@ def run_calibration_fitting(config: Dict[str, Any], logger: logging.Logger) -> N
     pipeline.run()
 
 
+def run_pseudobulk_deconvolution(
+    config: Dict[str, Any], logger: logging.Logger
+) -> None:
+    """Run baseline deconvolution on a pre-generated pseudobulk HDF5 file."""
+    from App.pseudobulk_deconvolution_pipeline import PseudobulkDeconvolutionPipeline
+
+    logger.info("Starting pseudobulk deconvolution pipeline")
+    pipeline = PseudobulkDeconvolutionPipeline(config=config, logger=logger)
+    pipeline.run()
+
+
 def run_confidence_intervals(config: Dict[str, Any], logger: logging.Logger) -> None:
     """Recompute metrics with bootstrap confidence intervals."""
     from conf_interval_pipeline import ConfidenceIntervalPipeline
@@ -223,6 +240,7 @@ Examples:
             "fit_deconvolution",
             "fit_calibration",
             "confidence_intervals",
+            "deconvolute_pseudobulk",
         ],
         required=True,
         help="Task to perform",
@@ -327,10 +345,8 @@ Examples:
             logger.info("Override: labels_dict_path = %s", args.labels_dict)
 
         if hasattr(args, "output_dir") and args.output_dir:
-            if "output" not in config:
-                config["output"] = {}
-            config["output"]["output_dir"] = args.output_dir
-            logger.info("Override: output.output_dir = %s", args.output_dir)
+            config["output_dir"] = args.output_dir
+            logger.info("Override: output_dir = %s", args.output_dir)
 
         if args.datasets:
             config["datasets"] = args.datasets
@@ -358,7 +374,7 @@ Examples:
             )
             return 0
 
-        output_dir = config["output"]["output_dir"]
+        output_dir = config["output_dir"]
         os.makedirs(output_dir, exist_ok=True)
         shutil.copy(args.config, output_dir)
         logger.info(f"Copied config to {output_dir}")
@@ -378,6 +394,8 @@ Examples:
             run_calibration_fitting(config, logger)
         elif args.task == "confidence_intervals":
             run_confidence_intervals(config, logger)
+        elif args.task == "deconvolute_pseudobulk":
+            run_pseudobulk_deconvolution(config, logger)
 
         logger.info("Task completed successfully")
         return 0

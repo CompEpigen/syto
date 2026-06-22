@@ -1,0 +1,70 @@
+# Classifier Fitting - EpigenBERT2 (DNABERT-2 based)
+# ====================================================
+# Run with:
+#   python App/main.py --task classifier_fit --config App/config/classifiers_fitting/epigenbert2.yaml
+#
+# Expected data layout (datasets: all -> files directly under data_path):
+#   <data_path>/train.{parquet,csv,txt}
+#   <data_path>/valid.{parquet,csv,txt}   (optional, used for validation metrics)
+# Required columns: seq, pattern, label, dmr_ctype_label (GRG/DMR id used by the
+# grg_attention_based classifier head)
+
+# Model Configuration
+model:
+  architecture: epigenbert2
+  foundation_model: foundationalModels/DNABERT-2-117M  # local path to a cached DNABERT-2 checkpoint
+  num_labels: 39
+  use_cpg_methylation: true
+  use_m6a_methylation: false
+  classifier_head_implementation: grg_attention_based
+  soft_labels: true
+
+# Data Configuration
+data_path: /home/luna.kuleuven.be/u0169940/Data/Loyfer/
+max_sequence_length: 150
+prediction_batch_size: 2200
+datasets: SoftLabelsTrainingData_205files_pooled_Jaccard_hg38_mincpg_4_minlen_10_no_data_leak_d041
+
+# Output Configuration
+output:
+  output_dir: output/classifier_fit_test/epigenbert2
+
+# MLflow Configuration
+mlflow:
+  enabled: true
+  experiment_name: classifier_fit_test_epigenbert2
+  tracking_uri: null  # Leave as null for local tracking or specify remote URI
+
+# Training Configuration (forwarded to EpigenDnabert2.fit_split as kwargs)
+training:
+  grg_label_column: dmr_ctype_label
+  training_args:
+    run_name: dnabert2_with_dmr_head_loyfer
+    per_device_train_batch_size: 512
+    per_device_eval_batch_size: 3200
+    gradient_accumulation_steps: 1
+    learning_rate: 0.00001
+    weight_decay: 0.001
+    fp16: false
+    save_steps: 100
+    eval_strategy: steps
+    eval_steps: 100
+    warmup_steps: 100
+    logging_steps: 100
+    num_train_epochs: 1
+    overwrite_output_dir: true
+    log_level: info
+    find_unused_parameters: false
+    batch_eval_metrics: false
+    eval_and_save_results: true
+    remove_unused_columns: false
+    eval_accumulation_steps: 8
+    torch_empty_cache_steps: 10
+    prediction_loss_only: false
+    gradient_checkpointing: false
+    skip_memory_metrics: true
+    auto_find_batch_size: false
+    max_grad_norm: 1.0
+    adam_beta1: 0.9
+    adam_beta2: 0.98
+    adam_epsilon: 0.000001

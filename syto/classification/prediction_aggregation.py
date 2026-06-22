@@ -387,16 +387,16 @@ def aggregate_predictions_by_grg(
     result = simple_avg.join(weighted_avg)
 
     # Add additional metadata columns (take first value per group)
-    metadata_cols = [
-        col
-        for col in df.columns
-        if col not in prediction_cols + group_cols + ["_weight", weight_col]
-        and col in ["ctype", "dmr_ctype", "label", "chromosome"]
-    ]
+    # metadata_cols = [
+    #     col
+    #     for col in df.columns
+    #     if col not in prediction_cols + group_cols + ["_weight", weight_col]
+    #     and col in ["ctype", "dmr_ctype", "label", "chromosome"]
+    # ]
 
-    if metadata_cols:
-        metadata = df.groupby(group_cols)[metadata_cols].first()
-        result = result.join(metadata)
+    # if metadata_cols:
+    #     metadata = df.groupby(group_cols)[metadata_cols].first()
+    #     result = result.join(metadata)
     result.reset_index(inplace=True)
 
     if fill_in_missing_labels:
