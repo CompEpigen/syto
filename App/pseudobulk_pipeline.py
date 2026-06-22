@@ -161,9 +161,9 @@ class PseudoBulkPipeline:
         from syto.data.atlases.uxm_atlases import UXMMethylationAtlas
 
         atlas_path = self.config["atlas_path"]
-        atlas_name = self.congig["atlas_name"]
+        atlas_name = self.config["atlas_name"]
         atlas = UXMMethylationAtlas(
-            atlas_name="U25l4",
+            atlas_name=atlas_name,
             reference_genome="hg38" if "hg38" in atlas_path else "hg19",
             atlas_path=atlas_path,
             sep="\t",
