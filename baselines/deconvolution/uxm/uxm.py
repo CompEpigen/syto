@@ -159,7 +159,7 @@ def rearange_uxm_deconvolution_results(
     ]
     return uxm_proportions_aligned
 
-def build_uxm_input(reads: pd.DataFrame) -> dict:
+def build_uxm_input(reads: pd.DataFrame, min_cpgs_count =4) -> dict:
     """
     Build UXM-compatible scaling factors and counts from prepared reads.
 
@@ -169,7 +169,7 @@ def build_uxm_input(reads: pd.DataFrame) -> dict:
     from copy import deepcopy
 
     results_agg = (
-        reads[reads["NCPGS"] > 3]
+        reads[reads["NCPGS"] >= min_cpgs_count]
         .groupby("name")
         .aggregate({"record_M": "sum", "record_U": "sum", "record_X": "sum"})
         .reset_index()
