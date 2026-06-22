@@ -73,8 +73,8 @@ class CpGBetaCountsMethylationAtlas(AbstractMethylationAtlas):
         region_df["start"] = region_df["start"] + 1  # BED 0-based → 1-based
         # END is START+1 in BED; max(END) = last_cpg_START + 1, which is
         # already correct as the 1-based inclusive last position.
-        self._atlas = (
-            region_df.sort_values(["chr", "start", "end"]).reset_index(drop=True)
+        self._atlas = region_df.sort_values(["chr", "start", "end"]).reset_index(
+            drop=True
         )
 
         # Per-region CpG lookups, beta matrices, and raw count matrices.
@@ -82,7 +82,7 @@ class CpGBetaCountsMethylationAtlas(AbstractMethylationAtlas):
         self._n_cpgs: Dict[str, int] = {}
         self._beta_matrices: Dict[str, np.ndarray] = {}
         self._meth_matrices: Dict[str, np.ndarray] = {}
-        self._cov_matrices:  Dict[str, np.ndarray] = {}
+        self._cov_matrices: Dict[str, np.ndarray] = {}
 
         T = len(self._cell_types)
         for region_name, group in raw.groupby("name", sort=False):
@@ -90,21 +90,23 @@ class CpGBetaCountsMethylationAtlas(AbstractMethylationAtlas):
             positions = group_sorted["START"].tolist()
             n_cpgs = len(positions)
 
-            self._cpg_lookup[region_name] = {pos: idx for idx, pos in enumerate(positions)}
+            self._cpg_lookup[region_name] = {
+                pos: idx for idx, pos in enumerate(positions)
+            }
             self._n_cpgs[region_name] = n_cpgs
 
             meth_mat = np.full((T, n_cpgs), np.nan)
-            cov_mat  = np.full((T, n_cpgs), np.nan)
-            beta     = np.full((T, n_cpgs), np.nan)
+            cov_mat = np.full((T, n_cpgs), np.nan)
+            beta = np.full((T, n_cpgs), np.nan)
             for t, cell_type in enumerate(self._cell_types):
                 meth = group_sorted[f"{cell_type}_METH"].values.astype(float)
-                cov  = group_sorted[f"{cell_type}_COV"].values.astype(float)
+                cov = group_sorted[f"{cell_type}_COV"].values.astype(float)
                 meth_mat[t, :] = meth
-                cov_mat[t, :]  = cov
+                cov_mat[t, :] = cov
                 with np.errstate(invalid="ignore", divide="ignore"):
                     beta[t, :] = np.where(cov > 0, meth / cov, np.nan)
             self._meth_matrices[region_name] = meth_mat
-            self._cov_matrices[region_name]  = cov_mat
+            self._cov_matrices[region_name] = cov_mat
             self._beta_matrices[region_name] = beta
 
         super().__init__()
@@ -224,9 +226,9 @@ class CpGBetaCountsMethylationAtlas(AbstractMethylationAtlas):
                 "(ASCII '0'=unmethylated, '1'=methylated)."
             )
 
-        reads = reads.sort_values(
-            ["chromosome", "name", "cell_type"]
-        ).reset_index(drop=True)
+        reads = reads.sort_values(["chromosome", "name", "cell_type"]).reset_index(
+            drop=True
+        )
 
         groups = list(reads.groupby(["chromosome", "name", "cell_type"], sort=False))
         _module_logger.info(
@@ -235,10 +237,10 @@ class CpGBetaCountsMethylationAtlas(AbstractMethylationAtlas):
 
         out_chroms: list = []
         out_starts: list = []
-        out_names:  list = []
-        out_cts:    list = []
-        out_meths:  list = []
-        out_covs:   list = []
+        out_names: list = []
+        out_cts: list = []
+        out_meths: list = []
+        out_covs: list = []
 
         for (chrom, name, ct), group in tqdm(
             groups,
@@ -253,11 +255,11 @@ class CpGBetaCountsMethylationAtlas(AbstractMethylationAtlas):
                         pair_arrays.append(np.asarray(sig.tolist(), dtype=np.int64))
                 if not pair_arrays:
                     continue
-                all_pairs = np.vstack(pair_arrays)   # (total_obs, 2)
+                all_pairs = np.vstack(pair_arrays)  # (total_obs, 2)
                 positions = all_pairs[:, 0]
-                meths     = all_pairs[:, 1].astype(np.int32)
+                meths = all_pairs[:, 1].astype(np.int32)
             else:
-                pos_list:  list = []
+                pos_list: list = []
                 meth_list: list = []
                 for pattern, rs in zip(
                     group["pattern"].tolist(), group["read_start"].tolist()
@@ -272,7 +274,7 @@ class CpGBetaCountsMethylationAtlas(AbstractMethylationAtlas):
                 if not pos_list:
                     continue
                 positions = np.concatenate(pos_list)
-                meths     = np.concatenate(meth_list)
+                meths = np.concatenate(meth_list)
 
             # -- Vectorised aggregation: np.unique + np.bincount -----------
             # np.unique returns sorted unique positions and an inverse index;
@@ -297,17 +299,17 @@ class CpGBetaCountsMethylationAtlas(AbstractMethylationAtlas):
         starts_cat = np.concatenate(out_starts)
         agg = pd.DataFrame(
             {
-                "CHROM":     out_chroms,
-                "START":     starts_cat,
-                "END":       starts_cat + 1,
-                "name":      out_names,
+                "CHROM": out_chroms,
+                "START": starts_cat,
+                "END": starts_cat + 1,
+                "name": out_names,
                 "cell_type": out_cts,
-                "METH":      np.concatenate(out_meths),
-                "COV":       np.concatenate(out_covs),
+                "METH": np.concatenate(out_meths),
+                "COV": np.concatenate(out_covs),
             }
         )
 
-        n_regions   = agg["name"].nunique()
+        n_regions = agg["name"].nunique()
         n_cpg_total = agg[["CHROM", "START"]].drop_duplicates().shape[0]
         _module_logger.info(
             "Aggregated: %d region(s) · %s CpG site(s) · mean coverage %.1f×",
@@ -326,7 +328,9 @@ class CpGBetaCountsMethylationAtlas(AbstractMethylationAtlas):
                 ", ".join(sorted(missing_ct)),
             )
 
-        _module_logger.info("Pivoting to wide format (%d cell type(s)) …", len(cell_types))
+        _module_logger.info(
+            "Pivoting to wide format (%d cell type(s)) …", len(cell_types)
+        )
         index_cols = ["CHROM", "START", "END", "name"]
 
         meth_wide = (
@@ -392,9 +396,7 @@ class CpGBetaCountsMethylationAtlas(AbstractMethylationAtlas):
     def _check_raw_format(cls, raw: pd.DataFrame) -> None:
         missing = cls._RAW_REQUIRED - set(raw.columns)
         if missing:
-            raise ValueError(
-                f"Atlas DataFrame is missing required columns: {missing}"
-            )
+            raise ValueError(f"Atlas DataFrame is missing required columns: {missing}")
         meth_cell_types = {c[:-5] for c in raw.columns if c.endswith("_METH")}
         cov_cell_types = {c[:-4] for c in raw.columns if c.endswith("_COV")}
         if not meth_cell_types:
@@ -467,5 +469,5 @@ class CpGBetaCountsMethylationAtlas(AbstractMethylationAtlas):
         """
         return (
             [self._meth_matrices[name] for name in region_names],
-            [self._cov_matrices[name]  for name in region_names],
+            [self._cov_matrices[name] for name in region_names],
         )

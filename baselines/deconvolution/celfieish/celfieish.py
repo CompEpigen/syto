@@ -25,7 +25,6 @@ UNMETHYLATED, METHYLATED, NOVAL = 0, 1, 2
 pseudocount = 1e-10
 from syto.data.dataset import resolve_column
 
-
 # ---------------------------------------------------------------------------
 # Core EM model
 # ---------------------------------------------------------------------------
@@ -163,7 +162,9 @@ class CelfieISH:
             self.alpha = new_alpha
         return self.alpha, i
 
-    def run_with_checkpoints(self, checkpoints: List[int]) -> List[Tuple[int, np.ndarray]]:
+    def run_with_checkpoints(
+        self, checkpoints: List[int]
+    ) -> List[Tuple[int, np.ndarray]]:
         """Run EM for exactly max(checkpoints) iterations, snapshotting alpha at each checkpoint.
 
         Unlike :meth:`two_step`, convergence is never checked — the loop always
@@ -266,8 +267,7 @@ def prepare_reads_for_celfieish(
 
 
 def build_celfieish_input(
-    reads: pd.DataFrame,
-    atlas: "CpGBetaCountsMethylationAtlas"
+    reads: pd.DataFrame, atlas: "CpGBetaCountsMethylationAtlas"
 ) -> Dict:
     """Build per-region read × CpG matrices from prepared reads.
 
@@ -310,29 +310,33 @@ def build_celfieish_input(
         # resolves all positions to column indices before one fancy-index write.
         all_abs_pos: List[np.ndarray] = []
         all_row_idx: List[np.ndarray] = []
-        all_meths:   List[np.ndarray] = []
-        
+        all_meths: List[np.ndarray] = []
+
         for row_idx, (pattern, rs) in enumerate(
-            zip(group[methylation_pattern_column].tolist(), group["read_start"].tolist())
+            zip(
+                group[methylation_pattern_column].tolist(), group["read_start"].tolist()
+            )
         ):
-            arr      = np.frombuffer(pattern.encode("ascii"), dtype=np.uint8)
-            cpg_mask = (arr == 48) | (arr == 49)   # ord('0')=48, ord('1')=49
-            offsets  = np.where(cpg_mask)[0]
+            arr = np.frombuffer(pattern.encode("ascii"), dtype=np.uint8)
+            cpg_mask = (arr == 48) | (arr == 49)  # ord('0')=48, ord('1')=49
+            offsets = np.where(cpg_mask)[0]
             if offsets.size == 0:
                 continue
 
             n = offsets.size
             all_abs_pos.append(int(rs) + offsets)
             all_row_idx.append(np.full(n, row_idx, dtype=np.intp))
-            all_meths.append((arr[cpg_mask] == 49).astype(np.int8))  # 1=METHYLATED, 0=UNMETHYLATED
+            all_meths.append(
+                (arr[cpg_mask] == 49).astype(np.int8)
+            )  # 1=METHYLATED, 0=UNMETHYLATED
 
         if all_abs_pos:
-            positions   = np.concatenate(all_abs_pos)
+            positions = np.concatenate(all_abs_pos)
             row_indices = np.concatenate(all_row_idx)
             meth_states = np.concatenate(all_meths)
 
-            col_series  = pd.Series(positions).map(cpg_lookup)   # one call per region
-            valid       = col_series.notna().values
+            col_series = pd.Series(positions).map(cpg_lookup)  # one call per region
+            valid = col_series.notna().values
             if valid.any():
                 col_indices = col_series[valid].astype(np.intp).values
                 matrix[row_indices[valid], col_indices] = meth_states[valid]
@@ -426,9 +430,11 @@ def run_celfieish_deconvolution(
     None
         If no atlas regions overlap the reads.
     """
-    reads_sorted = reads.sort_values(
-        ["chromosome", "read_start", "read_end"]
-    ).reset_index(drop=True).copy()
+    reads_sorted = (
+        reads.sort_values(["chromosome", "read_start", "read_end"])
+        .reset_index(drop=True)
+        .copy()
+    )
     reads_sorted["read_start"] = reads_sorted["read_start"].astype("int64")
     reads_sorted["read_end"] = reads_sorted["read_end"].astype("int64")
 
@@ -440,7 +446,8 @@ def run_celfieish_deconvolution(
 
     beta_matrices = atlas.get_beta_for_regions(celfieish_in["region_names"])
     result = celfieish_deconvolution(
-        celfieish_in["matrices"], beta_matrices,
+        celfieish_in["matrices"],
+        beta_matrices,
         num_iterations=num_iterations,
         convergence_criteria=convergence_criteria,
         checkpoints=checkpoints,
@@ -450,9 +457,12 @@ def run_celfieish_deconvolution(
 
     if checkpoints is not None:
         return [
-            (n_steps, rearange_celfieish_deconvolution_results(
-                labels_dict_reversed, alpha, ref_cells, n_labels=n_labels
-            ))
+            (
+                n_steps,
+                rearange_celfieish_deconvolution_results(
+                    labels_dict_reversed, alpha, ref_cells, n_labels=n_labels
+                ),
+            )
             for n_steps, alpha in result
         ]
 

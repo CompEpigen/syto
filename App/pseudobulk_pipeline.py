@@ -121,7 +121,6 @@ class PseudoBulkPipeline:
         # Filter columns to reduce memory usage
         self._filter_split_columns(splits_data)
 
-
         # Load target proportions
         target_proportions_per_split = self._load_target_proportions()
 
@@ -240,9 +239,12 @@ class PseudoBulkPipeline:
             "total_marked_cpgs",
             "chr",
             "chromosome",
-            "label"
+            "label",
         ]
-        if "trimmed_start" in sample_df.columns and "read_start" not in sample_df.columns:
+        if (
+            "trimmed_start" in sample_df.columns
+            and "read_start" not in sample_df.columns
+        ):
             base_cols.extend(["trimmed_start", "trimmed_end"])
         elif "read_start" in sample_df.columns:
             base_cols.extend(["read_start", "read_end"])
@@ -250,7 +252,6 @@ class PseudoBulkPipeline:
             base_cols.append("file")
         if "name" in sample_df.columns:
             base_cols.append("name")
-
 
         for split_name, df in splits_data.items():
             keep_cols = [c for c in base_cols + pred_cols if c in df.columns]

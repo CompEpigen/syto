@@ -9,7 +9,13 @@ import pandas as pd
 
 COLUMN_ALIASES = {
     "input_ids": ["input_ids", "genome_sequence", "seq", "dna", "original_seq"],
-    "methylation_ids": ["methylation_ids", "cpg_methylation_sequence", "pattern", "methyl_seq","methylation_encoding"],
+    "methylation_ids": [
+        "methylation_ids",
+        "cpg_methylation_sequence",
+        "pattern",
+        "methyl_seq",
+        "methylation_encoding",
+    ],
     "label": ["label"],
     "soft_label": ["soft_label"],
     "m6a_methylation_sequence": ["m6a_methylation_sequence"],

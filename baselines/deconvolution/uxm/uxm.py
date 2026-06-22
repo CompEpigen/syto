@@ -159,7 +159,8 @@ def rearange_uxm_deconvolution_results(
     ]
     return uxm_proportions_aligned
 
-def build_uxm_input(reads: pd.DataFrame, min_cpgs_count =4) -> dict:
+
+def build_uxm_input(reads: pd.DataFrame, min_cpgs_count=4) -> dict:
     """
     Build UXM-compatible scaling factors and counts from prepared reads.
 
@@ -228,8 +229,10 @@ def run_uxm_deconvolution(
     reads = mark_records_methyl_state(reads.copy())
     uxm_in = build_uxm_input(reads)
     proportions = uxm_deconvolution(
-        atlas_df, ref_cells,
-        uxm_in["scaling_factors"], uxm_in["counts"],
+        atlas_df,
+        ref_cells,
+        uxm_in["scaling_factors"],
+        uxm_in["counts"],
         sample_names=["sample"],
     )[0]
     if not isinstance(proportions, np.ndarray):
@@ -421,7 +424,9 @@ def prepare_reads_for_uxm(
 
     results = pd.DataFrame(results, columns=columns)
 
-    results = mark_records_methyl_state(results, methyl_tr=methyl_tr, unmethyl_tr=unmethyl_tr)
+    results = mark_records_methyl_state(
+        results, methyl_tr=methyl_tr, unmethyl_tr=unmethyl_tr
+    )
 
     results = pd.merge(results, atlas[["name", "target"]], on="name")
     results.rename(columns={"target": "dmr_ctype"}, inplace=True)

@@ -80,9 +80,8 @@ class UXMMethylationAtlas(AbstractMethylationAtlas):
         self._check_atlas_format(self._atlas)
 
         # Keep the atlas sorted by genomic position for efficient sweep queries
-        self._atlas = (
-            self._atlas.sort_values(["chr", "start", "end"])
-            .reset_index(drop=True)
+        self._atlas = self._atlas.sort_values(["chr", "start", "end"]).reset_index(
+            drop=True
         )
 
     # ------------------------------------------------------------------
@@ -173,10 +172,7 @@ class UXMMethylationAtlas(AbstractMethylationAtlas):
         cell_type_match_dict : dict, optional
             Atlas cell-type name → project cell-type name alias mapping.
         """
-        df = super().prepare_reads(
-            df,
-            trim=trim
-        )
+        df = super().prepare_reads(df, trim=trim)
         if labels_dict is not None:
             df = self._annotate_dmr_labels(df, labels_dict, cell_type_match_dict or {})
         return df
@@ -194,7 +190,11 @@ class UXMMethylationAtlas(AbstractMethylationAtlas):
         # Drop any pre-existing annotation columns so the merge below cannot
         # produce duplicate column names (e.g. when the input reads were
         # previously annotated and already carry these columns).
-        stale_cols = [c for c in ("target", "dmr_ctype", "dmr_ctype_matched", "dmr_ctype_label") if c in df.columns]
+        stale_cols = [
+            c
+            for c in ("target", "dmr_ctype", "dmr_ctype_matched", "dmr_ctype_label")
+            if c in df.columns
+        ]
         if stale_cols:
             df = df.drop(columns=stale_cols)
         df = pd.merge(df, self._atlas[["name", "target"]], on="name", how="left")

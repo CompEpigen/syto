@@ -190,7 +190,9 @@ def run_calibration_fitting(config: Dict[str, Any], logger: logging.Logger) -> N
     pipeline.run()
 
 
-def run_pseudobulk_deconvolution(config: Dict[str, Any], logger: logging.Logger) -> None:
+def run_pseudobulk_deconvolution(
+    config: Dict[str, Any], logger: logging.Logger
+) -> None:
     """Run baseline deconvolution on a pre-generated pseudobulk HDF5 file."""
     from App.pseudobulk_deconvolution_pipeline import PseudobulkDeconvolutionPipeline
 

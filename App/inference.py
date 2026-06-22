@@ -141,7 +141,6 @@ class InferencePipeline:
             self.features_mask = np.load(config["features_mask_path"])["features_mask"]
             self.input_length = int(np.sum(self.features_mask))
 
-
     # ═══════════════════════════════════════════════════════════════════
     #  Public API
     # ═══════════════════════════════════════════════════════════════════
@@ -152,7 +151,9 @@ class InferencePipeline:
         self.skip_classification = False
         self.skip_reads_processing = False
         self.skip_aggregation_for_syto = False
-        self.logger.info(f"The config doesn't feature syto methods --> related classification and feature extraction methods will be skipped")
+        self.logger.info(
+            f"The config doesn't feature syto methods --> related classification and feature extraction methods will be skipped"
+        )
 
         if not self.syto_methods_enabled:
             self.skip_classification = True
@@ -205,8 +206,8 @@ class InferencePipeline:
             self.logger.info(
                 f"Stage 4 complete: {len(self.dmr_aggregated)} DMR-level aggregations"
             )
-        else: 
-             self.logger.info(
+        else:
+            self.logger.info(
                 f"Stage 4 is skipped as no prediction aggregation is required for baseline methods"
             )
         # ── Stage 5: deconvolution ─────────────────────────────────────
@@ -516,11 +517,15 @@ class InferencePipeline:
                 results.append((base_name, "None", proportions))
 
                 calibrators_dir = method_cfg.get("calibrators_dir", None)
-                if calibrators_dir is None and method_cfg.get("use_callibration", False):
+                if calibrators_dir is None and method_cfg.get(
+                    "use_callibration", False
+                ):
                     calibrators_dir = str(Path(method_cfg["callibrator_path"]).parent)
                 if calibrators_dir is not None:
                     results.extend(
-                        self._apply_all_calibrators(proportions, calibrators_dir, base_name)
+                        self._apply_all_calibrators(
+                            proportions, calibrators_dir, base_name
+                        )
                     )
 
             except Exception as e:  # pylint: disable=broad-exception-caught
@@ -748,11 +753,17 @@ class InferencePipeline:
                 atlas_df, ref_cells_all = load_atlas(cfg["atlas_path"])
                 ignore_cells = cfg.get("ignore_cells", [])
                 ref_cells = [c for c in ref_cells_all if c not in ignore_cells]
-                self.logger.info("UXM baseline: %d reference cell types", len(ref_cells))
-                states.append({"name": "uxm", "atlas_df": atlas_df, "ref_cells": ref_cells})
+                self.logger.info(
+                    "UXM baseline: %d reference cell types", len(ref_cells)
+                )
+                states.append(
+                    {"name": "uxm", "atlas_df": atlas_df, "ref_cells": ref_cells}
+                )
 
             elif model in ("celfieish", "celfie"):
-                from syto.data.atlases.celfieish_atlases import CpGBetaCountsMethylationAtlas
+                from syto.data.atlases.celfieish_atlases import (
+                    CpGBetaCountsMethylationAtlas,
+                )
 
                 atlas_path = cfg["atlas_path"]
                 atlas = CpGBetaCountsMethylationAtlas(
@@ -771,16 +782,22 @@ class InferencePipeline:
                 if model == "celfie":
                     state["random_restarts"] = cfg.get("random_restarts", 1)
                 self.logger.info(
-                    "%s baseline: %d reference cell types", model.upper(), len(atlas.ref_cells)
+                    "%s baseline: %d reference cell types",
+                    model.upper(),
+                    len(atlas.ref_cells),
                 )
                 states.append(state)
 
             else:
-                self.logger.warning("Unknown baseline model %r in config; skipping.", model)
+                self.logger.warning(
+                    "Unknown baseline model %r in config; skipping.", model
+                )
 
         return states
 
-    def _run_uxm_deconvolution(self, baseline_state: Dict[str, Any]) -> Optional[np.ndarray]:
+    def _run_uxm_deconvolution(
+        self, baseline_state: Dict[str, Any]
+    ) -> Optional[np.ndarray]:
         """Run UXM baseline deconvolution using the pre-loaded atlas state."""
         from baselines.deconvolution.uxm.uxm import run_uxm_deconvolution
 
@@ -802,7 +819,9 @@ class InferencePipeline:
         self, baseline_state: Dict[str, Any]
     ) -> List[Tuple[str, str, np.ndarray]]:
         """Run CelFiE-ISH baseline deconvolution; returns result tuples ready for results list."""
-        from baselines.deconvolution.celfieish.celfieish import run_celfieish_deconvolution
+        from baselines.deconvolution.celfieish.celfieish import (
+            run_celfieish_deconvolution,
+        )
 
         if self.processed_reads is None:
             self.logger.warning(

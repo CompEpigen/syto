@@ -38,10 +38,7 @@ class AbstractAtlas(ABC):
     # Reads preparation methods
     # ------------------------------------------------------------------
 
-    def overlap_reads(
-        self,
-        df: pd.DataFrame
-    ) -> pd.DataFrame:
+    def overlap_reads(self, df: pd.DataFrame) -> pd.DataFrame:
         """Annotate each read with the atlas region(s) it overlaps.
 
         Reads not overlapping any atlas region are dropped.  A read
@@ -68,7 +65,9 @@ class AbstractAtlas(ABC):
             Annotated reads with ``name``, ``region_start``, ``region_end``.
         """
         atlas = self.atlas.sort_values(["chr", "start", "end"]).reset_index(drop=True)
-        df = df.sort_values(["chromosome", "read_start", "read_end"]).reset_index(drop=True)
+        df = df.sort_values(["chromosome", "read_start", "read_end"]).reset_index(
+            drop=True
+        )
         n_records = len(df)
 
         if n_records == 0 or len(atlas) == 0:
@@ -93,7 +92,7 @@ class AbstractAtlas(ABC):
         for _, region in atlas.iterrows():
             chromosome = region["chr"]
             start = region["start"] - 1  # 1-based → 0-based
-            end = region["end"]          # exclusive upper bound
+            end = region["end"]  # exclusive upper bound
             name = region["name"]
 
             if chromosome not in chrom_base_pointer:
@@ -265,17 +264,16 @@ class AbstractMethylationAtlas(AbstractAtlas):
         (i.e. :meth:`overlap_reads` must have been called first).
         """
         orig_start = df["read_start"].copy()
-        df = super().trim_reads(df, **kwargs)   # clips read_start, read_end
+        df = super().trim_reads(df, **kwargs)  # clips read_start, read_end
 
         offsets = (df["read_start"] - orig_start).values
         lengths = (df["read_end"] - df["read_start"] + 1).values
 
         df[seq_column] = [
-            s[o: o + l]
-            for s, o, l in zip(df[seq_column].tolist(), offsets, lengths)
+            s[o : o + l] for s, o, l in zip(df[seq_column].tolist(), offsets, lengths)
         ]
         df[methylation_pattern_column] = [
-            s[o: o + l]
+            s[o : o + l]
             for s, o, l in zip(
                 df[methylation_pattern_column].tolist(), offsets, lengths
             )
@@ -316,9 +314,7 @@ class AbstractMethylationAtlas(AbstractAtlas):
         """
         dna_col = resolve_column(df.columns, "input_ids")
         meth_col = resolve_column(df.columns, "methylation_ids")
-        df = self.overlap_reads(
-            df
-        )
+        df = self.overlap_reads(df)
         if trim:
             df = self.trim_reads(
                 df,

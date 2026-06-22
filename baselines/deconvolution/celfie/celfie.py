@@ -210,9 +210,7 @@ def em_with_checkpoints(
 
 
 def prepare_reads_for_celfie(
-    reads_data: pd.DataFrame,
-    atlas: "CpGBetaCountsMethylationAtlas",
-    trim: bool = True
+    reads_data: pd.DataFrame, atlas: "CpGBetaCountsMethylationAtlas", trim: bool = True
 ) -> pd.DataFrame:
     """Overlap reads with atlas regions and trim to region boundaries.
 
@@ -220,10 +218,7 @@ def prepare_reads_for_celfie(
     No M/U/X classification is applied — CelFiE operates on aggregated
     per-CpG counts built by :func:`build_celfie_input`.
     """
-    return atlas.prepare_reads(
-        reads_data,
-        trim=trim
-    )
+    return atlas.prepare_reads(reads_data, trim=trim)
 
 
 def build_celfie_input(
@@ -257,7 +252,7 @@ def build_celfie_input(
     use_cpg_sig = "cpg_sig" in reads.columns
     region_names: List[str] = []
     x_meth_list: List[np.ndarray] = []
-    x_cov_list:  List[np.ndarray] = []
+    x_cov_list: List[np.ndarray] = []
     methylation_pattern_column = resolve_column(reads.columns, "methylation_ids")
     for region_name, group in reads.groupby("name", sort=False):
         if region_name not in atlas:
@@ -278,21 +273,21 @@ def build_celfie_input(
             ]
             if not arrays:
                 continue
-            all_pairs = np.vstack(arrays)   # (total_obs, 2)
+            all_pairs = np.vstack(arrays)  # (total_obs, 2)
             positions = all_pairs[:, 0]
-            meths     = all_pairs[:, 1]
+            meths = all_pairs[:, 1]
         else:
             # Scan pattern strings with numpy ASCII ops — avoids iterrows and
             # per-character Python iteration.
-            pos_list  = []
+            pos_list = []
             meth_list = []
             for pattern, rs in zip(
                 group[methylation_pattern_column].tolist(),
                 group["read_start"].tolist(),
             ):
-                arr      = np.frombuffer(pattern.encode("ascii"), dtype=np.uint8)
-                cpg_mask = (arr == 48) | (arr == 49)   # ord('0')=48, ord('1')=49
-                offsets  = np.where(cpg_mask)[0]
+                arr = np.frombuffer(pattern.encode("ascii"), dtype=np.uint8)
+                cpg_mask = (arr == 48) | (arr == 49)  # ord('0')=48, ord('1')=49
+                offsets = np.where(cpg_mask)[0]
                 if offsets.size == 0:
                     continue
                 pos_list.append(int(rs) + offsets)
@@ -300,19 +295,19 @@ def build_celfie_input(
             if not pos_list:
                 continue
             positions = np.concatenate(pos_list)
-            meths     = np.concatenate(meth_list)
+            meths = np.concatenate(meth_list)
 
         # Vectorised position → column-index mapping via pandas dict map,
         # then a single bincount replaces O(N) individual array increments.
         col_indices = pd.Series(positions).map(cpg_lookup)
-        valid       = col_indices.notna().values
+        valid = col_indices.notna().values
         if not valid.any():
             continue
         cols = col_indices[valid].astype(np.intp).values
-        m    = meths[valid]
+        m = meths[valid]
 
         x_meth = np.bincount(cols, weights=m.astype(np.float64), minlength=n_cpgs)
-        x_cov  = np.bincount(cols, minlength=n_cpgs).astype(np.float64)
+        x_cov = np.bincount(cols, minlength=n_cpgs).astype(np.float64)
 
         region_names.append(region_name)
         x_meth_list.append(x_meth.reshape(1, -1))
@@ -359,21 +354,23 @@ def celfie_deconvolution(
         Snapshot proportions when ``checkpoints`` is provided,
         in ascending iteration order.
     """
-    x        = np.hstack(x_meth_list)
+    x = np.hstack(x_meth_list)
     x_depths = np.hstack(x_cov_list)
-    y        = np.hstack(y_list)
+    y = np.hstack(y_list)
     y_depths = np.hstack(y_cov_list)
 
     if checkpoints is not None:
         return em_with_checkpoints(x, x_depths, y, y_depths, checkpoints)
 
-    best_ll    = -np.inf
+    best_ll = -np.inf
     best_alpha = None
 
     for _ in range(random_restarts):
-        alpha, _, ll, _ = em(x, x_depths, y, y_depths, num_iterations, convergence_criteria)
+        alpha, _, ll, _ = em(
+            x, x_depths, y, y_depths, num_iterations, convergence_criteria
+        )
         if ll > best_ll:
-            best_ll    = ll
+            best_ll = ll
             best_alpha = alpha
 
     return best_alpha.flatten()
@@ -419,9 +416,11 @@ def run_celfie_deconvolution(
     None
         If no atlas regions overlap the reads.
     """
-    reads_sorted = reads.sort_values(
-        ["chromosome", "read_start", "read_end"]
-    ).reset_index(drop=True).copy()
+    reads_sorted = (
+        reads.sort_values(["chromosome", "read_start", "read_end"])
+        .reset_index(drop=True)
+        .copy()
+    )
     reads_sorted["read_start"] = reads_sorted["read_start"].astype("int64")
     reads_sorted["read_end"] = reads_sorted["read_end"].astype("int64")
 
@@ -435,8 +434,10 @@ def run_celfie_deconvolution(
 
     y_list, y_cov_list = atlas.get_meth_cov_for_regions(celfie_in["region_names"])
     result = celfie_deconvolution(
-        celfie_in["x_meth"], celfie_in["x_cov"],
-        y_list, y_cov_list,
+        celfie_in["x_meth"],
+        celfie_in["x_cov"],
+        y_list,
+        y_cov_list,
         num_iterations=num_iterations,
         convergence_criteria=convergence_criteria,
         random_restarts=random_restarts,
@@ -447,9 +448,12 @@ def run_celfie_deconvolution(
 
     if checkpoints is not None:
         return [
-            (n_steps, rearange_celfie_deconvolution_results(
-                labels_dict_reversed, alpha, ref_cells, n_labels=n_labels
-            ))
+            (
+                n_steps,
+                rearange_celfie_deconvolution_results(
+                    labels_dict_reversed, alpha, ref_cells, n_labels=n_labels
+                ),
+            )
             for n_steps, alpha in result
         ]
 
@@ -485,6 +489,5 @@ def rearange_celfie_deconvolution_results(
         n_labels = len(labels_dict_reversed)
     ref_pos = np.array([labels_dict_reversed.get(cell, -1) for cell in ref_cells])
     return [
-        celfie_proportions[int(np.where(ref_pos == i)[0][0])]
-        for i in range(n_labels)
+        celfie_proportions[int(np.where(ref_pos == i)[0][0])] for i in range(n_labels)
     ]

@@ -45,6 +45,7 @@ _WORKER_STATE: Dict[str, Any] = {}
 # Per-model read helpers (called inside _baselines_worker)
 # ---------------------------------------------------------------------------
 
+
 def _make_rows(
     pb_index: int,
     col_name: str,
@@ -74,14 +75,22 @@ def _run_uxm_on_reads(
     from baselines.deconvolution.uxm.uxm import run_uxm_deconvolution
 
     aligned = run_uxm_deconvolution(
-        reads, model_cfg["atlas_df"], model_cfg["ref_cells"],
-        s["labels_dict_reversed"], n_labels=s["n_labels"],
+        reads,
+        model_cfg["atlas_df"],
+        model_cfg["ref_cells"],
+        s["labels_dict_reversed"],
+        n_labels=s["n_labels"],
     )
     if aligned is None:
         return {}
     return {
         "uxm": _make_rows(
-            pb_index, "uxm", aligned, target_proportions, s["labels_dict"], s["n_labels"]
+            pb_index,
+            "uxm",
+            aligned,
+            target_proportions,
+            s["labels_dict"],
+            s["n_labels"],
         )
     }
 
@@ -98,8 +107,11 @@ def _run_celfieish_on_reads(
 
     em_checkpoints = model_cfg.get("em_checkpoints")
     result = run_celfieish_deconvolution(
-        reads, model_cfg["atlas"], s["labels_dict_reversed"],
-        n_labels=s["n_labels"], prepare_reads=prepare_reads,
+        reads,
+        model_cfg["atlas"],
+        s["labels_dict_reversed"],
+        n_labels=s["n_labels"],
+        prepare_reads=prepare_reads,
         num_iterations=model_cfg.get("num_iterations", 50),
         convergence_criteria=model_cfg.get("convergence_criteria", 0.001),
         checkpoints=em_checkpoints,
@@ -112,13 +124,23 @@ def _run_celfieish_on_reads(
         for n_steps, aligned in result:
             col = f"celfieish_{n_steps}_steps"
             out[col] = _make_rows(
-                pb_index, col, aligned, target_proportions, s["labels_dict"], s["n_labels"]
+                pb_index,
+                col,
+                aligned,
+                target_proportions,
+                s["labels_dict"],
+                s["n_labels"],
             )
         return out
 
     return {
         "celfieish": _make_rows(
-            pb_index, "celfieish", result, target_proportions, s["labels_dict"], s["n_labels"]
+            pb_index,
+            "celfieish",
+            result,
+            target_proportions,
+            s["labels_dict"],
+            s["n_labels"],
         )
     }
 
@@ -135,8 +157,11 @@ def _run_celfie_on_reads(
 
     em_checkpoints = model_cfg.get("em_checkpoints")
     result = run_celfie_deconvolution(
-        reads, model_cfg["atlas"], s["labels_dict_reversed"],
-        n_labels=s["n_labels"], prepare_reads=prepare_reads,
+        reads,
+        model_cfg["atlas"],
+        s["labels_dict_reversed"],
+        n_labels=s["n_labels"],
+        prepare_reads=prepare_reads,
         num_iterations=model_cfg.get("num_iterations", 50),
         convergence_criteria=model_cfg.get("convergence_criteria", 0.001),
         random_restarts=model_cfg.get("random_restarts", 1),
@@ -150,13 +175,23 @@ def _run_celfie_on_reads(
         for n_steps, aligned in result:
             col = f"celfie_{n_steps}_steps"
             out[col] = _make_rows(
-                pb_index, col, aligned, target_proportions, s["labels_dict"], s["n_labels"]
+                pb_index,
+                col,
+                aligned,
+                target_proportions,
+                s["labels_dict"],
+                s["n_labels"],
             )
         return out
 
     return {
         "celfie": _make_rows(
-            pb_index, "celfie", result, target_proportions, s["labels_dict"], s["n_labels"]
+            pb_index,
+            "celfie",
+            result,
+            target_proportions,
+            s["labels_dict"],
+            s["n_labels"],
         )
     }
 
@@ -164,6 +199,7 @@ def _run_celfie_on_reads(
 # ---------------------------------------------------------------------------
 # Module-level worker
 # ---------------------------------------------------------------------------
+
 
 def _baselines_worker(
     task: Tuple[int, int, np.ndarray, np.ndarray],
@@ -187,11 +223,17 @@ def _baselines_worker(
     for model_cfg in s["models"]:
         model_name = model_cfg["name"]
         if model_name == "uxm":
-            model_results = _run_uxm_on_reads(reads, model_cfg, s, pb_index, target_proportions)
+            model_results = _run_uxm_on_reads(
+                reads, model_cfg, s, pb_index, target_proportions
+            )
         elif model_name == "celfieish":
-            model_results = _run_celfieish_on_reads(reads, model_cfg, s, pb_index, target_proportions, False)
+            model_results = _run_celfieish_on_reads(
+                reads, model_cfg, s, pb_index, target_proportions, False
+            )
         elif model_name == "celfie":
-            model_results = _run_celfie_on_reads(reads, model_cfg, s, pb_index, target_proportions,False)
+            model_results = _run_celfie_on_reads(
+                reads, model_cfg, s, pb_index, target_proportions, False
+            )
         else:
             model_results = {}
         results.update(model_results)
@@ -202,6 +244,7 @@ def _baselines_worker(
 # ---------------------------------------------------------------------------
 # Pipeline class
 # ---------------------------------------------------------------------------
+
 
 class PseudobulkDeconvolutionPipeline:
     """Run baseline deconvolution models over all pseudobulks in an HDF5 file.
@@ -233,7 +276,9 @@ class PseudobulkDeconvolutionPipeline:
         with open(config["labels_dict_path"], "r", encoding="utf-8") as f:
             raw = json.load(f)
         self.labels_dict: Dict[int, str] = {int(k): v for k, v in raw.items()}
-        self.labels_dict_reversed: Dict[str, int] = {v: k for k, v in self.labels_dict.items()}
+        self.labels_dict_reversed: Dict[str, int] = {
+            v: k for k, v in self.labels_dict.items()
+        }
         self.n_labels = len(self.labels_dict)
 
     # ------------------------------------------------------------------
@@ -274,7 +319,9 @@ class PseudobulkDeconvolutionPipeline:
             return {"name": "uxm", "atlas_df": atlas_df, "ref_cells": ref_cells}
 
         if model_name in ("celfieish", "celfie"):
-            from syto.data.atlases.celfieish_atlases import CpGBetaCountsMethylationAtlas
+            from syto.data.atlases.celfieish_atlases import (
+                CpGBetaCountsMethylationAtlas,
+            )
 
             atlas_path = model_cfg["atlas_path"]
             atlas = CpGBetaCountsMethylationAtlas(
@@ -283,7 +330,9 @@ class PseudobulkDeconvolutionPipeline:
                 atlas_path=atlas_path,
             )
             ref_cells = atlas.ref_cells
-            self.logger.info("%s: %d reference cell types", model_name.upper(), len(ref_cells))
+            self.logger.info(
+                "%s: %d reference cell types", model_name.upper(), len(ref_cells)
+            )
             state: Dict[str, Any] = {
                 "name": model_name,
                 "atlas": atlas,

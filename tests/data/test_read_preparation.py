@@ -50,7 +50,9 @@ class _MinimalAtlas(AbstractAtlas):
         ]
         df[methylation_pattern_column] = [
             s[o : o + l]
-            for s, o, l in zip(df[methylation_pattern_column].tolist(), offsets, lengths)
+            for s, o, l in zip(
+                df[methylation_pattern_column].tolist(), offsets, lengths
+            )
         ]
         return df
 
@@ -133,7 +135,7 @@ class TestAtlasOverlapAndTrim(unittest.TestCase):
         row = res.iloc[0]
         self.assertEqual(row["read_start"], 10)
         self.assertEqual(row["read_end"], 19)
-        self.assertEqual(row["seq"], "FGHIJKLMNO")   # positions 10..19 = 10 chars
+        self.assertEqual(row["seq"], "FGHIJKLMNO")  # positions 10..19 = 10 chars
         self.assertEqual(row["pattern"], "5678901234")
 
     def test_read_overlapping_two_regions_is_duplicated(self):
@@ -158,12 +160,12 @@ class TestAtlasOverlapAndTrim(unittest.TestCase):
 
         region1 = res[res["read_start"] == 15].iloc[0]
         self.assertEqual(region1["read_end"], 19)
-        self.assertEqual(region1["seq"], "ABCDE")    # positions 15..19 = 5 chars
+        self.assertEqual(region1["seq"], "ABCDE")  # positions 15..19 = 5 chars
         self.assertEqual(region1["pattern"], "01234")
 
         region2 = res[res["read_start"] == 21].iloc[0]
         self.assertEqual(region2["read_end"], 25)
-        self.assertEqual(region2["seq"], "GHIJK")    # positions 21..25 = 5 chars
+        self.assertEqual(region2["seq"], "GHIJK")  # positions 21..25 = 5 chars
         self.assertEqual(region2["pattern"], "67890")
 
     def test_reads_without_any_overlap_are_dropped(self):
@@ -232,7 +234,7 @@ class TestPrepareSplitsForPseudobulk(unittest.TestCase):
         left = df[df["read_name"] == "r_left"].iloc[0]
         self.assertEqual(left["read_start"], 10)
         self.assertEqual(left["read_end"], 19)
-        self.assertEqual(left["seq"], "FGHIJKLMNO")   # positions 10..19
+        self.assertEqual(left["seq"], "FGHIJKLMNO")  # positions 10..19
 
         contained = df[df["read_name"] == "r_contained"].iloc[0]
         self.assertEqual(contained["read_start"], 12)
