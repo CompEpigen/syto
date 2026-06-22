@@ -107,9 +107,8 @@ def preprocess_logits_for_prediction(
 ):
     """
     Preprocess logits for predictions.
-    Returns probabilities:
-    - For binary (2 classes): probability of positive class
-    - For multi-class (>2 classes): probability distribution across all classes
+    Returns softmax probabilities across all classes (sums to 1).
+    Applies uniformly for both binary (num_labels=2) and multi-class settings.
     """
     if isinstance(logits, tuple):  # Unpack logits if it's a tuple
         logits = logits[0]
@@ -118,19 +117,7 @@ def preprocess_logits_for_prediction(
         # Reshape logits to 2D if needed
         logits = logits.reshape(-1, logits.shape[-1])
 
-    num_classes = logits.shape[-1]
-
-    if num_classes == 2:
-        # Binary classification: return probability of positive class (class 1)
-        # Using sigmoid for compatibility with BCE loss, or softmax for CE loss
-        # Sigmoid approach (works with both):
-        return torch.sigmoid(logits)
-
-        # Alternative softmax approach (more consistent with CE loss):
-        # return torch.softmax(logits, dim=-1)[:, 1]
-    else:
-        # Multi-class classification: return full probability distribution
-        return torch.softmax(logits, dim=-1)
+    return torch.softmax(logits, dim=-1)
 
 
 def make_compute_metrics(
