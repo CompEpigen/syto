@@ -28,7 +28,7 @@ def build_read_level_prediction_df() -> pd.DataFrame:
                 "methylation_level": 0.75,
                 "methylated_CpGs": 1,
                 "unmethylated_CpGs": 1,
-                "ctype": "meta_a"
+                "ctype": "meta_a",
             },
             {
                 "dmr_label": "dmr_a",
@@ -147,7 +147,10 @@ class TestAggregatePredictionsByDmr(PredictionAggregationDataFrameTestBase):
 
     def test_aggregate_predictions_by_grg_with_defaults(self):
         """Aggregate with inferred prediction columns and weights created from CpG counts."""
-        result = aggregate_predictions_by_grg(self.read_level_prediction_df, group_cols=["dmr_label", "original_label", "dmr_ctype"])
+        result = aggregate_predictions_by_grg(
+            self.read_level_prediction_df,
+            group_cols=["dmr_label", "original_label", "dmr_ctype"],
+        )
 
         self.assertNotIn("index", result.columns)
         self.assertEqual(len(result), 2)

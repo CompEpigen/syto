@@ -63,8 +63,20 @@ class UXMMethylationAtlas(AbstractMethylationAtlas):
         atlas_path: Optional[str] = None,
         atlas_df: Optional[pd.DataFrame] = None,
         sep: str = "\t",
+        ignore: Optional[List[str]] = None,
+        include: Optional[List[str]] = None,
     ):
-        """Initialize the UXM methylation atlas."""
+        """Initialize the UXM methylation atlas.
+
+        Parameters
+        ----------
+        atlas_name, reference_genome, atlas_path / atlas_df, sep
+            Same as before.
+        ignore : list of str, optional
+            Cell-type column names to exclude from ``ref_cells``.
+        include : list of str, optional
+            When provided, only these cell-type columns are kept in ``ref_cells``.
+        """
         if atlas_path is not None and atlas_df is not None:
             raise ValueError("Only one of atlas_path or atlas_df should be provided.")
         elif atlas_path is not None:
@@ -83,6 +95,14 @@ class UXMMethylationAtlas(AbstractMethylationAtlas):
         self._atlas = self._atlas.sort_values(["chr", "start", "end"]).reset_index(
             drop=True
         )
+
+        # Compute filtered ref_cells once at construction time
+        all_cells = [c for c in self._atlas.columns if c in self.EXPECTED_CTYPE_COLUMNS]
+        if ignore:
+            all_cells = [c for c in all_cells if c not in ignore]
+        if include:
+            all_cells = [c for c in all_cells if c in include]
+        self._ref_cells: List[str] = all_cells
 
     # ------------------------------------------------------------------
     # AbstractAtlas interface
@@ -134,8 +154,8 @@ class UXMMethylationAtlas(AbstractMethylationAtlas):
 
     @property
     def ref_cells(self) -> List[str]:
-        """Cell-type columns available in this atlas (for deconvolution)."""
-        return [c for c in self._atlas.columns if c in self.EXPECTED_CTYPE_COLUMNS]
+        """Cell-type columns available in this atlas (filtered by ignore/include)."""
+        return self._ref_cells
 
     # ------------------------------------------------------------------
     # Reads preparation

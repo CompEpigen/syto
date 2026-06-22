@@ -10,10 +10,11 @@ Encoding convention (Syto):
 
 import logging
 from itertools import compress
-from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
+from baselines.deconvolution.base import BaselineDeconvolver
 from baselines.deconvolution.utils import rearange_deconvolution_results
 from scipy.special import logsumexp
 
@@ -31,7 +32,7 @@ from syto.data.dataset import resolve_column
 # ---------------------------------------------------------------------------
 
 
-class CelfieISH:
+class _CelfieISHModel:
     """Read-based EM deconvolution of methylation sequencing data.
 
     Parameters
@@ -222,251 +223,160 @@ class CelfieISH:
 
 
 # ---------------------------------------------------------------------------
-# Pipeline helpers
+# OOP interface
 # ---------------------------------------------------------------------------
 
 
-def prepare_reads_for_celfieish(
-    reads_data: pd.DataFrame,
-    atlas: "CpGBetaCountsMethylationAtlas",
-    labels_dict: Optional[Dict] = None,
-    cell_type_match_dict: Optional[Dict[str, str]] = None,
-    trim: bool = True,
-) -> pd.DataFrame:
-    """Overlap reads with atlas regions and trim to region boundaries.
-
-    Delegates to :meth:`CpGBetaCountsMethylationAtlas.prepare_reads`.  Unlike the
-    UXM pipeline, no M/U/X classification step is applied — CelFiE-ISH
-    operates on the full per-read methylation matrix built by
-    :func:`build_celfieish_input`.
+class CelFiEISHDeconvolver(BaselineDeconvolver):
+    """CelFiE-ISH read-based EM deconvolution baseline.
 
     Parameters
     ----------
-    reads_data : pd.DataFrame
-        Input reads sorted by ``["chromosome", "read_start", "read_end"]``.
     atlas : CpGBetaCountsMethylationAtlas
-    labels_dict : dict, optional
-        ``label_id → cell_type_name`` mapping for DMR label annotation.
-    cell_type_match_dict : dict, optional
-        Atlas cell-type name → project cell-type name aliases.
-    trim : bool
-        Clip reads to region boundaries.
-
-
-    Returns
-    -------
-    pd.DataFrame
-        Reads annotated with ``name``, ``region_start``, ``region_end``
-        and, if ``labels_dict`` provided, DMR label columns.
+    num_iterations : int
+    convergence_criteria : float
+    em_checkpoints : list of int, optional
+        When set, ``deconvolute_reads`` runs for exactly ``max(em_checkpoints)``
+        iterations and returns ``[(n_steps, proportions), …]`` instead of a
+        single proportions list.
     """
-    return atlas.prepare_reads(
-        reads_data,
-        trim=trim,
-        labels_dict=labels_dict,
-        cell_type_match_dict=cell_type_match_dict,
-    )
 
+    name = "celfieish"
 
-def build_celfieish_input(
-    reads: pd.DataFrame, atlas: "CpGBetaCountsMethylationAtlas"
-) -> Dict:
-    """Build per-region read × CpG matrices from prepared reads.
+    def __init__(
+        self,
+        atlas: "CpGBetaCountsMethylationAtlas",
+        num_iterations: int = 50,
+        convergence_criteria: float = 0.001,
+        em_checkpoints: Optional[List[int]] = None,
+    ) -> None:
+        self._atlas = atlas
+        self.num_iterations = num_iterations
+        self.convergence_criteria = convergence_criteria
+        self.em_checkpoints = em_checkpoints
 
-    For each atlas region that has overlapping reads, constructs an integer
-    matrix of shape ``(n_reads, n_CpGs)`` using the Syto encoding
-    (UNMETHYLATED=0, METHYLATED=1, NOVAL=2).  CpG columns are aligned to
-    the absolute genomic positions stored in the atlas.
+    @property
+    def atlas(self) -> "CpGBetaCountsMethylationAtlas":
+        return self._atlas
 
-    Parameters
-    ----------
-    reads : pd.DataFrame
-        Output of :func:`prepare_reads_for_celfieish`.  Must have columns
-        ``name``, ``read_start`` (trimmed, 0-based), and
-        ``methylation_pattern_column``.
-    atlas : CpGBetaCountsMethylationAtlas
+    def prepare_reads(self, reads: pd.DataFrame, **kwargs) -> pd.DataFrame:
+        return self._atlas.prepare_reads(reads, trim=True)
 
-    Returns
-    -------
-    dict with keys:
-        ``"matrices"`` — ``list[ndarray(n_reads, n_CpGs)]``, one per region.
-        ``"region_names"`` — ``list[str]``, region names in the same order.
-    """
-    region_names: List[str] = []
-    matrices: List[np.ndarray] = []
-    methylation_pattern_column = resolve_column(reads.columns, "methylation_ids")
+    def _build_celfieish_input(
+        self, reads: pd.DataFrame, atlas: "CpGBetaCountsMethylationAtlas"
+    ) -> Dict:
+        """Build per-region read × CpG matrices from prepared reads.
 
-    for region_name, group in reads.groupby("name", sort=False):
-        if region_name not in atlas:
-            _module_logger.warning("Region %s not in atlas; skipping.", region_name)
-            continue
+        For each atlas region that has overlapping reads, constructs an integer
+        matrix of shape ``(n_reads, n_CpGs)`` using the Syto encoding
+        (UNMETHYLATED=0, METHYLATED=1, NOVAL=2).  CpG columns are aligned to
+        the absolute genomic positions stored in the atlas.
 
-        cpg_lookup = atlas.get_cpg_lookup(region_name)
-        n_cpgs = atlas.get_n_cpgs(region_name)
-        n_reads = len(group)
+        Parameters
+        ----------
+        reads : pd.DataFrame
+            Output of :func:`prepare_reads`.  Must have columns
+            ``name``, ``read_start`` (trimmed, 0-based), and
+            ``methylation_pattern_column``.
+        atlas : CpGBetaCountsMethylationAtlas
 
-        matrix = np.full((n_reads, n_cpgs), NOVAL, dtype=np.int8)
+        Returns
+        -------
+        dict with keys:
+            ``"matrices"`` — ``list[ndarray(n_reads, n_CpGs)]``, one per region.
+            ``"region_names"`` — ``list[str]``, region names in the same order.
+        """
+        region_names: List[str] = []
+        matrices: List[np.ndarray] = []
+        methylation_pattern_column = resolve_column(reads.columns, "methylation_ids")
 
-        # Scan all reads with numpy ASCII ops, collecting (row_idx, abs_pos, meth)
-        # triples across the whole region.  A single pd.Series.map call then
-        # resolves all positions to column indices before one fancy-index write.
-        all_abs_pos: List[np.ndarray] = []
-        all_row_idx: List[np.ndarray] = []
-        all_meths: List[np.ndarray] = []
-
-        for row_idx, (pattern, rs) in enumerate(
-            zip(
-                group[methylation_pattern_column].tolist(), group["read_start"].tolist()
-            )
-        ):
-            arr = np.frombuffer(pattern.encode("ascii"), dtype=np.uint8)
-            cpg_mask = (arr == 48) | (arr == 49)  # ord('0')=48, ord('1')=49
-            offsets = np.where(cpg_mask)[0]
-            if offsets.size == 0:
+        for region_name, group in reads.groupby("name", sort=False):
+            if region_name not in atlas:
+                _module_logger.warning("Region %s not in atlas; skipping.", region_name)
                 continue
 
-            n = offsets.size
-            all_abs_pos.append(int(rs) + offsets)
-            all_row_idx.append(np.full(n, row_idx, dtype=np.intp))
-            all_meths.append(
-                (arr[cpg_mask] == 49).astype(np.int8)
-            )  # 1=METHYLATED, 0=UNMETHYLATED
+            cpg_lookup = atlas.get_cpg_lookup(region_name)
+            n_cpgs = atlas.get_n_cpgs(region_name)
+            n_reads = len(group)
 
-        if all_abs_pos:
-            positions = np.concatenate(all_abs_pos)
-            row_indices = np.concatenate(all_row_idx)
-            meth_states = np.concatenate(all_meths)
+            matrix = np.full((n_reads, n_cpgs), NOVAL, dtype=np.int8)
 
-            col_series = pd.Series(positions).map(cpg_lookup)  # one call per region
-            valid = col_series.notna().values
-            if valid.any():
-                col_indices = col_series[valid].astype(np.intp).values
-                matrix[row_indices[valid], col_indices] = meth_states[valid]
+            # Scan all reads with numpy ASCII ops, collecting (row_idx, abs_pos, meth)
+            # triples across the whole region.  A single pd.Series.map call then
+            # resolves all positions to column indices before one fancy-index write.
+            all_abs_pos: List[np.ndarray] = []
+            all_row_idx: List[np.ndarray] = []
+            all_meths: List[np.ndarray] = []
 
-        region_names.append(region_name)
-        matrices.append(matrix)
+            for row_idx, (pattern, rs) in enumerate(
+                zip(
+                    group[methylation_pattern_column].tolist(),
+                    group["read_start"].tolist(),
+                )
+            ):
+                arr = np.frombuffer(pattern.encode("ascii"), dtype=np.uint8)
+                cpg_mask = (arr == 48) | (arr == 49)  # ord('0')=48, ord('1')=49
+                offsets = np.where(cpg_mask)[0]
+                if offsets.size == 0:
+                    continue
 
-    return {"matrices": matrices, "region_names": region_names}
+                n = offsets.size
+                all_abs_pos.append(int(rs) + offsets)
+                all_row_idx.append(np.full(n, row_idx, dtype=np.intp))
+                all_meths.append(
+                    (arr[cpg_mask] == 49).astype(np.int8)
+                )  # 1=METHYLATED, 0=UNMETHYLATED
 
+            if all_abs_pos:
+                positions = np.concatenate(all_abs_pos)
+                row_indices = np.concatenate(all_row_idx)
+                meth_states = np.concatenate(all_meths)
 
-def celfieish_deconvolution(
-    mixture_matrices: List[np.ndarray],
-    beta_matrices: List[np.ndarray],
-    num_iterations: int = 50,
-    convergence_criteria: float = 0.001,
-    checkpoints: Optional[List[int]] = None,
-):
-    """Run CelFiE-ISH EM deconvolution.
+                col_series = pd.Series(positions).map(cpg_lookup)  # one call per region
+                valid = col_series.notna().values
+                if valid.any():
+                    col_indices = col_series[valid].astype(np.intp).values
+                    matrix[row_indices[valid], col_indices] = meth_states[valid]
 
-    Parameters
-    ----------
-    mixture_matrices : list of ndarray(reads, CpGs)
-        Per-region read matrices from :func:`build_celfieish_input`.
-    beta_matrices : list of ndarray(T, CpGs)
-        Per-region atlas beta matrices from
-        :meth:`CpGBetaCountsMethylationAtlas.get_beta_for_regions`.
-    num_iterations : int
-        Max EM iterations when ``checkpoints`` is ``None``.
-    convergence_criteria : float
-        Early-stop threshold when ``checkpoints`` is ``None``.
-    checkpoints : list of int, optional
-        When provided, runs exactly ``max(checkpoints)`` iterations without
-        early stopping and returns proportions at each requested step.
+            region_names.append(region_name)
+            matrices.append(matrix)
 
-    Returns
-    -------
-    ndarray(T,)
-        Cell-type proportions when ``checkpoints`` is ``None``.
-    list of (iteration, ndarray(T,))
-        Snapshot proportions when ``checkpoints`` is provided,
-        in ascending iteration order.
-    """
-    model = CelfieISH(
-        mixture_matrices,
-        beta_matrices,
-        num_iterations=num_iterations,
-        convergence_criteria=convergence_criteria,
-    )
-    if checkpoints is not None:
-        return model.run_with_checkpoints(checkpoints)
-    alpha, _ = model.two_step()
-    return alpha
+        return {"matrices": matrices, "region_names": region_names}
 
+    def build_input(self, reads: pd.DataFrame) -> dict:
+        return self._build_celfieish_input(reads, self._atlas)
 
-def run_celfieish_deconvolution(
-    reads: pd.DataFrame,
-    atlas: "CpGBetaCountsMethylationAtlas",
-    labels_dict_reversed: Dict[str, int],
-    n_labels: Optional[int] = None,
-    prepare_reads: bool = True,
-    num_iterations: int = 50,
-    convergence_criteria: float = 0.001,
-    checkpoints: Optional[List[int]] = None,
-):
-    """Sort reads, optionally prepare with atlas, build input, deconvolve, align proportions.
-
-    Parameters
-    ----------
-    reads : pd.DataFrame
-        Raw processed reads (when prepare_reads=True) or atlas-annotated reads
-        (when prepare_reads=False, must already have a ``name`` column).
-    atlas : CpGBetaCountsMethylationAtlas
-    labels_dict_reversed : dict
-        ``cell_type_name → label_index`` mapping.
-    n_labels : int, optional
-        Defaults to ``len(labels_dict_reversed)``.
-    prepare_reads : bool
-        When True, calls ``atlas.prepare_reads`` to overlap and trim reads.
-        Set False when reads already carry atlas-region annotations.
-    num_iterations, convergence_criteria
-        Passed to :func:`celfieish_deconvolution` (convergence mode).
-    checkpoints : list of int, optional
-        When provided, runs exactly ``max(checkpoints)`` EM iterations.
-
-    Returns
-    -------
-    list of float
-        Proportions aligned to label order when checkpoints is None.
-    list of (int, list of float)
-        ``[(n_steps, proportions), …]`` when checkpoints is provided.
-    None
-        If no atlas regions overlap the reads.
-    """
-    reads_sorted = (
-        reads.sort_values(["chromosome", "read_start", "read_end"])
-        .reset_index(drop=True)
-        .copy()
-    )
-    reads_sorted["read_start"] = reads_sorted["read_start"].astype("int64")
-    reads_sorted["read_end"] = reads_sorted["read_end"].astype("int64")
-
-    prepared = atlas.prepare_reads(reads_sorted) if prepare_reads else reads_sorted
-
-    celfieish_in = build_celfieish_input(prepared, atlas)
-    if not celfieish_in["matrices"]:
-        return None
-
-    beta_matrices = atlas.get_beta_for_regions(celfieish_in["region_names"])
-    result = celfieish_deconvolution(
-        celfieish_in["matrices"],
-        beta_matrices,
-        num_iterations=num_iterations,
-        convergence_criteria=convergence_criteria,
-        checkpoints=checkpoints,
-    )
-
-    ref_cells = atlas.ref_cells
-
-    if checkpoints is not None:
-        return [
-            (
-                n_steps,
-                rearange_deconvolution_results(
-                    labels_dict_reversed, alpha, ref_cells, n_labels=n_labels
-                ),
-            )
-            for n_steps, alpha in result
-        ]
-
-    return rearange_deconvolution_results(
-        labels_dict_reversed, result, ref_cells, n_labels=n_labels
-    )
+    def deconvolute_reads(
+        self,
+        reads: pd.DataFrame,
+        labels_dict_reversed: Dict[str, int],
+        n_labels: Optional[int] = None,
+        prepare: bool = True,
+    ) -> Optional[Union[List[float], List[Tuple[int, List[float]]]]]:
+        reads_sorted = self._sort_reads(reads)
+        prepared = self.prepare_reads(reads_sorted) if prepare else reads_sorted
+        celfieish_in = self.build_input(prepared)
+        if not celfieish_in["matrices"]:
+            return None
+        beta_matrices = self._atlas.get_beta_for_regions(celfieish_in["region_names"])
+        model = _CelfieISHModel(
+            celfieish_in["matrices"],
+            beta_matrices,
+            num_iterations=self.num_iterations,
+            convergence_criteria=self.convergence_criteria,
+        )
+        ref_cells = self._atlas.ref_cells
+        if self.em_checkpoints is not None:
+            return [
+                (
+                    n_steps,
+                    rearange_deconvolution_results(
+                        labels_dict_reversed, alpha, ref_cells, n_labels=n_labels
+                    ),
+                )
+                for n_steps, alpha in model.run_with_checkpoints(self.em_checkpoints)
+            ]
+        alpha, _ = model.two_step()
+        return rearange_deconvolution_results(
+            labels_dict_reversed, alpha, ref_cells, n_labels=n_labels
+        )

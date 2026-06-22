@@ -87,12 +87,8 @@ class TestAtlasOverlapAndTrim(unittest.TestCase):
         df_sorted = df.sort_values(
             by=["chromosome", "read_start", "read_end"]
         ).reset_index(drop=True)
-        overlapped = atlas.overlap_reads(
-            df_sorted
-        )
-        return atlas.trim_reads(
-            overlapped
-        )
+        overlapped = atlas.overlap_reads(df_sorted)
+        return atlas.trim_reads(overlapped)
 
     def test_fully_contained_read_is_unchanged(self):
         """A read fully inside an atlas region keeps its coordinates and sequence."""
