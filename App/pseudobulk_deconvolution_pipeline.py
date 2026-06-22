@@ -65,64 +65,44 @@ def _make_rows(
     ]
 
 
-def _run_uxm_on_reads(
+def _run_baseline_on_reads(
     reads: pd.DataFrame,
-    model_cfg: Dict[str, Any],
+    deconvolver,
     s: Dict[str, Any],
     pb_index: int,
     target_proportions: np.ndarray,
+    prepare: bool = False,
 ) -> Dict[str, List[Dict[str, Any]]]:
-    from baselines.deconvolution.uxm.uxm import run_uxm_deconvolution
+    """Unified helper: run one baseline deconvolver and package results.
 
-    aligned = run_uxm_deconvolution(
+    UXM reads from the pseudobulk HDF5 carry atlas-region annotations but not
+    yet the M/U/X methylation-state columns required by ``build_input``.  They
+    are classified here before calling ``deconvolute_reads`` with
+    ``prepare=False`` so the atlas overlap step is not repeated.
+    """
+    from baselines.deconvolution.base import BaselineDeconvolver
+    from baselines.deconvolution.uxm.uxm import UXMDeconvolver
+
+    if isinstance(deconvolver, UXMDeconvolver):
+        from baselines.deconvolution.uxm import mark_records_methyl_state
+
+        reads = mark_records_methyl_state(reads.copy())
+
+    result = deconvolver.deconvolute_reads(
         reads,
-        model_cfg["atlas_df"],
-        model_cfg["ref_cells"],
         s["labels_dict_reversed"],
         n_labels=s["n_labels"],
-    )
-    if aligned is None:
-        return {}
-    return {
-        "uxm": _make_rows(
-            pb_index,
-            "uxm",
-            aligned,
-            target_proportions,
-            s["labels_dict"],
-            s["n_labels"],
-        )
-    }
-
-
-def _run_celfieish_on_reads(
-    reads: pd.DataFrame,
-    model_cfg: Dict[str, Any],
-    s: Dict[str, Any],
-    pb_index: int,
-    target_proportions: np.ndarray,
-    prepare_reads: bool = True,
-) -> Dict[str, List[Dict[str, Any]]]:
-    from baselines.deconvolution.celfieish.celfieish import run_celfieish_deconvolution
-
-    em_checkpoints = model_cfg.get("em_checkpoints")
-    result = run_celfieish_deconvolution(
-        reads,
-        model_cfg["atlas"],
-        s["labels_dict_reversed"],
-        n_labels=s["n_labels"],
-        prepare_reads=prepare_reads,
-        num_iterations=model_cfg.get("num_iterations", 50),
-        convergence_criteria=model_cfg.get("convergence_criteria", 0.001),
-        checkpoints=em_checkpoints,
+        prepare=prepare,
     )
     if result is None:
         return {}
 
+    model_name = deconvolver.name
+    em_checkpoints = getattr(deconvolver, "em_checkpoints", None)
     if em_checkpoints is not None:
         out: Dict[str, List[Dict[str, Any]]] = {}
         for n_steps, aligned in result:
-            col = f"celfieish_{n_steps}_steps"
+            col = f"{model_name}_{n_steps}_steps"
             out[col] = _make_rows(
                 pb_index,
                 col,
@@ -134,60 +114,9 @@ def _run_celfieish_on_reads(
         return out
 
     return {
-        "celfieish": _make_rows(
+        model_name: _make_rows(
             pb_index,
-            "celfieish",
-            result,
-            target_proportions,
-            s["labels_dict"],
-            s["n_labels"],
-        )
-    }
-
-
-def _run_celfie_on_reads(
-    reads: pd.DataFrame,
-    model_cfg: Dict[str, Any],
-    s: Dict[str, Any],
-    pb_index: int,
-    target_proportions: np.ndarray,
-    prepare_reads: bool = True,
-) -> Dict[str, List[Dict[str, Any]]]:
-    from baselines.deconvolution.celfie.celfie import run_celfie_deconvolution
-
-    em_checkpoints = model_cfg.get("em_checkpoints")
-    result = run_celfie_deconvolution(
-        reads,
-        model_cfg["atlas"],
-        s["labels_dict_reversed"],
-        n_labels=s["n_labels"],
-        prepare_reads=prepare_reads,
-        num_iterations=model_cfg.get("num_iterations", 50),
-        convergence_criteria=model_cfg.get("convergence_criteria", 0.001),
-        random_restarts=model_cfg.get("random_restarts", 1),
-        checkpoints=em_checkpoints,
-    )
-    if result is None:
-        return {}
-
-    if em_checkpoints is not None:
-        out: Dict[str, List[Dict[str, Any]]] = {}
-        for n_steps, aligned in result:
-            col = f"celfie_{n_steps}_steps"
-            out[col] = _make_rows(
-                pb_index,
-                col,
-                aligned,
-                target_proportions,
-                s["labels_dict"],
-                s["n_labels"],
-            )
-        return out
-
-    return {
-        "celfie": _make_rows(
-            pb_index,
-            "celfie",
+            model_name,
             result,
             target_proportions,
             s["labels_dict"],
@@ -220,19 +149,11 @@ def _baselines_worker(
     reads = s["input_df"].iloc[read_ids].reset_index(drop=True)
 
     results: Dict[str, List[Dict[str, Any]]] = {}
-    for model_cfg in s["models"]:
-        model_name = model_cfg["name"]
-        if model_name == "uxm":
-            model_results = _run_uxm_on_reads(
-                reads, model_cfg, s, pb_index, target_proportions
-            )
-        elif model_name == "celfieish":
-            model_results = _run_celfieish_on_reads(
-                reads, model_cfg, s, pb_index, target_proportions, False
-            )
-        elif model_name == "celfie":
-            model_results = _run_celfie_on_reads(
-                reads, model_cfg, s, pb_index, target_proportions, False
+    for deconvolver in s["models"]:
+        model_name = deconvolver.name
+        if model_name in ("uxm", "celfieish", "celfie"):
+            model_results = _run_baseline_on_reads(
+                reads, deconvolver, s, pb_index, target_proportions
             )
         else:
             model_results = {}
@@ -305,18 +226,26 @@ class PseudobulkDeconvolutionPipeline:
     # Atlas loading
     # ------------------------------------------------------------------
 
-    def _load_model_state(self, model_cfg: Dict[str, Any]) -> Dict[str, Any]:
-        """Load the atlas for one baseline config and return a worker-ready dict."""
+    def _load_model_state(self, model_cfg: Dict[str, Any]):
+        """Instantiate the deconvolver for one baseline config."""
+        from baselines.deconvolution.uxm.uxm import UXMDeconvolver
+        from baselines.deconvolution.celfie.celfie import CelFiEDeconvolver
+        from baselines.deconvolution.celfieish.celfieish import CelFiEISHDeconvolver
+
         model_name = model_cfg["model"]
 
         if model_name == "uxm":
-            from baselines.deconvolution.uxm.uxm import load_atlas
+            from syto.data.atlases.uxm_atlases import UXMMethylationAtlas as _UXMAtlas
 
-            atlas_df, ref_cells_all = load_atlas(model_cfg["atlas_path"])
-            ignore_cells = model_cfg.get("ignore_cells", [])
-            ref_cells = [c for c in ref_cells_all if c not in ignore_cells]
-            self.logger.info("UXM: %d reference cell types", len(ref_cells))
-            return {"name": "uxm", "atlas_df": atlas_df, "ref_cells": ref_cells}
+            atlas_path = model_cfg["atlas_path"]
+            atlas = _UXMAtlas(
+                atlas_name=model_cfg.get("atlas_name", Path(atlas_path).stem),
+                reference_genome=model_cfg.get("reference_genome", "hg38"),
+                atlas_path=atlas_path,
+                ignore=model_cfg.get("ignore_cells") or [],
+            )
+            self.logger.info("UXM: %d reference cell types", len(atlas.ref_cells))
+            return UXMDeconvolver(atlas)
 
         if model_name in ("celfieish", "celfie"):
             from syto.data.atlases.celfieish_atlases import (
@@ -329,21 +258,26 @@ class PseudobulkDeconvolutionPipeline:
                 reference_genome=model_cfg.get("reference_genome", "hg38"),
                 atlas_path=atlas_path,
             )
-            ref_cells = atlas.ref_cells
             self.logger.info(
-                "%s: %d reference cell types", model_name.upper(), len(ref_cells)
+                "%s: %d reference cell types", model_name.upper(), len(atlas.ref_cells)
             )
-            state: Dict[str, Any] = {
-                "name": model_name,
-                "atlas": atlas,
-                "ref_cells": ref_cells,
-                "em_checkpoints": model_cfg.get("em_checkpoints"),
-                "num_iterations": model_cfg.get("num_iterations", 50),
-                "convergence_criteria": model_cfg.get("convergence_criteria", 0.001),
-            }
-            if model_name == "celfie":
-                state["random_restarts"] = model_cfg.get("random_restarts", 1)
-            return state
+            em_checkpoints = model_cfg.get("em_checkpoints")
+            num_iterations = model_cfg.get("num_iterations", 50)
+            convergence_criteria = model_cfg.get("convergence_criteria", 0.001)
+            if model_name == "celfieish":
+                return CelFiEISHDeconvolver(
+                    atlas,
+                    num_iterations=num_iterations,
+                    convergence_criteria=convergence_criteria,
+                    em_checkpoints=em_checkpoints,
+                )
+            return CelFiEDeconvolver(
+                atlas,
+                num_iterations=num_iterations,
+                convergence_criteria=convergence_criteria,
+                random_restarts=model_cfg.get("random_restarts", 1),
+                em_checkpoints=em_checkpoints,
+            )
 
         raise ValueError(
             f"Unknown model: {model_name!r}. Supported: uxm, celfieish, celfie"

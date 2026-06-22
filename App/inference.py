@@ -18,7 +18,11 @@ import torch
 
 import numpy as np
 import pandas as pd
+from baselines.deconvolution.base import BaselineDeconvolver
 from baselines.deconvolution.uxm import mark_records_methyl_state
+from baselines.deconvolution.uxm.uxm import UXMDeconvolver
+from baselines.deconvolution.celfie.celfie import CelFiEDeconvolver
+from baselines.deconvolution.celfieish.celfieish import CelFiEISHDeconvolver
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -103,8 +107,8 @@ class InferencePipeline:
             f"Loaded atlas with {len(self.atlas.atlas)} regions from {atlas_path}"
         )
 
-        # ── Load baseline atlas states ───────────────────────────────
-        self._baseline_states = self._load_baseline_states()
+        # ── Load baseline deconvolvers ───────────────────────────────
+        self._baseline_deconvolvers = self._load_baseline_deconvolvers()
 
         # ── Placeholder attributes populated during run() ───────────────
         self.processed_reads: Optional[pd.DataFrame] = None
@@ -534,29 +538,8 @@ class InferencePipeline:
                 )
 
         # ── Read-based baseline methods ─────────────────────────────────
-        for baseline_state in self._baseline_states:
-            model = baseline_state["name"]
-            self.logger.info(f"Running baseline deconvolution: {model}")
-
-            try:
-                if model == "uxm":
-                    proportions = self._run_uxm_deconvolution(baseline_state)
-                    if proportions is not None:
-                        results.append(("uxm", "None", proportions))
-
-                elif model == "celfieish":
-                    results.extend(self._run_celfieish_baseline(baseline_state))
-
-                elif model == "celfie":
-                    results.extend(self._run_celfie_baseline(baseline_state))
-
-                else:
-                    self.logger.warning(f"Unknown baseline model: {model}, skipping")
-
-            except Exception as e:  # pylint: disable=broad-exception-caught
-                self.logger.error(
-                    f"Baseline method '{model}' failed: {e}", exc_info=True
-                )
+        for deconvolver in self._baseline_deconvolvers:
+            results.extend(self._run_baseline(deconvolver))
 
         return results
 
@@ -737,10 +720,10 @@ class InferencePipeline:
 
         return proportions
 
-    def _load_baseline_states(self) -> List[Dict[str, Any]]:
-        """Load atlas objects for all baselines listed under deconvolution.baselines."""
+    def _load_baseline_deconvolvers(self) -> List[BaselineDeconvolver]:
+        """Instantiate deconvolvers for all baselines listed under deconvolution.baselines."""
         baselines_cfg = self.config.get("deconvolution", {}).get("baselines", [])
-        states: List[Dict[str, Any]] = []
+        deconvolvers: List[BaselineDeconvolver] = []
 
         for cfg in baselines_cfg:
             if not cfg.get("enabled", True):
@@ -748,17 +731,22 @@ class InferencePipeline:
             model = cfg["model"]
 
             if model == "uxm":
-                from baselines.deconvolution.uxm.uxm import load_atlas
+                from syto.data.atlases.uxm_atlases import (
+                    UXMMethylationAtlas as _UXMAtlas,
+                )
 
-                atlas_df, ref_cells_all = load_atlas(cfg["atlas_path"])
+                atlas_path = cfg["atlas_path"]
+                uxm_atlas = _UXMAtlas(
+                    atlas_name=cfg.get("atlas_name", Path(atlas_path).stem),
+                    reference_genome=cfg.get("reference_genome", "hg38"),
+                    atlas_path=atlas_path,
+                )
                 ignore_cells = cfg.get("ignore_cells", [])
-                ref_cells = [c for c in ref_cells_all if c not in ignore_cells]
+                ref_cells = [c for c in uxm_atlas.ref_cells if c not in ignore_cells]
                 self.logger.info(
                     "UXM baseline: %d reference cell types", len(ref_cells)
                 )
-                states.append(
-                    {"name": "uxm", "atlas_df": atlas_df, "ref_cells": ref_cells}
-                )
+                deconvolvers.append(UXMDeconvolver(uxm_atlas, ref_cells=ref_cells))
 
             elif model in ("celfieish", "celfie"):
                 from syto.data.atlases.celfieish_atlases import (
@@ -771,126 +759,80 @@ class InferencePipeline:
                     reference_genome=cfg.get("reference_genome", "hg38"),
                     atlas_path=atlas_path,
                 )
-                state: Dict[str, Any] = {
-                    "name": model,
-                    "atlas": atlas,
-                    "ref_cells": atlas.ref_cells,
-                    "em_checkpoints": cfg.get("em_checkpoints"),
-                    "num_iterations": cfg.get("num_iterations", 50),
-                    "convergence_criteria": cfg.get("convergence_criteria", 0.001),
-                }
-                if model == "celfie":
-                    state["random_restarts"] = cfg.get("random_restarts", 1)
                 self.logger.info(
                     "%s baseline: %d reference cell types",
                     model.upper(),
                     len(atlas.ref_cells),
                 )
-                states.append(state)
+                em_checkpoints = cfg.get("em_checkpoints")
+                num_iterations = cfg.get("num_iterations", 50)
+                convergence_criteria = cfg.get("convergence_criteria", 0.001)
+
+                if model == "celfieish":
+                    deconvolvers.append(
+                        CelFiEISHDeconvolver(
+                            atlas,
+                            num_iterations=num_iterations,
+                            convergence_criteria=convergence_criteria,
+                            em_checkpoints=em_checkpoints,
+                        )
+                    )
+                else:
+                    deconvolvers.append(
+                        CelFiEDeconvolver(
+                            atlas,
+                            num_iterations=num_iterations,
+                            convergence_criteria=convergence_criteria,
+                            random_restarts=cfg.get("random_restarts", 1),
+                            em_checkpoints=em_checkpoints,
+                        )
+                    )
 
             else:
                 self.logger.warning(
                     "Unknown baseline model %r in config; skipping.", model
                 )
 
-        return states
+        return deconvolvers
 
-    def _run_uxm_deconvolution(
-        self, baseline_state: Dict[str, Any]
-    ) -> Optional[np.ndarray]:
-        """Run UXM baseline deconvolution using the pre-loaded atlas state."""
-        from baselines.deconvolution.uxm.uxm import run_uxm_deconvolution
-
-        aligned = run_uxm_deconvolution(
-            self.prepared_reads,
-            baseline_state["atlas_df"],
-            baseline_state["ref_cells"],
-            self.labels_dict_reversed,
-            n_labels=self.num_labels,
-        )
-        if aligned is None:
-            self.logger.warning("UXM: no overlapping reads, skipping.")
-            return None
-        proportions = np.round(np.array(aligned), 4)
-        self.logger.debug("UXM proportions: %s", proportions)
-        return proportions
-
-    def _run_celfieish_baseline(
-        self, baseline_state: Dict[str, Any]
+    def _run_baseline(
+        self, deconvolver: BaselineDeconvolver
     ) -> List[Tuple[str, str, np.ndarray]]:
-        """Run CelFiE-ISH baseline deconvolution; returns result tuples ready for results list."""
-        from baselines.deconvolution.celfieish.celfieish import (
-            run_celfieish_deconvolution,
-        )
+        """Run a single baseline deconvolver and return result tuples."""
+        model = deconvolver.name
+        self.logger.info(f"Running baseline deconvolution: {model}")
 
         if self.processed_reads is None:
             self.logger.warning(
-                "CelFiE-ISH: requires processed_reads (not available for predicted_reads input); skipping."
+                "%s: requires processed_reads (not available for predicted_reads input); skipping.",
+                model,
             )
             return []
 
-        em_checkpoints = baseline_state.get("em_checkpoints")
-        result = run_celfieish_deconvolution(
-            self.processed_reads,
-            baseline_state["atlas"],
-            self.labels_dict_reversed,
-            n_labels=self.num_labels,
-            prepare_reads=True,
-            num_iterations=baseline_state.get("num_iterations", 50),
-            convergence_criteria=baseline_state.get("convergence_criteria", 0.001),
-            checkpoints=em_checkpoints,
-        )
-        if result is None:
-            self.logger.warning("CelFiE-ISH: no overlapping reads, skipping.")
-            return []
-
-        if em_checkpoints is not None:
-            out = []
-            for n_steps, aligned in result:
-                name = f"celfieish_{n_steps}_steps"
-                out.append((name, "None", np.round(np.array(aligned), 4)))
-            return out
-
-        self.logger.debug("CelFiE-ISH proportions: %s", result)
-        return [("celfieish", "None", np.round(np.array(result), 4))]
-
-    def _run_celfie_baseline(
-        self, baseline_state: Dict[str, Any]
-    ) -> List[Tuple[str, str, np.ndarray]]:
-        """Run CelFiE baseline deconvolution; returns result tuples ready for results list."""
-        from baselines.deconvolution.celfie.celfie import run_celfie_deconvolution
-
-        if self.processed_reads is None:
-            self.logger.warning(
-                "CelFiE: requires processed_reads (not available for predicted_reads input); skipping."
+        try:
+            result = deconvolver.deconvolute_reads(
+                self.processed_reads,
+                self.labels_dict_reversed,
+                n_labels=self.num_labels,
+                prepare=True,
             )
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            self.logger.error(f"Baseline method '{model}' failed: {e}", exc_info=True)
             return []
 
-        em_checkpoints = baseline_state.get("em_checkpoints")
-        result = run_celfie_deconvolution(
-            self.processed_reads,
-            baseline_state["atlas"],
-            self.labels_dict_reversed,
-            n_labels=self.num_labels,
-            prepare_reads=True,
-            num_iterations=baseline_state.get("num_iterations", 50),
-            convergence_criteria=baseline_state.get("convergence_criteria", 0.001),
-            random_restarts=baseline_state.get("random_restarts", 1),
-            checkpoints=em_checkpoints,
-        )
         if result is None:
-            self.logger.warning("CelFiE: no overlapping reads, skipping.")
+            self.logger.warning("%s: no overlapping reads, skipping.", model)
             return []
 
+        em_checkpoints = getattr(deconvolver, "em_checkpoints", None)
         if em_checkpoints is not None:
-            out = []
-            for n_steps, aligned in result:
-                name = f"celfie_{n_steps}_steps"
-                out.append((name, "None", np.round(np.array(aligned), 4)))
-            return out
+            return [
+                (f"{model}_{n_steps}_steps", "None", np.round(np.array(aligned), 4))
+                for n_steps, aligned in result
+            ]
 
-        self.logger.debug("CelFiE proportions: %s", result)
-        return [("celfie", "None", np.round(np.array(result), 4))]
+        self.logger.debug("%s proportions: %s", model, result)
+        return [(model, "None", np.round(np.array(result), 4))]
 
     # ═══════════════════════════════════════════════════════════════════
     #  Output
