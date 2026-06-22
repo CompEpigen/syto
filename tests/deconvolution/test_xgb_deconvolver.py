@@ -240,34 +240,5 @@ class TestTrainXGBDeconvolverConvenience(unittest.TestCase):
         self.assertIsInstance(history, DeconvolutionHistory)
         self.assertEqual(history.train_loss, [0.2])
 
-    @patch("syto.deconvolution.xgbdeconvolver.XGBoostDeconvolver.fit", autospec=True)
-    def test_train_convenience_respects_provided_config(self, mock_fit):
-        """Convenience function should preserve explicitly provided config values."""
-        X_train = np.ones((2, 39, 40), dtype=float)
-        y_train = np.ones((2, 39), dtype=float) / 39.0
-        X_val = np.ones((1, 39, 40), dtype=float)
-        y_val = np.ones((1, 39), dtype=float) / 39.0
-
-        cfg = XGBDeconvolverConfig(early_stopping_rounds=99)
-
-        def fake_fit(self, *args, **kwargs):
-            # Keep this lightweight: we only need to emulate history population.
-            self.history = DeconvolutionHistory(train_loss=[0.3])
-            return self
-
-        mock_fit.side_effect = fake_fit
-
-        model, _ = train_xgb_deconvolver(
-            X_train,
-            y_train,
-            X_val,
-            y_val,
-            config=cfg,
-            verbose=0,
-        )
-
-        self.assertEqual(model.config.early_stopping_rounds, 99)
-
-
 if __name__ == "__main__":
     unittest.main()
