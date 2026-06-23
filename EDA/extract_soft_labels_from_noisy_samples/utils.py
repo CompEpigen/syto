@@ -49,7 +49,7 @@ def get_idx_from_sig(sig):
     return idx
 
 
-def get_sig_from_idx(idx, sig_length, return_str=False):
+def get_sig_from_idx(idx, sig_length, return_str=False) -> Union[np.ndarray, str]:
     assert idx < 2**sig_length, "Index is too large for the given signature length"
     sig = []
     for i in range(sig_length):
@@ -332,3 +332,19 @@ def compute_nrmse_per_sig_length_ctype_given_sig(
         if len(nrmse_list) > 0
     }
     return avg_nrmse_per_length, num_sigs_considered_per_length
+
+
+def is_subset_of_sig(sig1, sig2) -> bool:
+    """
+    Check if sig1 is a subset of sig2
+    """
+    start1, len1, sig_idx1 = sig1
+    start2, len2, sig_idx2 = sig2
+    end1 = start1 + len1
+    end2 = start2 + len2
+    if start1 < start2 or end1 > end2:
+        return False
+    pattern1 = get_sig_from_idx(sig_idx1, len1)
+    pattern2 = get_sig_from_idx(sig_idx2, len2)
+    cropped_pattern2 = pattern2[start1 - start2 : end1 - start2]
+    return np.array_equal(pattern1, cropped_pattern2)

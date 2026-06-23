@@ -1,9 +1,10 @@
 from typing import Dict
+from functools import cache
 
 import numpy as np
 from collections import defaultdict
 
-from utils import get_sig_from_idx, get_idx_from_sig
+from utils import get_sig_from_idx, get_idx_from_sig, is_subset_of_sig
 
 ## METHODS FOR PURE SAMPLES ONLY
 
@@ -175,6 +176,29 @@ def naive_sl_with_pooling(
     return naive_sl_with_pooling_sig_given_ctype, naive_sl_with_pooling_ctype_given_sig
 
 
+@cache
+def _compute_which_is_subset_and_jaccard_distances(
+    all_signatures: tuple[tuple[int, int, int], ...],
+):
+    """
+    Compute the pairwise Jaccard distances between all signatures and which signatures are supersets of which other signatures.
+    This function is designed to have memoization, so that we can call it multiple times
+    with the same all_signatures list and avoid recomputing the distances and subset relationships.
+    """
+    n_all_signatures = len(all_signatures)
+    is_subset_of = np.full((n_all_signatures, n_all_signatures), False, dtype=bool)
+    jaccard_distances = np.zeros((n_all_signatures, n_all_signatures))
+    for sig_global_idx, sig_data in enumerate(all_signatures):
+        for other_sig_global_idx, other_sig_data in enumerate(all_signatures):
+            is_subset_of[sig_global_idx, other_sig_global_idx] = is_subset_of_sig(
+                sig_data, other_sig_data
+            )
+            jaccard_distances[sig_global_idx, other_sig_global_idx] = jaccard_distance(
+                sig_data, other_sig_data
+            )
+    return is_subset_of, jaccard_distances
+
+
 def naive_sl_with_pooling_using_extended_data(
     counts_sig_per_ctype: Dict[int, Dict[int, np.ndarray]],
     pgt_sig_prior: Dict[int, Dict[int, np.ndarray]],
@@ -188,8 +212,10 @@ def naive_sl_with_pooling_using_extended_data(
     to P(sig | ctype) using a prior P(sig).
 
     Contrarily to naive_sl_with_pooling, this method is design to work with
-    a form of extended data. More specifically, s1 can pool from s2 or from
-    any subpattern of s2. However they cannot be counted twice
+    a form of extended data. More specifically, s1 first pools ALL the counts of
+    signatures that are superset of s1, then it pools the counts
+    from nearby extended signatures (within the distance threshold) (and in such
+    a way that we do no pull twice from the same counts) until we reach the minimum counts threshold.
     """
     tmp_first_counts = next(iter(next(iter(counts_sig_per_ctype.values())).values()))
     n_ctypes = tmp_first_counts.shape[0]
@@ -206,57 +232,65 @@ def naive_sl_with_pooling_using_extended_data(
     signature_to_global_idx = {
         signature: global_idx for global_idx, signature in enumerate(all_signatures)
     }
+    global_idx_to_signature = {
+        global_idx: signature for global_idx, signature in enumerate(all_signatures)
+    }
 
-    # then we create the dict of all extended signatures with:
-    # start, length, sig_idx, and parent_global_idx (the signature from which it is extracted)
-    extended_signatures = []
-    for start, read_lengths in signature_positions.items():
-        for read_length in read_lengths:
-            n_signatures = 2**read_length
-            for sig_idx in range(n_signatures):
-                sig_global_idx = signature_to_global_idx[(start, read_length, sig_idx)]
-                sig_pattern = get_sig_from_idx(sig_idx, read_length)
-                for i in range(read_length):# start index of the subpattern
-                    for j in range(i + 1, read_length+1): # end index of the subpattern (exclusive)
-                        subpattern = sig_pattern[i:j]
-                        subpattern_length = j - i
-                        subpattern_sig_idx = get_idx_from_sig(subpattern)
-                        extended_signatures.append(
-                            (start + i, subpattern_length, subpattern_sig_idx, sig_global_idx)
-                        )
-    n_extended_signatures = len(extended_signatures)
-    
-    # then we compute the pairwise Jaccard distances between all signatures and extended signatures
-    jaccard_distances = np.zeros((n_all_signatures, n_extended_signatures))
-    for i in range(n_all_signatures):
-        for j in range(n_extended_signatures):
-            jaccard_distances[i, j] = jaccard_distance(
-                all_signatures[i], extended_signatures[j][:3]
-            )
-    
-    # for all signatures, we iterate over all extended signatures by ascending order
-    # of Jaccard distance and we pool the signatures that are within the distance threshold until
-    # we reach the minimum counts threshold.
-    # We must be careful not to pool twice from the same parent signature
+    ## Construct the array of which signatures are supersets of which other signatures
+    ## And at the same time compute the pairwise Jaccard distances between all signatures
+    is_subset_of, jaccard_distances = _compute_which_is_subset_and_jaccard_distances(
+        tuple(all_signatures)
+    )
+
+    pooled_from = np.full((n_all_signatures, n_all_signatures), False, dtype=bool)
     pooled_counts = np.zeros((n_all_signatures, n_ctypes), dtype=int)
     for sig_global_idx, (start, read_length, sig_idx) in enumerate(all_signatures):
-        ordered_closed_extended_signatures = np.argsort(jaccard_distances[sig_global_idx])
-        # we create a set to keep track of which parent signatures we have already pooled from
-        parent_counts_pooled = set()
-        # we iterate over the ordered extended signatures
-        for close_ext_sig_idx in ordered_closed_extended_signatures:
-            close_start, close_read_length, close_sig_idx, parent_global_idx = extended_signatures[close_ext_sig_idx]
-            if jaccard_distances[sig_global_idx, close_ext_sig_idx] > dist_threshold:
-                break
-            # we check if we have already pooled from this parent signature
-            if parent_global_idx in parent_counts_pooled:
+        # first pool all the counts of signatures that are superset of s1
+        for other_sig_global_idx, is_superset_of_sig in enumerate(
+            is_subset_of[sig_global_idx]
+        ):
+            if is_superset_of_sig:
+                pooled_from[sig_global_idx, other_sig_global_idx] = True
+                other_start, other_read_length, other_sig_idx = global_idx_to_signature[
+                    other_sig_global_idx
+                ]
+                pooled_counts[sig_global_idx] += counts_sig_per_ctype[other_start][
+                    other_read_length
+                ][:, other_sig_idx]
+
+        if pooled_counts[sig_global_idx].sum() >= min_counts:
+            continue
+        # then pool the counts from nearby extended signatures (within the distance threshold)
+        # create a queue of close signatures ordered by ascending Jaccard distance
+        ordered_close_signatures = np.argsort(jaccard_distances[sig_global_idx])[
+            ::-1
+        ].tolist()
+        while ordered_close_signatures:
+            close_sig_global_idx = ordered_close_signatures.pop()
+            if pooled_from[sig_global_idx, close_sig_global_idx]:
                 continue
-            parent_start, parent_read_length, parent_sig_idx = all_signatures[parent_global_idx]
-            pooled_counts[sig_global_idx] += counts_sig_per_ctype[parent_start][parent_read_length][:, parent_sig_idx]
-            parent_counts_pooled.add(parent_global_idx)
             if pooled_counts[sig_global_idx].sum() >= min_counts:
                 break
-            
+            if jaccard_distances[sig_global_idx, close_sig_global_idx] > dist_threshold:
+                break
+            pooled_from[sig_global_idx, close_sig_global_idx] = True
+            close_start, close_read_length, close_sig_idx = global_idx_to_signature[
+                close_sig_global_idx
+            ]
+            pooled_counts[sig_global_idx] += counts_sig_per_ctype[close_start][
+                close_read_length
+            ][:, close_sig_idx]
+            # add to the head of the list the signatures that are superset of the close signature
+            # so that we will pool them first in the next iterations
+            for other_sig_global_idx, is_superset_of_close_sig in enumerate(
+                is_subset_of[close_sig_global_idx]
+            ):
+                if (
+                    is_superset_of_close_sig
+                    and not pooled_from[sig_global_idx, other_sig_global_idx]
+                ):
+                    ordered_close_signatures.append(other_sig_global_idx)
+
     # now compute the naive soft labels P(ctype | sig) by normalizing the pooled counts
     naive_sl_with_pooling_ctype_given_sig = {}
     naive_sl_with_pooling_sig_given_ctype = {}
@@ -280,6 +314,7 @@ def naive_sl_with_pooling_using_extended_data(
 
             # compute P(sig | ctype) by converting P(ctype | sig) using a prior P(sig)
             tmp_sig_prior = pgt_sig_prior[start][read_length]
+
             proba_sig_given_ctype = naive_sl_with_pooling_ctype_given_sig[start][
                 read_length
             ] * tmp_sig_prior.reshape(-1, 1)
@@ -291,7 +326,6 @@ def naive_sl_with_pooling_using_extended_data(
             ] = proba_sig_given_ctype.T
 
     return naive_sl_with_pooling_sig_given_ctype, naive_sl_with_pooling_ctype_given_sig
-
 
 
 ## METHODS THAT CAN BE APPLIED TO PURE AND NOISY SAMPLES
