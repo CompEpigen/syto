@@ -28,7 +28,7 @@ class TestRenderer(unittest.TestCase):
 
     def test_default_save_path_shape(self):
         path = renderer.default_save_path("inference")
-        self.assertTrue(path.startswith("App/config/rrbs/inference_"))
+        self.assertTrue(path.startswith("App/config/inference_"))
         self.assertTrue(path.endswith(".yaml"))
 
     def test_render_preview_and_run_command_do_not_raise(self):
