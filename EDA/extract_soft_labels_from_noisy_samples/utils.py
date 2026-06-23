@@ -1,4 +1,5 @@
 import os
+from typing import Union
 from collections import defaultdict
 
 import json
@@ -59,7 +60,7 @@ def get_sig_from_idx(idx, sig_length, return_str=False):
     return np.array(sig)
 
 
-def nrmse(y_true, y_pred) -> float:
+def nrmse(y_true, y_pred, return_per_sample=False) -> Union[float, np.ndarray]:
     """
     Compute the NRMSE (Normalized Root Mean Squared Error) between the true and predicted probability distributions,
     for all sample in y_pred.
@@ -71,6 +72,9 @@ def nrmse(y_true, y_pred) -> float:
     Args:
         y_true (np.ndarray): True probability distributions, shape (n_samples, n_classes)
         y_pred (np.ndarray): Predicted probability distributions, shape (n_samples, n_classes)
+        return_per_sample (bool): Whether to return the NRMSE per sample, or the average NRMSE over all samples. Default is False.
+    Returns:
+        float: The average NRMSE over all samples, or the NRMSE per sample
     """
     assert y_true.shape == y_pred.shape, "y_true and y_pred must have the same shape"
     assert y_true.ndim == 2, "y_true and y_pred must be 2D arrays"
@@ -78,7 +82,14 @@ def nrmse(y_true, y_pred) -> float:
     # the worst possible prediction is the one that predicts 1 for the class
     # with the lowest probability in y_true for each sample, and 0 for all other classes. This is equivalent to predicting the argmin of y_true for each sample.
     worst_possible_prediction_per_sample = np.zeros_like(y_true)
-    worst_possible_prediction_per_sample[np.arange(y_true.shape[0]), y_true.argmin(axis=1)] = 1
-    worst_possible_rmse = np.sqrt(np.mean((y_true - worst_possible_prediction_per_sample) ** 2, axis=1))
-    avg_nrmse = np.mean(rmse_per_sample / worst_possible_rmse)
+    worst_possible_prediction_per_sample[
+        np.arange(y_true.shape[0]), y_true.argmin(axis=1)
+    ] = 1
+    worst_possible_rmse = np.sqrt(
+        np.mean((y_true - worst_possible_prediction_per_sample) ** 2, axis=1)
+    )
+    nrmse_per_sample = rmse_per_sample / worst_possible_rmse
+    if return_per_sample:
+        return nrmse_per_sample
+    avg_nrmse = np.mean(nrmse_per_sample)
     return avg_nrmse

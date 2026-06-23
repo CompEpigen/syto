@@ -201,6 +201,7 @@ output/*
 *.code-workspace
 poetry.toml
 tmp_*
+*.pdf
 
 # Singularity/Docker artifacts
 *.sif
