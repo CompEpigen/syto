@@ -94,18 +94,29 @@ class InferencePipeline:
 
         self.cell_type_match_dict = LOYFER_CELL_TYPE_MATCH_DICT
 
-        # ── Load atlas ──────────────────────────────────────────────────
-        atlas_path = config["atlas_path"]
-        atlas_name = config.get("atlas_name", Path(atlas_path).stem)
-        self.atlas = UXMMethylationAtlas(
-            atlas_name=atlas_name,
-            reference_genome="hg38" if "hg38" in atlas_path else "hg19",
-            atlas_path=atlas_path,
-            sep="\t",
-        )
-        self.logger.info(
-            f"Loaded atlas with {len(self.atlas.atlas)} regions from {atlas_path}"
-        )
+        # ── Resolve syto deconvolution config ───────────────────────────
+        # The syto pipeline (read-level classification + feature aggregation)
+        # is driven by ``deconvolution.syto``, a dict of the shape
+        # ``{atlas_path, atlas_name, methods: [...]}``. It is enabled only when
+        # at least one method is listed; its atlas feeds stages 2-3.
+        deconv_cfg = self.config.get("deconvolution", {})
+        self.syto_cfg = deconv_cfg.get("syto", {}) or {}
+        self.syto_methods_enabled = bool(self.syto_cfg.get("methods"))
+
+        # ── Load the syto atlas (only when syto methods are enabled) ─────
+        self.atlas = None
+        if self.syto_methods_enabled:
+            atlas_path = self.syto_cfg["atlas_path"]
+            atlas_name = self.syto_cfg.get("atlas_name", Path(atlas_path).stem)
+            self.atlas = UXMMethylationAtlas(
+                atlas_name=atlas_name,
+                reference_genome="hg38" if "hg38" in atlas_path else "hg19",
+                atlas_path=atlas_path,
+                sep="\t",
+            )
+            self.logger.info(
+                f"Loaded syto atlas with {len(self.atlas.atlas)} regions from {atlas_path}"
+            )
 
         # ── Load baseline deconvolvers ───────────────────────────────
         self._baseline_deconvolvers = self._load_baseline_deconvolvers()
@@ -139,8 +150,8 @@ class InferencePipeline:
             self.num_labels = len(self.labels_dict)
         else:
             self.num_labels = self.config["num_labels"]
-        deconv_cfg = self.config.get("deconvolution", {})
-        self.syto_methods_enabled = deconv_cfg.get("syto", False)
+
+        # The feature mask is only needed by the syto feature-based methods.
         if self.syto_methods_enabled:
             self.features_mask = np.load(config["features_mask_path"])["features_mask"]
             self.input_length = int(np.sum(self.features_mask))
@@ -155,24 +166,24 @@ class InferencePipeline:
         self.skip_classification = False
         self.skip_reads_processing = False
         self.skip_aggregation_for_syto = False
-        self.logger.info(
-            f"The config doesn't feature syto methods --> related classification and feature extraction methods will be skipped"
-        )
 
         if not self.syto_methods_enabled:
+            self.logger.info(
+                "The config doesn't feature syto methods --> related classification "
+                "and feature extraction stages will be skipped"
+            )
             self.skip_classification = True
             self.skip_aggregation_for_syto = True
 
         # ── Stage 1: obtain processed reads ─────────────────────────────
+        # A single ``data_path`` is resolved according to ``input.type``.
         input_cfg = self.config["input"]
+        self.file_name = Path(input_cfg["data_path"]).name
         if input_cfg["type"] == "bam":
-            self.file_name = Path(input_cfg["bam_path"]).name
             self.processed_reads = self._process_bam()
         elif input_cfg["type"] == "parsed_reads":
-            self.file_name = Path(input_cfg["parsed_reads_path"]).name
             self.processed_reads = self._load_parsed_reads()
         elif input_cfg["type"] == "predicted_reads":
-            self.file_name = Path(input_cfg["predicted_reads_path"]).name
             self.predictions_df = self._load_reads_with_predictions()
             self.prepared_reads = self.predictions_df  # For UXM to work
             self.logger.info(
@@ -191,14 +202,18 @@ class InferencePipeline:
                     f"Stage 1 complete: {len(self.processed_reads)} processed reads"
                 )
 
-                # ── Stage 2: overlap reads with atlas regions ───────────────────
-                self.prepared_reads = self._prepare_reads()
-                self.logger.info(
-                    f"Stage 2 complete: {len(self.prepared_reads)} atlas-overlapped reads"
-                )
-
-                # ── Stage 3: classifier predictions ─────────────────────────────
+                # Stages 2-3 only serve syto classification. When classification
+                # is skipped (no syto methods, or predicted reads supplied), the
+                # syto atlas is not loaded and these stages are bypassed; baseline
+                # deconvolvers prepare the raw processed reads themselves.
                 if not self.skip_classification:
+                    # ── Stage 2: overlap reads with atlas regions ───────────────
+                    self.prepared_reads = self._prepare_reads()
+                    self.logger.info(
+                        f"Stage 2 complete: {len(self.prepared_reads)} atlas-overlapped reads"
+                    )
+
+                    # ── Stage 3: classifier predictions ─────────────────────────
                     self.predictions_df = self._predict_classifier()
                     self.logger.info(
                         f"Stage 3 complete: predictions for {len(self.predictions_df)} reads"
@@ -232,7 +247,7 @@ class InferencePipeline:
         input_cfg = self.config["input"]
         bam_cfg = self.config.get("bam_processing", {})
 
-        bam_path = input_cfg["bam_path"]
+        bam_path = input_cfg["data_path"]
         reference_path = input_cfg.get("reference_path")
         data_type = input_cfg.get("data_type")
 
@@ -299,7 +314,7 @@ class InferencePipeline:
 
     def _load_parsed_reads(self) -> pd.DataFrame:
         """Load pre-parsed reads from a pickle file."""
-        path = self.config["input"]["parsed_reads_path"]
+        path = self.config["input"]["data_path"]
         self.logger.info(f"Loading pre-parsed reads from {path}")
         if ".csv" in path:
             df = pd.read_csv(path, sep="\t")
@@ -323,7 +338,7 @@ class InferencePipeline:
 
     def _load_reads_with_predictions(self) -> pd.DataFrame:
         """Load reads augmented with read-level predictions from a pickle file."""
-        path = self.config["input"]["predicted_reads_path"]
+        path = self.config["input"]["data_path"]
         self.logger.info(f"Loading reads with predictions from {path}")
         with open(path, "rb") as f:
             df = pickle.load(f)
@@ -494,7 +509,7 @@ class InferencePipeline:
         results: List[Tuple[str, str, np.ndarray]] = []
 
         # ── Syto feature-based methods ──────────────────────────────────
-        for method_cfg in deconv_cfg.get("syto", []):
+        for method_cfg in (deconv_cfg.get("syto", {}) or {}).get("methods", []):
             if not method_cfg.get("enabled", False):
                 continue
 

@@ -44,11 +44,12 @@ def validate_config(config: Dict[str, Any], task: str) -> None:
     required_fields = {
         "classifier_fit": ["model", "data_path", "max_sequence_length"],
         "pretrain": ["model", "data_path"],  # Add pretrain requirements
+        # The classifier/checkpoint and the syto atlas are only required when
+        # syto classification-based deconvolution is enabled (deconvolution.syto).
+        # A config may run baseline deconvolvers only, or supply pre-classified
+        # reads, in which case those fields are absent.
         "inference": [
-            "classifier",
-            "checkpoint_path",
             "labels_dict_path",
-            "atlas_path",
             "input",
         ],
         "generate_pseudobulk": [
@@ -96,9 +97,13 @@ def validate_config(config: Dict[str, Any], task: str) -> None:
     ):
         if task in ("classifier_fit", "pretrain"):
             model = config["model"]["architecture"].lower()
-        else:
+        elif "classifier" in config:
             model = config["classifier"]["classifier_type"].lower()
-        if model not in [
+        else:
+            # Inference without a classifier (baseline-only or pre-classified
+            # reads): no architecture to validate.
+            model = None
+        if model is not None and model not in [
             "methylbert",
             "dismir",
             "cancer_detector",
