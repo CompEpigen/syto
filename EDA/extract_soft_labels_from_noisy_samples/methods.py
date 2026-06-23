@@ -1,8 +1,9 @@
 from typing import Dict
 
 import numpy as np
+from collections import defaultdict
 
-from utils import get_sig_from_idx
+from utils import get_sig_from_idx, get_idx_from_sig
 
 ## METHODS FOR PURE SAMPLES ONLY
 
@@ -104,7 +105,7 @@ def naive_sl_with_pooling(
             )
             jaccard_distances[j, i] = jaccard_distances[i, j]
 
-    # for all signatures, we iterate over all signatures by ascending order of jacccard distance
+    # for all signatures, we iterate over all signatures by ascending order of Jaccard distance
     # and we pool the signatures that are within the distance threshold until
     # we reach the minimum counts threshold
     pooled_counts = np.zeros((n_all_signatures, n_ctypes), dtype=int)
@@ -172,6 +173,125 @@ def naive_sl_with_pooling(
             ] = proba_sig_given_ctype.T
 
     return naive_sl_with_pooling_sig_given_ctype, naive_sl_with_pooling_ctype_given_sig
+
+
+def naive_sl_with_pooling_using_extended_data(
+    counts_sig_per_ctype: Dict[int, Dict[int, np.ndarray]],
+    pgt_sig_prior: Dict[int, Dict[int, np.ndarray]],
+    signature_positions: Dict[int, set[int]],
+    dist_threshold: float = 0.41,
+    min_counts: int = 5,
+):
+    """
+    Compute P(sig | ctype) for every signature by first computing
+    P(ctype | sig) (using soft labels with pooling) and then converting it
+    to P(sig | ctype) using a prior P(sig).
+
+    Contrarily to naive_sl_with_pooling, this method is design to work with
+    a form of extended data. More specifically, s1 can pool from s2 or from
+    any subpattern of s2. However they cannot be counted twice
+    """
+    tmp_first_counts = next(iter(next(iter(counts_sig_per_ctype.values())).values()))
+    n_ctypes = tmp_first_counts.shape[0]
+    del tmp_first_counts
+
+    # first we construct the dict of all signatures with their start, length and sig_idx
+    all_signatures = []
+    for start, read_lengths in signature_positions.items():
+        for read_length in read_lengths:
+            n_signatures = 2**read_length
+            for sig_idx in range(n_signatures):
+                all_signatures.append((start, read_length, sig_idx))
+    n_all_signatures = len(all_signatures)
+    signature_to_global_idx = {
+        signature: global_idx for global_idx, signature in enumerate(all_signatures)
+    }
+
+    # then we create the dict of all extended signatures with:
+    # start, length, sig_idx, and parent_global_idx (the signature from which it is extracted)
+    extended_signatures = []
+    for start, read_lengths in signature_positions.items():
+        for read_length in read_lengths:
+            n_signatures = 2**read_length
+            for sig_idx in range(n_signatures):
+                sig_global_idx = signature_to_global_idx[(start, read_length, sig_idx)]
+                sig_pattern = get_sig_from_idx(sig_idx, read_length)
+                for i in range(read_length):# start index of the subpattern
+                    for j in range(i + 1, read_length+1): # end index of the subpattern (exclusive)
+                        subpattern = sig_pattern[i:j]
+                        subpattern_length = j - i
+                        subpattern_sig_idx = get_idx_from_sig(subpattern)
+                        extended_signatures.append(
+                            (start + i, subpattern_length, subpattern_sig_idx, sig_global_idx)
+                        )
+    n_extended_signatures = len(extended_signatures)
+    
+    # then we compute the pairwise Jaccard distances between all signatures and extended signatures
+    jaccard_distances = np.zeros((n_all_signatures, n_extended_signatures))
+    for i in range(n_all_signatures):
+        for j in range(n_extended_signatures):
+            jaccard_distances[i, j] = jaccard_distance(
+                all_signatures[i], extended_signatures[j][:3]
+            )
+    
+    # for all signatures, we iterate over all extended signatures by ascending order
+    # of Jaccard distance and we pool the signatures that are within the distance threshold until
+    # we reach the minimum counts threshold.
+    # We must be careful not to pool twice from the same parent signature
+    pooled_counts = np.zeros((n_all_signatures, n_ctypes), dtype=int)
+    for sig_global_idx, (start, read_length, sig_idx) in enumerate(all_signatures):
+        ordered_closed_extended_signatures = np.argsort(jaccard_distances[sig_global_idx])
+        # we create a set to keep track of which parent signatures we have already pooled from
+        parent_counts_pooled = set()
+        # we iterate over the ordered extended signatures
+        for close_ext_sig_idx in ordered_closed_extended_signatures:
+            close_start, close_read_length, close_sig_idx, parent_global_idx = extended_signatures[close_ext_sig_idx]
+            if jaccard_distances[sig_global_idx, close_ext_sig_idx] > dist_threshold:
+                break
+            # we check if we have already pooled from this parent signature
+            if parent_global_idx in parent_counts_pooled:
+                continue
+            parent_start, parent_read_length, parent_sig_idx = all_signatures[parent_global_idx]
+            pooled_counts[sig_global_idx] += counts_sig_per_ctype[parent_start][parent_read_length][:, parent_sig_idx]
+            parent_counts_pooled.add(parent_global_idx)
+            if pooled_counts[sig_global_idx].sum() >= min_counts:
+                break
+            
+    # now compute the naive soft labels P(ctype | sig) by normalizing the pooled counts
+    naive_sl_with_pooling_ctype_given_sig = {}
+    naive_sl_with_pooling_sig_given_ctype = {}
+    for start, read_lengths in signature_positions.items():
+        naive_sl_with_pooling_ctype_given_sig[start] = {}
+        naive_sl_with_pooling_sig_given_ctype[start] = {}
+        for read_length in read_lengths:
+            n_signatures = 2**read_length
+            naive_sl_with_pooling_ctype_given_sig[start][read_length] = np.zeros(
+                (n_signatures, n_ctypes)
+            )
+
+            # compute the naive soft labels P(ctype | sig) by normalizing the pooled counts
+            for sig_idx in range(n_signatures):
+                sig_global_idx = signature_to_global_idx[(start, read_length, sig_idx)]
+                naive_sl_with_pooling_ctype_given_sig[start][read_length][sig_idx] = (
+                    pooled_counts[sig_global_idx] / pooled_counts[sig_global_idx].sum()
+                    if pooled_counts[sig_global_idx].sum() > 0
+                    else 0
+                )
+
+            # compute P(sig | ctype) by converting P(ctype | sig) using a prior P(sig)
+            tmp_sig_prior = pgt_sig_prior[start][read_length]
+            proba_sig_given_ctype = naive_sl_with_pooling_ctype_given_sig[start][
+                read_length
+            ] * tmp_sig_prior.reshape(-1, 1)
+            proba_sig_given_ctype = proba_sig_given_ctype / proba_sig_given_ctype.sum(
+                axis=0, keepdims=True
+            )
+            naive_sl_with_pooling_sig_given_ctype[start][
+                read_length
+            ] = proba_sig_given_ctype.T
+
+    return naive_sl_with_pooling_sig_given_ctype, naive_sl_with_pooling_ctype_given_sig
+
 
 
 ## METHODS THAT CAN BE APPLIED TO PURE AND NOISY SAMPLES
