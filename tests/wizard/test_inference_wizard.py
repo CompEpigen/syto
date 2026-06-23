@@ -14,24 +14,61 @@ class TestInferenceWizardSchema(unittest.TestCase):
         self.assertIn("inference", TASK_REGISTRY)
         self.assertIs(TASK_REGISTRY["inference"], InferenceWizard)
 
-    def test_classifier_type_is_first_and_has_five_choices(self):
-        first = self.specs[0]
-        self.assertEqual(first.key, "classifier.classifier_type")
-        self.assertEqual(
-            set(first.choices),
-            {"dismir", "methylbert", "cancer_detector", "lookup", "epigenbert2"},
+    def test_run_syto_gate_is_first(self):
+        self.assertEqual(self.specs[0].key, "run_syto")
+
+    def test_classifier_block_gated_on_run_syto(self):
+        spec = self.by_key["classifier.classifier_type"]
+        self.assertTrue(spec.when({"run_syto": True}))
+        self.assertFalse(spec.when({"run_syto": False}))
+
+    def test_dismir_flavor_requires_syto_and_dismir(self):
+        spec = self.by_key["classifier.dismir_flavor"]
+        self.assertTrue(
+            spec.when({"run_syto": True, "classifier.classifier_type": "dismir"})
+        )
+        self.assertFalse(
+            spec.when({"run_syto": False, "classifier.classifier_type": "dismir"})
+        )
+        self.assertFalse(
+            spec.when({"run_syto": True, "classifier.classifier_type": "lookup"})
         )
 
-    def test_dismir_flavor_only_when_dismir(self):
-        spec = self.by_key["classifier.dismir_flavor"]
-        self.assertTrue(spec.when({"classifier.classifier_type": "dismir"}))
-        self.assertFalse(spec.when({"classifier.classifier_type": "lookup"}))
+    def test_labeling_scheme_select_replaces_soft_labels(self):
+        self.assertIn("classifier.labeling_scheme", self.by_key)
+        self.assertNotIn("classifier.soft_labels", self.by_key)
+        spec = self.by_key["classifier.labeling_scheme"]
+        self.assertEqual(spec.kind, "select")
+        self.assertEqual(spec.choices, ["Soft Labels", "Hard Labels"])
 
-    def test_foundation_model_only_for_transformer_archs(self):
-        spec = self.by_key["classifier.foundation_model"]
-        self.assertTrue(spec.when({"classifier.classifier_type": "methylbert"}))
-        self.assertTrue(spec.when({"classifier.classifier_type": "epigenbert2"}))
-        self.assertFalse(spec.when({"classifier.classifier_type": "dismir"}))
+    def test_labels_dict_default(self):
+        self.assertEqual(
+            self.by_key["labels_dict_path"].default, "App/labels_dict.json"
+        )
+
+    def test_input_type_includes_predicted_reads_and_single_data_path(self):
+        self.assertEqual(
+            set(self.by_key["input.type"].choices),
+            {"bam", "parsed_reads", "predicted_reads"},
+        )
+        self.assertIn("input.data_path", self.by_key)
+        self.assertNotIn("input.bam_path", self.by_key)
+        self.assertNotIn("input.parsed_reads_path", self.by_key)
+        self.assertNotIn("input.predicted_reads_path", self.by_key)
+
+    def test_syto_atlas_under_deconvolution_scope_and_gated(self):
+        spec = self.by_key["deconvolution.syto.atlas_path"]
+        self.assertTrue(spec.when({"run_syto": True}))
+        self.assertFalse(spec.when({"run_syto": False}))
+        self.assertNotIn("atlas_path", self.by_key)  # no top-level atlas
+
+    def test_syto_methods_list_section_gated(self):
+        section = next(
+            s for s in self.specs if s.key == "deconvolution.syto.methods"
+        )
+        self.assertEqual(section.kind, "list_section")
+        self.assertTrue(section.when({"run_syto": True}))
+        self.assertFalse(section.when({"run_syto": False}))
 
     def test_pseudobulk_only_for_prior_strategies(self):
         spec = self.by_key["pseudobulk_h5_path"]
@@ -44,37 +81,34 @@ class TestInferenceWizardSchema(unittest.TestCase):
                        "missing_label_strategy": "zeroes"})
         )
 
-    def test_bam_processing_fields_are_expert_tier(self):
-        self.assertEqual(self.by_key["bam_processing.n_jobs"].tier, "expert")
-        self.assertEqual(self.by_key["max_sequence_length"].tier, "expert")
-
 
 class TestInferenceBuildConfig(unittest.TestCase):
     def setUp(self):
         self.wiz = InferenceWizard()
 
-    def _minimal_answers(self):
+    def _syto_answers(self):
         return {
+            "run_syto": True,
             "classifier.classifier_type": "dismir",
             "classifier.dismir_flavor": "lstm",
             "classifier.foundation_model": None,
             "classifier.classifier_head_implementation": "grg_attention_based",
-            "classifier.soft_labels": True,
+            "classifier.labeling_scheme": "Soft Labels",
             "checkpoint_path": "/tmp/weight.pt",
+            "features_mask_path": "/tmp/mask.npz",
             "labels_dict_path": "App/labels_dict.json",
             "num_labels": 39,
-            "atlas_path": "/tmp/atlas.tsv",
-            "atlas_name": "atlas",
+            "deconvolution.syto.atlas_path": "/tmp/atlas.tsv",
+            "deconvolution.syto.atlas_name": "atlas",
             "input.type": "bam",
-            "input.bam_path": "/tmp/x.bam",
+            "input.data_path": "/tmp/x.bam",
             "input.reference_path": "/tmp/hg38.fa.gz",
             "input.data_type": "wgbs",
-            "input.parsed_reads_path": None,
             "input.chromosomes": "all",
             "fill_in_missing_labels": True,
             "missing_label_strategy": "prior_blending",
             "pseudobulk_h5_path": "/tmp/pb.h5",
-            "deconvolution.methods": [],
+            "deconvolution.syto.methods": [],
             "deconvolution.baselines": [],
             "output_dir": "/tmp/out",
             "output.save_processed_reads": False,
@@ -89,45 +123,86 @@ class TestInferenceBuildConfig(unittest.TestCase):
             "bam_processing.ont_methyl_tr": 180,
             "max_sequence_length": 150,
             "prediction_batch_size": 2200,
-            "features_mask_path": "",
             "cell_type_match_dict_path": "",
         }
 
-    def test_nests_dot_keys(self):
-        cfg = self.wiz.build_config(self._minimal_answers())
-        self.assertEqual(cfg["classifier"]["classifier_type"], "dismir")
-        self.assertEqual(cfg["input"]["bam_path"], "/tmp/x.bam")
-        self.assertEqual(cfg["output"]["save_predictions"], True)
+    def test_single_data_path_nested(self):
+        cfg = self.wiz.build_config(self._syto_answers())
+        self.assertEqual(cfg["input"]["data_path"], "/tmp/x.bam")
+        self.assertNotIn("bam_path", cfg["input"])
 
-    def test_chromosomes_all_stays_string(self):
-        cfg = self.wiz.build_config(self._minimal_answers())
-        self.assertEqual(cfg["input"]["chromosomes"], "all")
+    def test_labeling_scheme_maps_to_soft_labels(self):
+        ans = self._syto_answers()
+        cfg = self.wiz.build_config(ans)
+        self.assertIs(cfg["classifier"]["soft_labels"], True)
+        self.assertNotIn("labeling_scheme", cfg["classifier"])
+
+        ans["classifier.labeling_scheme"] = "Hard Labels"
+        cfg = self.wiz.build_config(ans)
+        self.assertIs(cfg["classifier"]["soft_labels"], False)
+
+    def test_syto_atlas_nested_under_deconvolution(self):
+        cfg = self.wiz.build_config(self._syto_answers())
+        self.assertEqual(
+            cfg["deconvolution"]["syto"]["atlas_path"], "/tmp/atlas.tsv"
+        )
+        self.assertEqual(cfg["deconvolution"]["syto"]["atlas_name"], "atlas")
+        self.assertNotIn("atlas_path", cfg)  # not top-level
+
+    def test_syto_methods_canonical_dispatch_names(self):
+        ans = self._syto_answers()
+        ans["deconvolution.syto.methods"] = [
+            {"name": "3Layer_MLP", "enabled": True, "use_callibration": True,
+             "checkpoint_path": "/tmp/mlp.pt", "calibrators_dir": "/tmp/cal"},
+            {"name": "ls", "flavor": "nnls", "enabled": True,
+             "use_callibration": True, "checkpoint_path": "/tmp/nnls.joblib",
+             "calibrators_dir": "/tmp/cal"},
+        ]
+        cfg = self.wiz.build_config(ans)
+        methods = cfg["deconvolution"]["syto"]["methods"]
+        self.assertEqual(methods[0]["name"], "3Layer_MLP")
+        self.assertEqual(methods[1]["name"], "ls")
+        self.assertEqual(methods[1]["flavor"], "nnls")
+
+    def test_no_syto_omits_classifier_and_syto_block(self):
+        ans = {
+            "run_syto": False,
+            "classifier.classifier_type": None,
+            "checkpoint_path": None,
+            "features_mask_path": None,
+            "deconvolution.syto.atlas_path": None,
+            "deconvolution.syto.atlas_name": None,
+            "labels_dict_path": "App/labels_dict.json",
+            "num_labels": 39,
+            "input.type": "predicted_reads",
+            "input.data_path": "/tmp/preds.pkl",
+            "input.chromosomes": "all",
+            "fill_in_missing_labels": False,
+            "deconvolution.baselines": [
+                {"model": "uxm", "enabled": True, "atlas_path": "/tmp/atlas.tsv",
+                 "ignore_cells": ["Megakaryocytes"]}
+            ],
+            "output_dir": "/tmp/out",
+            "output.save_predictions": True,
+            "cell_type_match_dict_path": "",
+        }
+        cfg = self.wiz.build_config(ans)
+        self.assertNotIn("classifier", cfg)
+        self.assertNotIn("checkpoint_path", cfg)
+        self.assertNotIn("features_mask_path", cfg)
+        self.assertNotIn("syto", cfg["deconvolution"])
+        self.assertEqual(cfg["deconvolution"]["baselines"][0]["model"], "uxm")
+        self.assertEqual(cfg["input"]["data_path"], "/tmp/preds.pkl")
 
     def test_chromosomes_list_is_split(self):
-        ans = self._minimal_answers()
+        ans = self._syto_answers()
         ans["input.chromosomes"] = "chr1, chr2,chr3"
         cfg = self.wiz.build_config(ans)
         self.assertEqual(cfg["input"]["chromosomes"], ["chr1", "chr2", "chr3"])
 
-    def test_blank_optional_paths_become_none(self):
-        cfg = self.wiz.build_config(self._minimal_answers())
-        self.assertIsNone(cfg["features_mask_path"])
+    def test_blank_optional_path_becomes_none(self):
+        cfg = self.wiz.build_config(self._syto_answers())
         self.assertIsNone(cfg["cell_type_match_dict_path"])
-
-    def test_deconvolution_block_carries_lists(self):
-        ans = self._minimal_answers()
-        ans["deconvolution.methods"] = [
-            {"name": "xgboost", "enabled": True, "use_callibration": True,
-             "checkpoint_path": "/tmp/xgb.joblib",
-             "calibrators_dir": "/tmp/cal"}
-        ]
-        ans["deconvolution.baselines"] = [
-            {"model": "uxm", "enabled": True, "atlas_path": "/tmp/atlas.tsv",
-             "ignore_cells": ["Megakaryocytes"]}
-        ]
-        cfg = self.wiz.build_config(ans)
-        self.assertEqual(cfg["deconvolution"]["methods"][0]["name"], "xgboost")
-        self.assertEqual(cfg["deconvolution"]["baselines"][0]["model"], "uxm")
 
 
 if __name__ == "__main__":

@@ -26,22 +26,25 @@ def _raw_with_real_paths(tmpdir):
     """Answer set whose path-validated fields point at real (empty) files."""
     labels = "App/labels_dict.json"
     ckpt = os.path.join(tmpdir, "weight.pt"); open(ckpt, "w").close()
+    mask = os.path.join(tmpdir, "mask.npz"); open(mask, "w").close()
     atlas = os.path.join(tmpdir, "atlas.tsv"); open(atlas, "w").close()
     bam = os.path.join(tmpdir, "x.bam"); open(bam, "w").close()
     ref = os.path.join(tmpdir, "hg38.fa.gz"); open(ref, "w").close()
     pb = os.path.join(tmpdir, "pb.h5"); open(pb, "w").close()
     raw = {
+        "run_syto": True,
         "classifier.classifier_type": "dismir",
         "classifier.dismir_flavor": "lstm",
         "classifier.classifier_head_implementation": "grg_attention_based",
-        "classifier.soft_labels": True,
+        "classifier.labeling_scheme": "Soft Labels",
         "checkpoint_path": ckpt,
+        "features_mask_path": mask,
         "labels_dict_path": labels,
         "num_labels": "39",
-        "atlas_path": atlas,
-        "atlas_name": "atlas",
+        "deconvolution.syto.atlas_path": atlas,
+        "deconvolution.syto.atlas_name": "atlas",
         "input.type": "bam",
-        "input.bam_path": bam,
+        "input.data_path": bam,
         "input.reference_path": ref,
         "input.data_type": "wgbs",
         "input.chromosomes": "all",
@@ -74,9 +77,10 @@ class TestRunner(unittest.TestCase):
             with open(out_path, encoding="utf-8") as f:
                 cfg = yaml.safe_load(f)
             self.assertEqual(cfg["classifier"]["classifier_type"], "dismir")
+            self.assertIs(cfg["classifier"]["soft_labels"], True)
             self.assertEqual(cfg["num_labels"], 39)
-            self.assertEqual(cfg["input"]["bam_path"], bam)
-            self.assertEqual(cfg["deconvolution"]["methods"], [])
+            self.assertEqual(cfg["input"]["data_path"], bam)
+            self.assertEqual(cfg["deconvolution"]["syto"]["methods"], [])
 
     def test_decline_save_returns_none(self):
         with tempfile.TemporaryDirectory() as d:

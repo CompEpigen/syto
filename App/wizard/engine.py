@@ -18,12 +18,12 @@ class WizardEngine:
         expert_enabled: bool | None = None
 
         for spec in specs:
-            if spec.kind == "list_section":
-                spec.handler(self, answers)
-                continue
-
             if spec.when is not None and not spec.when(answers):
                 answers[spec.key] = spec.default
+                continue
+
+            if spec.kind == "list_section":
+                spec.handler(self, answers)
                 continue
 
             if spec.tier == "expert":

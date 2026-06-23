@@ -101,6 +101,19 @@ class TestWizardEngine(unittest.TestCase):
         answers = eng.run([spec])
         self.assertEqual(answers["deconv.methods"], ["xgboost"])
 
+    def test_list_section_skipped_when_predicate_false(self):
+        def handler(engine, answers):
+            raise AssertionError("handler should not run when `when` is False")
+
+        spec = FieldSpec(
+            key="deconv", label="Deconv", kind="list_section", default=[],
+            handler=handler, when=lambda ans: ans.get("run") is True,
+        )
+        gate = FieldSpec(key="run", label="Run?", kind="bool")
+        eng = StubEngine({"run": False})
+        answers = eng.run([gate, spec])
+        self.assertEqual(answers["deconv"], [])
+
 
 if __name__ == "__main__":
     unittest.main()

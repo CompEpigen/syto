@@ -6,41 +6,59 @@ from App.wizard.tasks import TASK_REGISTRY
 
 CLASSIFIER_TYPES = ["dismir", "methylbert", "cancer_detector", "lookup", "epigenbert2"]
 TRANSFORMER_ARCHS = {"methylbert", "epigenbert2"}
-SYTO_DECONVOLVERS = ["xgboost", "3Layer_MLP", "Shallow_Wide_Network", "nnls", "psls"]
+SYTO_DECONVOLVERS = ["xgboost", "mlp", "swn", "nnls", "psls"]
+# Friendly checkbox label -> the method-dict fields the pipeline dispatches on
+# (see App/inference.py: ``name``/``flavor`` resolution). ls-based methods carry
+# their variant in ``flavor``; the others are matched by ``name`` directly.
+SYTO_METHOD_DISPATCH = {
+    "xgboost": {"name": "xgboost"},
+    "mlp": {"name": "3Layer_MLP"},
+    "swn": {"name": "Shallow_Wide_Network"},
+    "nnls": {"name": "ls", "flavor": "nnls"},
+    "psls": {"name": "ls", "flavor": "psls"},
+}
 BASELINES = ["uxm", "celfieish", "celfie"]
+LABELING_SCHEMES = ["Soft Labels", "Hard Labels"]
+DEFAULT_LABELS_DICT = "App/labels_dict.json"
 
 
 def _ctype(answers):
     return answers.get("classifier.classifier_type")
 
 
+def _run_syto(answers):
+    return bool(answers.get("run_syto"))
+
+
 def _deconv_methods_section(engine, answers):
-    """Build deconvolution.methods as a list of dicts."""
+    """Build deconvolution.syto.methods as a list of dicts."""
     selected = engine.ask_checkbox(
         "Select syto feature-based deconvolvers to enable:", SYTO_DECONVOLVERS
     )
     methods = []
-    for name in selected:
+    for label in selected:
         ckpt = engine.ask_one(
-            FieldSpec(key=f"_{name}_ckpt", label=f"[{name}] checkpoint_path",
+            FieldSpec(key=f"_{label}_ckpt", label=f"[{label}] checkpoint_path",
                       kind="path", validate=v.path_exists),
             answers,
         )
         cal_dir = engine.ask_one(
-            FieldSpec(key=f"_{name}_cal", label=f"[{name}] calibrators_dir",
+            FieldSpec(key=f"_{label}_cal", label=f"[{label}] calibrators_dir",
                       kind="path", validate=v.path_exists),
             answers,
         )
         use_cal = engine.ask_one(
-            FieldSpec(key=f"_{name}_use", label=f"[{name}] use calibration?",
+            FieldSpec(key=f"_{label}_use", label=f"[{label}] use calibration?",
                       kind="bool", default=True),
             answers,
         )
-        methods.append({
-            "name": name, "enabled": True, "use_callibration": use_cal,
+        entry = dict(SYTO_METHOD_DISPATCH[label])  # name (+ flavor for ls)
+        entry.update({
+            "enabled": True, "use_callibration": use_cal,
             "checkpoint_path": ckpt, "calibrators_dir": cal_dir,
         })
-    answers["deconvolution.methods"] = methods
+        methods.append(entry)
+    answers["deconvolution.syto.methods"] = methods
 
 
 def _deconv_baselines_section(engine, answers):
@@ -70,17 +88,7 @@ def _deconv_baselines_section(engine, answers):
                           kind="select", choices=["hg38", "hg19"], default="hg38"),
                 answers,
             )
-            entry["num_iterations"] = engine.ask_one(
-                FieldSpec(key=f"_{model}_iter", label=f"[{model}] num_iterations",
-                          kind="int", default=400, validate=v.positive_int),
-                answers,
-            )
-            entry["convergence_criteria"] = engine.ask_one(
-                FieldSpec(key=f"_{model}_conv",
-                          label=f"[{model}] convergence_criteria",
-                          kind="float", default=0.001, validate=v.positive_float),
-                answers,
-            )
+            _ask_em_mode(engine, answers, model, entry)
             if model == "celfie":
                 entry["random_restarts"] = engine.ask_one(
                     FieldSpec(key="_celfie_rr", label="[celfie] random_restarts",
@@ -91,56 +99,97 @@ def _deconv_baselines_section(engine, answers):
     answers["deconvolution.baselines"] = baselines
 
 
+def _ask_em_mode(engine, answers, model, entry):
+    """Ask whether a CelFiE(-ISH) baseline runs in convergence or checkpoint mode."""
+    mode = engine.ask_one(
+        FieldSpec(key=f"_{model}_emmode", label=f"[{model}] EM mode",
+                  kind="select", choices=["convergence", "em_checkpoints"],
+                  default="convergence"),
+        answers,
+    )
+    if mode == "convergence":
+        entry["num_iterations"] = engine.ask_one(
+            FieldSpec(key=f"_{model}_iter", label=f"[{model}] num_iterations",
+                      kind="int", default=400, validate=v.positive_int),
+            answers,
+        )
+        entry["convergence_criteria"] = engine.ask_one(
+            FieldSpec(key=f"_{model}_conv", label=f"[{model}] convergence_criteria",
+                      kind="float", default=0.001, validate=v.positive_float),
+            answers,
+        )
+    else:
+        checkpoints = engine.ask_one(
+            FieldSpec(key=f"_{model}_ckpts",
+                      label=f"[{model}] em_checkpoints (comma-separated iteration counts)",
+                      kind="text", default="10, 50", validate=v.non_empty),
+            answers,
+        )
+        entry["em_checkpoints"] = [
+            int(c.strip()) for c in checkpoints.split(",") if c.strip()
+        ]
+
+
 class InferenceWizard:
     task_name = "inference"
 
     def field_specs(self) -> list[FieldSpec]:
         return [
-            # ── Classifier (core) ──
+            # ── Syto classification gate (asked first) ──
+            FieldSpec(key="run_syto",
+                      label="Run syto classification-based deconvolution?",
+                      kind="bool", default=True,
+                      help="If no, the classifier and syto blocks are skipped; "
+                           "only baseline deconvolvers run."),
+            # ── Classifier (only when syto is enabled) ──
             FieldSpec(key="classifier.classifier_type", label="Classifier type",
-                      kind="select", choices=CLASSIFIER_TYPES),
+                      kind="select", choices=CLASSIFIER_TYPES, when=_run_syto),
             FieldSpec(key="classifier.dismir_flavor", label="Dismir flavor",
                       kind="select", choices=["lstm", "mingru"], default="lstm",
-                      when=lambda a: _ctype(a) == "dismir"),
+                      when=lambda a: _run_syto(a) and _ctype(a) == "dismir"),
             FieldSpec(key="classifier.foundation_model", label="Foundation model path",
                       kind="path", validate=v.path_exists,
-                      when=lambda a: _ctype(a) in TRANSFORMER_ARCHS),
+                      when=lambda a: _run_syto(a) and _ctype(a) in TRANSFORMER_ARCHS),
             FieldSpec(key="classifier.classifier_head_implementation",
                       label="Classifier head", kind="select",
                       choices=["grg_attention_based", "simple"],
                       default="grg_attention_based",
-                      when=lambda a: _ctype(a) in {"methylbert", "dismir"}),
-            FieldSpec(key="classifier.soft_labels", label="Soft labels?",
-                      kind="bool", default=True),
+                      when=lambda a: _run_syto(a)
+                      and _ctype(a) in {"methylbert", "dismir"}),
+            FieldSpec(key="classifier.labeling_scheme",
+                      label="Classifier labeling scheme",
+                      kind="select", choices=LABELING_SCHEMES,
+                      default="Soft Labels", when=_run_syto),
             FieldSpec(key="checkpoint_path", label="Checkpoint path",
-                      kind="path", validate=v.path_exists),
+                      kind="path", validate=v.path_exists, when=_run_syto),
+            FieldSpec(key="features_mask_path", label="Features mask (.npz) path",
+                      kind="path", validate=v.path_exists, when=_run_syto),
+            # ── Labels / shared (always) ──
             FieldSpec(key="labels_dict_path", label="Labels dict JSON path",
-                      kind="path", validate=v.path_exists),
+                      kind="path", default=DEFAULT_LABELS_DICT,
+                      validate=v.path_exists),
             FieldSpec(key="num_labels", label="Number of labels",
                       kind="int", default=39, validate=v.positive_int),
-            # ── Atlas (core) ──
-            FieldSpec(key="atlas_path", label="Atlas TSV path",
+            # ── Syto atlas (only when syto is enabled) ──
+            FieldSpec(key="deconvolution.syto.atlas_path", label="Syto atlas TSV path",
+                      kind="path", validate=v.path_exists, when=_run_syto),
+            FieldSpec(key="deconvolution.syto.atlas_name", label="Syto atlas name",
+                      kind="text", when=_run_syto),
+            # ── Input (always) ──
+            FieldSpec(key="input.type", label="Input type", kind="select",
+                      choices=["bam", "parsed_reads", "predicted_reads"]),
+            FieldSpec(key="input.data_path", label="Input data path",
                       kind="path", validate=v.path_exists),
-            FieldSpec(key="atlas_name", label="Atlas name", kind="text"),
-            # ── Input (core) ──
-            FieldSpec(key="input.type", label="Input type",
-                      kind="select", choices=["bam", "parsed_reads"]),
-            FieldSpec(key="input.bam_path", label="BAM path", kind="path",
-                      validate=v.path_exists,
-                      when=lambda a: a.get("input.type") == "bam"),
             FieldSpec(key="input.reference_path", label="Reference FASTA path",
                       kind="path", validate=v.path_exists,
                       when=lambda a: a.get("input.type") == "bam"),
             FieldSpec(key="input.data_type", label="Data type",
                       kind="select", choices=["wgbs", "ont"], default="wgbs",
                       when=lambda a: a.get("input.type") == "bam"),
-            FieldSpec(key="input.parsed_reads_path", label="Parsed reads path",
-                      kind="path", validate=v.path_exists,
-                      when=lambda a: a.get("input.type") == "parsed_reads"),
             FieldSpec(key="input.chromosomes",
                       label="Chromosomes ('all' or comma-separated)",
                       kind="text", default="all"),
-            # ── Missing-label handling (core) ──
+            # ── Missing-label handling (always) ──
             FieldSpec(key="fill_in_missing_labels",
                       label="Fill in missing labels?", kind="bool", default=True),
             FieldSpec(key="missing_label_strategy", label="Missing label strategy",
@@ -153,12 +202,14 @@ class InferenceWizard:
                       when=lambda a: a.get("fill_in_missing_labels")
                       and a.get("missing_label_strategy")
                       in {"prior_blending", "prior_imputation"}),
-            # ── Deconvolution (core, list-sections) ──
-            FieldSpec(key="deconvolution.methods", label="Syto deconvolvers",
-                      kind="list_section", handler=_deconv_methods_section),
+            # ── Deconvolution (list-sections) ──
+            FieldSpec(key="deconvolution.syto.methods", label="Syto deconvolvers",
+                      kind="list_section", default=[],
+                      handler=_deconv_methods_section, when=_run_syto),
             FieldSpec(key="deconvolution.baselines", label="Baseline deconvolvers",
-                      kind="list_section", handler=_deconv_baselines_section),
-            # ── Output (core) ──
+                      kind="list_section", default=[],
+                      handler=_deconv_baselines_section),
+            # ── Output (always) ──
             FieldSpec(key="output_dir", label="Output directory",
                       kind="text", validate=v.non_empty),
             FieldSpec(key="output.save_processed_reads",
@@ -187,10 +238,6 @@ class InferenceWizard:
             FieldSpec(key="prediction_batch_size", label="prediction_batch_size",
                       kind="int", default=2200, tier="expert",
                       validate=v.positive_int),
-            FieldSpec(key="features_mask_path",
-                      label="features_mask_path (optional, blank to skip)",
-                      kind="path", default="", tier="expert",
-                      validate=v.path_exists_or_blank),
             FieldSpec(key="cell_type_match_dict_path",
                       label="cell_type_match_dict_path (optional, blank to skip)",
                       kind="path", default="", tier="expert",
@@ -198,17 +245,35 @@ class InferenceWizard:
         ]
 
     def build_config(self, answers: dict) -> dict:
+        run_syto = bool(answers.get("run_syto"))
         config: dict = {}
-        list_keys = {"deconvolution.methods", "deconvolution.baselines"}
-        special = {"input.chromosomes"} | list_keys
-        optional_blank = {"features_mask_path", "cell_type_match_dict_path"}
+
+        # Keys handled specially or conditionally below.
+        skip_keys = {
+            "run_syto", "input.chromosomes", "classifier.labeling_scheme",
+            "deconvolution.syto.methods", "deconvolution.baselines",
+        }
+        syto_only_keys = {
+            "checkpoint_path", "features_mask_path",
+            "deconvolution.syto.atlas_path", "deconvolution.syto.atlas_name",
+        }
+        optional_blank = {"cell_type_match_dict_path"}
 
         for key, value in answers.items():
-            if key in special:
+            if key in skip_keys:
+                continue
+            if key.startswith("classifier.") and not run_syto:
+                continue
+            if key in syto_only_keys and not run_syto:
                 continue
             if key in optional_blank and (value is None or str(value).strip() == ""):
                 value = None
             _set_nested(config, key, value)
+
+        # Labeling scheme -> soft_labels bool (only when classification runs)
+        if run_syto:
+            scheme = answers.get("classifier.labeling_scheme", "Soft Labels")
+            _set_nested(config, "classifier.soft_labels", scheme == "Soft Labels")
 
         # chromosomes: keep "all", else split to list
         chrom = answers.get("input.chromosomes", "all")
@@ -216,9 +281,13 @@ class InferenceWizard:
             chrom = [c.strip() for c in chrom.split(",") if c.strip()]
         _set_nested(config, "input.chromosomes", chrom)
 
-        # deconvolution lists
+        # Deconvolution block
         config.setdefault("deconvolution", {})
-        config["deconvolution"]["methods"] = answers.get("deconvolution.methods", [])
+        if run_syto:
+            config["deconvolution"].setdefault("syto", {})
+            config["deconvolution"]["syto"]["methods"] = answers.get(
+                "deconvolution.syto.methods", []
+            )
         config["deconvolution"]["baselines"] = answers.get(
             "deconvolution.baselines", []
         )
