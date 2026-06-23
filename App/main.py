@@ -241,12 +241,16 @@ Examples:
             "fit_calibration",
             "confidence_intervals",
             "deconvolute_pseudobulk",
+            "create_config",
         ],
         required=True,
         help="Task to perform",
     )
     parser.add_argument(
-        "--config", type=str, required=True, help="Path to configuration file (YAML)"
+        "--config",
+        type=str,
+        required=False,
+        help="Path to configuration file (YAML). Not used by create_config.",
     )
 
     # Optional overrides
@@ -303,6 +307,16 @@ Examples:
     # Setup logging
     logger = setup_logging(args.verbose, args.log_file)
     logger.info("Starting MethylDL application - Task: %s", args.task)
+
+    # The config-creation wizard is interactive and takes no --config file.
+    if args.task == "create_config":
+        from wizard import run_wizard
+
+        run_wizard()
+        return 0
+
+    if not args.config:
+        parser.error("--config is required for this task")
 
     try:
         # Load configuration
