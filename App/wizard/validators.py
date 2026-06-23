@@ -26,6 +26,12 @@ def positive_int(value: int) -> str | None:
     return None
 
 
+def non_negative_int(value: int) -> str | None:
+    if value < 0:
+        return "Value must be zero or a positive integer."
+    return None
+
+
 def positive_float(value: float) -> str | None:
     if value <= 0:
         return "Value must be a positive number."
