@@ -75,3 +75,14 @@ class BinaryCpGSignatureHandler(AbstractOmicsSignatureHandler):
         if union_size == 0:
             return 0.0  # If both signatures are empty, they are identical
         return 1 - (intersection_size / union_size)
+
+    def is_subset_of(self, sig1: BinaryCpGSignature, sig2: BinaryCpGSignature) -> bool:
+        """
+        Check if sig1 is a subset of sig2.
+
+        A signature sig1 is considered a subset of sig2 if all (position, state) pairs
+        in sig1 are also present in sig2.
+        """
+        set1 = set(sig1)
+        set2 = set(sig2)
+        return set1.issubset(set2)

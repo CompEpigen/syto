@@ -35,6 +35,7 @@ class DataDrivenSoftLabeler(AbstractLabeler):
         num_classes=39,
         keep_intermediate_values=True,
         precomputed_signature_column=None,
+        add_superset_counts: bool = False,
     ):
         """
         Compute the data driven soft labels for the given dataframe of reads.
@@ -55,6 +56,9 @@ class DataDrivenSoftLabeler(AbstractLabeler):
             precomputed_signature_column: if None, the signatures are computed from the reads
                 using the signature handler. If not None, the column with this name is used as
                 the precomputed signature for each read (and signatures are not recomputed).
+            add_superset_counts: if True, perform pooling by considering superset relationships
+                between signatures (i.e. if sig1 is a subset of sig2, then the counts of sig2
+                can be counted as those of sig1).
 
         Returns:
             DataFrame with original columns plus:
@@ -118,12 +122,20 @@ class DataDrivenSoftLabeler(AbstractLabeler):
 
         ## If perform_pooling is True, pool the counts
         if perform_pooling:
-            pooled_counts_df = self.nn_count_pooling(
-                class_counts,
-                num_classes=num_classes,
-                min_reads=min_reads,
-                max_distance=max_distance,
-            )
+            if add_superset_counts:
+                pooled_counts_df = self.nn_count_pooling_with_superset(
+                    class_counts,
+                    num_classes=num_classes,
+                    min_reads=min_reads,
+                    max_distance=max_distance,
+                )
+            else:
+                pooled_counts_df = self.nn_count_pooling(
+                    class_counts,
+                    num_classes=num_classes,
+                    min_reads=min_reads,
+                    max_distance=max_distance,
+                )
             class_counts = class_counts.merge(
                 pooled_counts_df,
                 on=["name", "signature"],
@@ -219,6 +231,114 @@ class DataDrivenSoftLabeler(AbstractLabeler):
 
                     if accumulated_total >= min_reads:
                         break
+
+                pooled_signature_counts.append(
+                    {
+                        "name": region,
+                        "signature": sigs_array[i],
+                        "raw_counts_pooled": int(accumulated_total),
+                        "num_signatures_pooled": sigs_pooled,
+                    }
+                    | {
+                        "pooled_counts_" + str(c): int(accumulated_counts[c])
+                        for c in range(num_classes)
+                    }
+                )
+
+        return pd.DataFrame(pooled_signature_counts)
+
+    def nn_count_pooling_with_superset(
+        self,
+        class_counts: pd.DataFrame,
+        num_classes: int = 39,
+        min_reads=30,
+        max_distance=0.5,
+    ) -> pd.DataFrame:
+        """
+        Pool counts within genomic regions using nearest neighbor aggregation,
+        considering superset relationships.
+
+        The pooling is performed in two steps:
+        1. For each signature, first pool counts from all its supersets (signatures that contain it),
+        independently of the distance between them or of the number of reads.
+        2. If the accumulated counts are still below the minimum threshold, continue pooling with nearest neighbors
+        within the specified maximum distance. If a neighbor is pooled, all of its supersets
+        are also pooled, regardless of their distance to the original signature, but still respecting the minimum read threshold.
+
+        Args:
+            class_counts: DataFrame with columns "name", "signature", "total_reads",
+                and "raw_counts_c" for each class c
+            num_classes: total number of classes in the original labels
+            min_reads: minimum number of reads to pool together
+                (including those of the signature itself)
+            max_distance: maximum distance between signatures to be considered neighbors for pooling
+        """
+        class_counts_columns = ["raw_counts_" + str(c) for c in range(num_classes)]
+        pooled_signature_counts = []
+
+        grouped = class_counts.groupby("name")
+        for region, group in tqdm(
+            grouped, desc="Pooling counts within genomic regions"
+        ):
+            group = group.reset_index(drop=True)
+            n_sigs = len(group)
+
+            sigs_array = group["signature"].values  # (n_sigs,)
+            class_counts_matrix = group[class_counts_columns].values.astype(
+                float
+            )  # (n_sigs, num_classes)
+            total_reads_array = group["total_reads"].values
+
+            # Compute the distance matrix between pairs of signatures for this region
+            # as well as the subset matrix (whether sig_i is a subset of sig_j)
+            dist_mat = np.zeros((n_sigs, n_sigs))
+            is_subset_mat = np.full((n_sigs, n_sigs), True, dtype=bool)
+            for i in range(n_sigs):
+                for j in range(i + 1, n_sigs):
+                    d = self.distance_fct(sigs_array[i], sigs_array[j])
+                    dist_mat[i, j] = d
+                    dist_mat[j, i] = d
+                    is_subset_mat[i, j] = self.signature_handler.is_subset_of(
+                        sigs_array[i], sigs_array[j]
+                    )
+                    is_subset_mat[j, i] = self.signature_handler.is_subset_of(
+                        sigs_array[j], sigs_array[i]
+                    )
+
+            ## Apply pooling
+            # pooled_from[i, j] will be True if the counts of signature j have been pooled into signature i
+            pooled_from = np.full((n_sigs, n_sigs), False, dtype=bool)
+            for i in range(n_sigs):
+                accumulated_counts = np.zeros(num_classes)
+                accumulated_total = 0
+                sigs_pooled = 0
+
+                # First pool all the supersets of the current signature
+                for j, j_is_superset_of_i in enumerate(is_subset_mat[i]):
+                    if j_is_superset_of_i:
+                        accumulated_counts += class_counts_matrix[j]
+                        accumulated_total += total_reads_array[j]
+                        sigs_pooled += 1
+                        pooled_from[i, j] = True
+
+                if accumulated_total < min_reads:
+                    # If we haven't reached the minimum reads, continue pooling with nearest neighbors
+                    # setup a queue of neighbors sorted by distance
+                    neighbor_indices = np.argsort(dist_mat[i])[::-1].tolist()
+                    while neighbor_indices and accumulated_total < min_reads:
+                        idx = neighbor_indices.pop()
+                        if dist_mat[i, idx] > max_distance:
+                            break
+                        if pooled_from[i, idx]:
+                            continue  # Skip if already pooled from this signature
+                        accumulated_counts += class_counts_matrix[idx]
+                        accumulated_total += total_reads_array[idx]
+                        sigs_pooled += 1
+                        pooled_from[i, idx] = True
+                        # add all the supersets of this neighbor to queue
+                        for k, k_is_superset_of_idx in enumerate(is_subset_mat[idx]):
+                            if k_is_superset_of_idx and not pooled_from[i, k]:
+                                neighbor_indices.append(k)
 
                 pooled_signature_counts.append(
                     {
