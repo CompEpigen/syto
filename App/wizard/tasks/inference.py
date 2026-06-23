@@ -6,6 +6,9 @@ from App.wizard.tasks import TASK_REGISTRY
 
 CLASSIFIER_TYPES = ["dismir", "methylbert", "cancer_detector", "lookup", "epigenbert2"]
 TRANSFORMER_ARCHS = {"methylbert", "epigenbert2"}
+# Architectures that use a read-level classifier head and a soft/hard labeling
+# scheme. cancer_detector and lookup use neither.
+HEAD_LABEL_ARCHS = {"dismir", "methylbert", "epigenbert2"}
 SYTO_DECONVOLVERS = ["xgboost", "mlp", "swn", "nnls", "psls"]
 # Friendly checkbox label -> the method-dict fields the pipeline dispatches on
 # (see App/inference.py: ``name``/``flavor`` resolution). ls-based methods carry
@@ -28,6 +31,10 @@ def _ctype(answers):
 
 def _run_syto(answers):
     return bool(answers.get("run_syto"))
+
+
+def _input_is_bam(answers):
+    return answers.get("input.type") == "bam"
 
 
 def _deconv_methods_section(engine, answers):
@@ -154,12 +161,12 @@ class InferenceWizard:
                       label="Classifier head", kind="select",
                       choices=["grg_attention_based", "simple"],
                       default="grg_attention_based",
-                      when=lambda a: _run_syto(a)
-                      and _ctype(a) in {"methylbert", "dismir"}),
+                      when=lambda a: _run_syto(a) and _ctype(a) in HEAD_LABEL_ARCHS),
             FieldSpec(key="classifier.labeling_scheme",
                       label="Classifier labeling scheme",
                       kind="select", choices=LABELING_SCHEMES,
-                      default="Soft Labels", when=_run_syto),
+                      default="Soft Labels",
+                      when=lambda a: _run_syto(a) and _ctype(a) in HEAD_LABEL_ARCHS),
             FieldSpec(key="checkpoint_path", label="Checkpoint path",
                       kind="path", validate=v.path_exists, when=_run_syto),
             FieldSpec(key="features_mask_path", label="Features mask (.npz) path",
@@ -218,61 +225,55 @@ class InferenceWizard:
                       kind="bool", default=True),
             FieldSpec(key="output.save_deconvolution", label="Save deconvolution?",
                       kind="bool", default=True),
-            # ── Expert ──
+            # ── Expert: BAM processing (only relevant for bam input) ──
             FieldSpec(key="bam_processing.n_jobs", label="bam n_jobs",
-                      kind="int", default=2, tier="expert", validate=v.positive_int),
+                      kind="int", default=2, tier="expert", validate=v.positive_int,
+                      when=_input_is_bam),
             FieldSpec(key="bam_processing.min_mapq", label="bam min_mapq",
-                      kind="int", default=10, tier="expert"),
+                      kind="int", default=10, tier="expert", when=_input_is_bam),
             FieldSpec(key="bam_processing.require_flags", label="bam require_flags",
-                      kind="int", default=3, tier="expert"),
+                      kind="int", default=3, tier="expert", when=_input_is_bam),
             FieldSpec(key="bam_processing.exclude_flags", label="bam exclude_flags",
-                      kind="int", default=1796, tier="expert"),
+                      kind="int", default=1796, tier="expert", when=_input_is_bam),
             FieldSpec(key="bam_processing.min_cpgs", label="bam min_cpgs",
-                      kind="int", default=4, tier="expert", validate=v.positive_int),
+                      kind="int", default=4, tier="expert", validate=v.positive_int,
+                      when=_input_is_bam),
             FieldSpec(key="bam_processing.merge_pairs", label="bam merge_pairs",
-                      kind="bool", default=True, tier="expert"),
+                      kind="bool", default=True, tier="expert", when=_input_is_bam),
             FieldSpec(key="bam_processing.ont_methyl_tr", label="bam ont_methyl_tr",
-                      kind="int", default=180, tier="expert"),
+                      kind="int", default=180, tier="expert", when=_input_is_bam),
+            # ── Expert: classifier prediction params (only when syto runs) ──
             FieldSpec(key="max_sequence_length", label="max_sequence_length",
-                      kind="int", default=150, tier="expert", validate=v.positive_int),
+                      kind="int", default=150, tier="expert", validate=v.positive_int,
+                      when=_run_syto),
             FieldSpec(key="prediction_batch_size", label="prediction_batch_size",
                       kind="int", default=2200, tier="expert",
-                      validate=v.positive_int),
-            FieldSpec(key="cell_type_match_dict_path",
-                      label="cell_type_match_dict_path (optional, blank to skip)",
-                      kind="path", default="", tier="expert",
-                      validate=v.path_exists_or_blank),
+                      validate=v.positive_int, when=_run_syto),
         ]
 
     def build_config(self, answers: dict) -> dict:
         run_syto = bool(answers.get("run_syto"))
         config: dict = {}
 
-        # Keys handled specially or conditionally below.
+        # Keys assembled explicitly below rather than copied verbatim.
         skip_keys = {
             "run_syto", "input.chromosomes", "classifier.labeling_scheme",
             "deconvolution.syto.methods", "deconvolution.baselines",
         }
-        syto_only_keys = {
-            "checkpoint_path", "features_mask_path",
-            "deconvolution.syto.atlas_path", "deconvolution.syto.atlas_name",
-        }
-        optional_blank = {"cell_type_match_dict_path"}
 
+        # The wizard engine omits fields that are not applicable to this config
+        # (their `when` predicate was False), so the answers dict already
+        # excludes irrelevant keys. A None value marks a not-applicable field
+        # supplied explicitly (e.g. in tests); skip those too so nothing unused
+        # leaks into the generated config.
         for key, value in answers.items():
-            if key in skip_keys:
+            if key in skip_keys or value is None:
                 continue
-            if key.startswith("classifier.") and not run_syto:
-                continue
-            if key in syto_only_keys and not run_syto:
-                continue
-            if key in optional_blank and (value is None or str(value).strip() == ""):
-                value = None
             _set_nested(config, key, value)
 
-        # Labeling scheme -> soft_labels bool (only when classification runs)
-        if run_syto:
-            scheme = answers.get("classifier.labeling_scheme", "Soft Labels")
+        # Labeling scheme -> soft_labels bool (only when it was asked).
+        scheme = answers.get("classifier.labeling_scheme")
+        if scheme is not None:
             _set_nested(config, "classifier.soft_labels", scheme == "Soft Labels")
 
         # chromosomes: keep "all", else split to list

@@ -18,14 +18,18 @@ class WizardEngine:
         expert_enabled: bool | None = None
 
         for spec in specs:
+            # A field whose `when` predicate is False is not applicable to this
+            # configuration and is omitted entirely (no key recorded), so it
+            # never reaches the generated config.
             if spec.when is not None and not spec.when(answers):
-                answers[spec.key] = spec.default
                 continue
 
             if spec.kind == "list_section":
                 spec.handler(self, answers)
                 continue
 
+            # An expert field the user chose not to configure keeps its default,
+            # which is written to the config (defaults are visible and editable).
             if spec.tier == "expert":
                 if expert_enabled is None:
                     expert_enabled = self._ask_expert_gate()

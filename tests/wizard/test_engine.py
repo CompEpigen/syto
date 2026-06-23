@@ -31,7 +31,7 @@ class TestWizardEngine(unittest.TestCase):
         answers = eng.run(specs)
         self.assertEqual(answers, {"a": "hello", "n": 39})
 
-    def test_when_false_skips_and_records_default(self):
+    def test_when_false_omits_key_entirely(self):
         specs = [
             FieldSpec(key="type", label="T", kind="text"),
             FieldSpec(
@@ -41,7 +41,7 @@ class TestWizardEngine(unittest.TestCase):
         ]
         eng = StubEngine({"type": "lookup", "flavor": "SHOULD_NOT_ASK"})
         answers = eng.run(specs)
-        self.assertEqual(answers["flavor"], "NA")
+        self.assertNotIn("flavor", answers)
 
     def test_expert_gate_asked_once_and_skips_when_declined(self):
         specs = [
@@ -112,7 +112,7 @@ class TestWizardEngine(unittest.TestCase):
         gate = FieldSpec(key="run", label="Run?", kind="bool")
         eng = StubEngine({"run": False})
         answers = eng.run([gate, spec])
-        self.assertEqual(answers["deconv"], [])
+        self.assertNotIn("deconv", answers)
 
 
 if __name__ == "__main__":

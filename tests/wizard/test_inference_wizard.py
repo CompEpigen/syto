@@ -200,9 +200,42 @@ class TestInferenceBuildConfig(unittest.TestCase):
         cfg = self.wiz.build_config(ans)
         self.assertEqual(cfg["input"]["chromosomes"], ["chr1", "chr2", "chr3"])
 
-    def test_blank_optional_path_becomes_none(self):
-        cfg = self.wiz.build_config(self._syto_answers())
-        self.assertIsNone(cfg["cell_type_match_dict_path"])
+    def test_irrelevant_classifier_fields_omitted_for_cancer_detector(self):
+        # Engine omits when-False keys; build_config must not resurrect them.
+        ans = {
+            "run_syto": True,
+            "classifier.classifier_type": "cancer_detector",
+            "labels_dict_path": "App/labels_dict.json",
+            "num_labels": 39,
+            "deconvolution.syto.atlas_path": "/tmp/atlas.tsv",
+            "deconvolution.syto.atlas_name": "atlas",
+            "input.type": "bam",
+            "input.data_path": "/tmp/x.bam",
+            "input.reference_path": "/tmp/r.fa",
+            "input.data_type": "wgbs",
+            "input.chromosomes": "all",
+            "fill_in_missing_labels": False,
+            "deconvolution.syto.methods": [],
+            "deconvolution.baselines": [],
+            "output_dir": "/tmp/out",
+        }
+        cfg = self.wiz.build_config(ans)
+        self.assertEqual(cfg["classifier"]["classifier_type"], "cancer_detector")
+        self.assertNotIn("dismir_flavor", cfg["classifier"])
+        self.assertNotIn("foundation_model", cfg["classifier"])
+        self.assertNotIn("classifier_head_implementation", cfg["classifier"])
+        self.assertNotIn("soft_labels", cfg["classifier"])
+
+    def test_bam_processing_omitted_for_non_bam_input(self):
+        ans = self._syto_answers()
+        ans["input.type"] = "parsed_reads"
+        del ans["input.reference_path"]
+        del ans["input.data_type"]
+        for k in list(ans):
+            if k.startswith("bam_processing."):
+                del ans[k]
+        cfg = self.wiz.build_config(ans)
+        self.assertNotIn("bam_processing", cfg)
 
 
 if __name__ == "__main__":
