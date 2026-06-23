@@ -8,27 +8,10 @@ import logging
 import argparse
 import sys
 import os
-from pathlib import Path
 from typing import Dict, Any
+import shutil
 
 import yaml
-from syto.classification.experiment_wrappers import (
-    AbstractMLFlowExperiment,
-    TransformersMLFLowExperiment,
-)
-
-# Add parent directory to path for imports
-sys.path.append(str(Path(__file__).parent.parent))
-
-# pylint: disable=wrong-import-position
-from syto.classification.experiment_wrappers import (
-    DismirMLflowExperiment,
-    EpigenBERT2MLflowExperiment,
-    MethylBertMLflowExperiment,
-)
-from syto.classification.classifiers.dnabert2 import (
-    TrainingArguments,
-)  # TODO - must be different for MethylBERT
 
 
 def setup_logging(verbose: bool = False, log_file: str = None):
@@ -59,7 +42,7 @@ def load_config(config_path: str) -> Dict[str, Any]:
 def validate_config(config: Dict[str, Any], task: str) -> None:
     """Validate configuration for the specified task."""
     required_fields = {
-        "fine_tune": ["model", "data_path", "max_sequence_length"],
+        "classifier_fit": ["model", "data_path", "max_sequence_length"],
         "pretrain": ["model", "data_path"],  # Add pretrain requirements
         "inference": [
             "classifier",
@@ -69,28 +52,28 @@ def validate_config(config: Dict[str, Any], task: str) -> None:
             "input",
         ],
         "generate_pseudobulk": [
-            "classifier_type",
-            "output_dir",
-            "labels_dict_path",
-        ],
-        "generate_pseudobulk_v2": [
             "output_dir",
             "labels_dict_path",
         ],
         "fit_deconvolution": [
-            "predicted_splits",
-            "ios_full_matrices_path",
+            "pseudobulk_h5_path",
             "output_dir",
             "labels_dict_path",
         ],
         "fit_calibration": [
-            "ios_feature_selected_path",
+            "pseudobulk_h5_path",
+            "features_mask_path",
             "deconvolvers_dir",
             "output_dir",
             "labels_dict_path",
         ],
         "confidence_intervals": [
             "calibration_results_dir",
+            "labels_dict_path",
+        ],
+        "deconvolute_pseudobulk": [
+            "pseudobulk_h5_path",
+            "output_dir",
             "labels_dict_path",
         ],
     }
@@ -102,135 +85,36 @@ def validate_config(config: Dict[str, Any], task: str) -> None:
         if field not in config:
             raise ValueError(f"Missing required field '{field}' for task '{task}'")
 
-    # Validate model-specific configuration (not needed for generate_pseudobulk or fit_deconvolution)
+    # Validate model-specific configuration
+    # (not needed for generate_pseudobulk or fit_deconvolution)
     if task not in (
         "generate_pseudobulk",
-        "generate_pseudobulk_v2",
         "fit_deconvolution",
         "fit_calibration",
         "confidence_intervals",
+        "deconvolute_pseudobulk",
     ):
-        model = config["classifier"]["classifier_type"].lower()
-        if model not in ["methylbert", "dismir", "cancer_detector", "lookup"]:
+        if task in ("classifier_fit", "pretrain"):
+            model = config["model"]["architecture"].lower()
+        else:
+            model = config["classifier"]["classifier_type"].lower()
+        if model not in [
+            "methylbert",
+            "dismir",
+            "cancer_detector",
+            "lookup",
+            "epigenbert2",
+        ]:
             raise ValueError(f"Unknown model architecture: {model}")
 
 
-def create_experiment(
-    config: Dict[str, Any], logger: logging.Logger
-) -> AbstractMLFlowExperiment:
-    """Create the appropriate experiment based on configuration."""
-    model_arch = config["model"]["architecture"].lower()
-    data_path = config["data_path"]
-    max_seq_length = config["max_sequence_length"]
+def run_classifier_fit(config: Dict[str, Any], logger: logging.Logger) -> None:
+    """Run classifier fitting workflow."""
+    from classifier_fit_pipeline import ClassifierFittingPipeline
 
-    # MLflow configuration
-    mlflow_config = config.get("mlflow", {})
-
-    experiment_name = None
-    tracking_uri = None
-
-    experiment_name = mlflow_config.get("experiment_name")
-    tracking_uri = mlflow_config.get("tracking_uri")
-
-    if not experiment_name:
-        raise ValueError("MLflow is enabled but 'experiment_name' is not provided")
-
-    logger.info(f"MLflow enabled - Experiment: {experiment_name}")
-    if tracking_uri:
-        logger.info(f"MLflow tracking URI: {tracking_uri}")
-
-    # Model-specific parameters
-    model_config = config["model"]
-
-    if model_arch == "dismir":
-        return DismirMLflowExperiment(
-            data_path=data_path,
-            experiment_name=experiment_name,
-            tracking_uri=tracking_uri,
-            max_sequence_length=max_seq_length,
-            model_flavor=model_config.get("flavor", "lstm"),
-            splits=config.get("splits", ["train", "valid", "test"]),
-        )
-
-    elif model_arch == "epigenbert2":
-        return EpigenBERT2MLflowExperiment(
-            data_path=data_path,
-            experiment_name=experiment_name,
-            tracking_uri=tracking_uri,
-            max_sequence_length=max_seq_length,
-            use_cpg_methylation=model_config.get("use_cpg_methylation", True),
-            use_m6a_methylation=model_config.get("use_m6a_methylation", False),
-            foundation_model_huggingface=model_config.get(
-                "foundation_model", "zhihan1996/DNABERT-2-117M"
-            ),
-            splits=config.get("splits", ["train", "valid", "test"]),
-            use_triton=model_config.get("use_triton", False),
-        )
-
-    elif model_arch == "methylbert":
-        return MethylBertMLflowExperiment(
-            data_path=data_path,
-            experiment_name=experiment_name,
-            tracking_uri=tracking_uri,
-            max_sequence_length=max_seq_length,
-            foundation_model_huggingface=model_config.get(
-                "foundation_model", "hanyangii/methylbert_hg19_12l"
-            ),
-            splits=config.get("splits", ["train", "valid", "test"]),
-        )
-
-    else:
-        raise ValueError(f"Unknown model architecture: {model_arch}")
-
-
-def run_fine_tuning(config: Dict[str, Any], logger: logging.Logger) -> None:
-    """Run fine-tuning based on configuration."""
-
-    # Create experiment
-    experiment = create_experiment(config, logger)
-
-    # Get training configuration
-    training_config = config.get("training", {})
-    model_arch = config["model"]["architecture"].lower()
-
-    # Dataset selection
-    datasets = config.get("datasets", "all")
-
-    if datasets == "all":
-        # Train on all available datasets
-        logger.info("Training on all available datasets")
-        if model_arch == "dismir":
-            experiment.run_full_experiment(**training_config)
-        else:
-            # For transformer models, check if custom TrainingArguments provided
-            if "training_arguments" in training_config:
-                args_dict = training_config["training_arguments"]
-                training_args = TrainingArguments(**args_dict)
-                experiment.run_full_experiment(training_args=training_args)
-            else:
-                experiment.run_full_experiment(**training_config)
-    else:
-        # Train on specific datasets
-        if isinstance(datasets, str):
-            datasets = [datasets]
-
-        for dataset_name in datasets:
-            logger.info(f"Training on dataset: {dataset_name}")
-
-            if model_arch == "dismir":
-                experiment.train_dataset(dataset_name, **training_config)
-            else:
-                # For transformer models
-                assert isinstance(
-                    experiment, TransformersMLFLowExperiment
-                ), "Expected a transformer experiment instance"
-                if "training_arguments" in training_config:
-                    args_dict = training_config["training_arguments"]
-                    training_args = TrainingArguments(**args_dict)
-                    # pylint: disable-next:unexpected-keyword-arg
-                    experiment.train_dataset(dataset_name, training_args=training_args)
-                else:
-                    experiment.train_dataset(dataset_name, **training_config)
+    logger.info("Starting classifier fitting pipeline")
+    pipeline = ClassifierFittingPipeline(config=config, logger=logger)
+    pipeline.run()
 
 
 def run_inference(config: Dict[str, Any], logger: logging.Logger) -> None:
@@ -273,38 +157,16 @@ def run_pretraining(config: Dict[str, Any], logger: logging.Logger) -> None:
 
 
 def run_pseudobulk_generation(config: Dict[str, Any], logger: logging.Logger) -> None:
-    """Run pseudo-bulk mixture generation based on configuration."""
-    from pseudobulk_pipeline import PseudoBulkPipeline
+    """Run pseudo-bulk generation using the HDF5-based PseudobulkGenerator."""
+    from App.pseudobulk_pipeline import PseudoBulkPipeline
 
-    logger.info("Starting pseudo-bulk generation pipeline")
+    logger.info("Starting pseudo-bulk generation pipeline (HDF5-based)")
     pipeline = PseudoBulkPipeline(config=config, logger=logger)
-    result = pipeline.run()
-
-    # Log summary
-    logger.info("=" * 60)
-    logger.info("PSEUDO-BULK GENERATION SUMMARY")
-    logger.info("=" * 60)
-    logger.info(f"  Total examples: {result[list(result.keys())[0]].shape[0]}")
-    # splits_cfg = config.get("splits", ["train", "valid", "test"])
-    # for split_name in splits_cfg:
-    #     logger.info(f"Features shape {split_name}: {result[f'features_{split_name}'].shape}")
-    logger.info(f"  Output saved to: {config['output_dir']}")
-    logger.info("=" * 60)
-
-
-def run_pseudobulk_generation_v2(
-    config: Dict[str, Any], logger: logging.Logger
-) -> None:
-    """Run pseudo-bulk generation using the new HDF5-based PseudobulkGenerator."""
-    from pseudobulk_pipeline_v2 import PseudoBulkPipelineV2
-
-    logger.info("Starting pseudo-bulk generation pipeline V2 (HDF5-based)")
-    pipeline = PseudoBulkPipelineV2(config=config, logger=logger)
     output_path = pipeline.run()
 
     # Log summary
     logger.info("=" * 60)
-    logger.info("PSEUDO-BULK GENERATION V2 SUMMARY")
+    logger.info("PSEUDO-BULK GENERATION SUMMARY")
     logger.info("=" * 60)
     logger.info(f"  Output HDF5: {output_path}")
     logger.info("=" * 60)
@@ -328,6 +190,17 @@ def run_calibration_fitting(config: Dict[str, Any], logger: logging.Logger) -> N
     pipeline.run()
 
 
+def run_pseudobulk_deconvolution(
+    config: Dict[str, Any], logger: logging.Logger
+) -> None:
+    """Run baseline deconvolution on a pre-generated pseudobulk HDF5 file."""
+    from App.pseudobulk_deconvolution_pipeline import PseudobulkDeconvolutionPipeline
+
+    logger.info("Starting pseudobulk deconvolution pipeline")
+    pipeline = PseudobulkDeconvolutionPipeline(config=config, logger=logger)
+    pipeline.run()
+
+
 def run_confidence_intervals(config: Dict[str, Any], logger: logging.Logger) -> None:
     """Recompute metrics with bootstrap confidence intervals."""
     from conf_interval_pipeline import ConfidenceIntervalPipeline
@@ -345,10 +218,10 @@ def main():
         epilog="""
 Examples:
   # Fine-tune using configuration file
-  python main.py --task fine_tune --config config/fine_tune_epigenbert2.yaml
+  python main.py --task classifier_fit --config config/classifier_fit_epigenbert2.yaml
   
   # Fine-tune with command-line overrides
-  python main.py --task fine_tune --config config/base.yaml \\
+  python main.py --task classifier_fit --config config/base.yaml \\
     --model epigenbert2 --max-seq-length 1000 --data-path /data/methylation
   
   # Run inference
@@ -361,13 +234,13 @@ Examples:
         "--task",
         choices=[
             "pretrain",
-            "fine_tune",
+            "classifier_fit",
             "inference",
             "generate_pseudobulk",
-            "generate_pseudobulk_v2",
             "fit_deconvolution",
             "fit_calibration",
             "confidence_intervals",
+            "deconvolute_pseudobulk",
         ],
         required=True,
         help="Task to perform",
@@ -429,31 +302,31 @@ Examples:
 
     # Setup logging
     logger = setup_logging(args.verbose, args.log_file)
-    logger.info(f"Starting MethylDL application - Task: {args.task}")
+    logger.info("Starting MethylDL application - Task: %s", args.task)
 
     try:
         # Load configuration
         config = load_config(args.config)
-        logger.info(f"Loaded configuration from {args.config}")
+        logger.info("Loaded configuration from %s", args.config)
 
         # Apply command-line overrides
         if args.model:
             if "model" not in config:
                 config["model"] = {}
             config["model"]["architecture"] = args.model
-            logger.info(f"Override: model = {args.model}")
+            logger.info("Override: model = %s", args.model)
 
         if args.data_path:
             config["data_path"] = args.data_path
-            logger.info(f"Override: data_path = {args.data_path}")
+            logger.info("Override: data_path = %s", args.data_path)
 
         if args.max_seq_length:
             config["max_sequence_length"] = args.max_seq_length
-            logger.info(f"Override: max_sequence_length = {args.max_seq_length}")
+            logger.info("Override: max_sequence_length = %s", args.max_seq_length)
 
         if args.checkpoint:
             config["checkpoint_path"] = args.checkpoint
-            logger.info(f"Override: checkpoint_path = {args.checkpoint}")
+            logger.info("Override: checkpoint_path = %s", args.checkpoint)
 
         # Inference-specific overrides
         if hasattr(args, "bam") and args.bam:
@@ -461,37 +334,35 @@ Examples:
                 config["input"] = {}
             config["input"]["type"] = "bam"
             config["input"]["bam_path"] = args.bam
-            logger.info(f"Override: input.bam_path = {args.bam}")
+            logger.info("Override: input.bam_path = %s", args.bam)
 
         if hasattr(args, "atlas") and args.atlas:
             config["atlas_path"] = args.atlas
-            logger.info(f"Override: atlas_path = {args.atlas}")
+            logger.info("Override: atlas_path = %s", args.atlas)
 
         if hasattr(args, "labels_dict") and args.labels_dict:
             config["labels_dict_path"] = args.labels_dict
-            logger.info(f"Override: labels_dict_path = {args.labels_dict}")
+            logger.info("Override: labels_dict_path = %s", args.labels_dict)
 
         if hasattr(args, "output_dir") and args.output_dir:
-            if "output" not in config:
-                config["output"] = {}
-            config["output"]["output_dir"] = args.output_dir
-            logger.info(f"Override: output.output_dir = {args.output_dir}")
+            config["output_dir"] = args.output_dir
+            logger.info("Override: output_dir = %s", args.output_dir)
 
         if args.datasets:
             config["datasets"] = args.datasets
-            logger.info(f"Override: datasets = {args.datasets}")
+            logger.info("Override: datasets = %s", args.datasets)
 
         if args.mlflow_uri:
             if "mlflow" not in config:
                 config["mlflow"] = {}
             config["mlflow"]["tracking_uri"] = args.mlflow_uri
-            logger.info(f"Override: MLflow URI = {args.mlflow_uri}")
+            logger.info("Override: MLflow URI = %s", args.mlflow_uri)
 
         if args.experiment_name:
             if "mlflow" not in config:
                 config["mlflow"] = {}
             config["mlflow"]["experiment_name"] = args.experiment_name
-            logger.info(f"Override: experiment_name = {args.experiment_name}")
+            logger.info("Override: experiment_name = %s", args.experiment_name)
 
         # Validate configuration
         validate_config(config, args.task)
@@ -503,29 +374,34 @@ Examples:
             )
             return 0
 
+        output_dir = config["output_dir"]
+        os.makedirs(output_dir, exist_ok=True)
+        shutil.copy(args.config, output_dir)
+        logger.info(f"Copied config to {output_dir}")
+
         # Execute task
-        if args.task == "fine_tune":
-            run_fine_tuning(config, logger)
+        if args.task == "classifier_fit":
+            run_classifier_fit(config, logger)
         elif args.task == "inference":
             run_inference(config, logger)
         elif args.task == "pretrain":
             run_pretraining(config, logger)
         elif args.task == "generate_pseudobulk":
             run_pseudobulk_generation(config, logger)
-        elif args.task == "generate_pseudobulk_v2":
-            run_pseudobulk_generation_v2(config, logger)
         elif args.task == "fit_deconvolution":
             run_deconvolution_fitting(config, logger)
         elif args.task == "fit_calibration":
             run_calibration_fitting(config, logger)
         elif args.task == "confidence_intervals":
             run_confidence_intervals(config, logger)
+        elif args.task == "deconvolute_pseudobulk":
+            run_pseudobulk_deconvolution(config, logger)
 
         logger.info("Task completed successfully")
         return 0
 
-    except Exception as e:
-        logger.error(f"Error: {e}", exc_info=True)
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        logger.error("Error: %s", e, exc_info=True)
         return 1
 
 

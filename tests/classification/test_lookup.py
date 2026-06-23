@@ -23,11 +23,7 @@ import logging
 import numpy as np
 import pandas as pd
 
-from syto.classification.classifiers.lookup import (
-    LabelConfig,
-    LookupClassifier,
-    SoftLabelConfig,
-)
+from syto.classification.classifiers.lookup import LabelConfig, LookupClassifier
 from syto.data.omics_signatures_handlers.binary_cpg_signature import (
     BinaryCpGSignatureHandler,
 )
@@ -230,10 +226,6 @@ class TestLabelConfig(unittest.TestCase):
         d = {"num_classes": 7, "unexpected_key": "hello"}
         cfg = LabelConfig.from_dict(d)
         self.assertEqual(cfg.num_classes, 7)
-
-    def test_soft_label_config_alias(self):
-        """SoftLabelConfig should be the same class as LabelConfig."""
-        self.assertIs(SoftLabelConfig, LabelConfig)
 
 
 # ──────────────────────────────────────────────────────────────────────

@@ -1,16 +1,83 @@
-""" """
+"""
+BAM file processing for read-level CpG methylation extraction.
 
+Supports two sequencing technologies:
+- ONT (Oxford Nanopore): Uses MM/ML tags for methylation calls
+- WGBS (Whole Genome Bisulfite Sequencing): Uses reference genome comparison
+
+Pipeline flow:
+    BAM file → genomic chunking → parallel read processing →
+    methylation extraction → optional paired-end merging → DataFrame
+
+Coordinate system: 0-based, half-open [start, end) matching BAM/pysam conventions.
+Default quality filters match SAMtools: -f 3 -F 1796 -q 10
+"""
+
+from __future__ import annotations
+
+import logging
 import re
+from dataclasses import dataclass
+from enum import Enum
 from multiprocessing import Pool
 
 import numba as nb
-import pandas as pd
-
-import pysam
 import numpy as np
+import pandas as pd
+import pysam
 
-# Constants for numba
+logger = logging.getLogger(__name__)
+
+
+# ============================================================
+# Constants
+# ============================================================
+
+
+class DataType(Enum):
+    """Supported sequencing data types."""
+
+    ONT = "ont"
+    WGBS = "wgbs"
+
+
+# Methylation states used in CpG scan results and encodings.
+# These are used as literal ints in numba functions and as
+# string characters ("0", "1", "2") in methylation encoding strings.
+METHYLATED = 1
+UNMETHYLATED = 0
+UNKNOWN = 2
+
+# ASCII values for CpG scanning in numba
 CG_ASCII = np.array([ord("C"), ord("G")], dtype=np.uint8)
+
+
+# ============================================================
+# Data classes
+# ============================================================
+
+
+@dataclass
+class ChunkTask:
+    """Parameters for processing a single genomic chunk in parallel."""
+
+    chromosome: str
+    chunk_start: int
+    chunk_end: int
+    bam_path: str
+    interesting_chromosomes: list
+    methyl_tr: int
+    data_type: str
+    reference_path: str | None
+    min_mapq: int
+    require_flags: int
+    exclude_flags: int
+    min_cpgs: int
+
+
+# ============================================================
+# Data type detection
+# ============================================================
 
 
 def detect_bam_data_type(bam_path, sample_size=1000):
@@ -39,9 +106,14 @@ def detect_bam_data_type(bam_path, sample_size=1000):
             raise ValueError("No mapped reads found in BAM file")
 
         if has_ml_tag / reads_checked > 0.5:
-            return "ont"
+            return DataType.ONT.value
         else:
-            return "wgbs"
+            return DataType.WGBS.value
+
+
+# ============================================================
+# MM/ML tag parsing
+# ============================================================
 
 
 def parse_mm_tag(mm_tag):
@@ -51,13 +123,13 @@ def parse_mm_tag(mm_tag):
     MM tag format: "A+a,10,5,3;C+m,2,1,4;G+g,5,2;"
     Returns dict with modification info and cumulative counts for ML indexing.
 
-    Parameters:
-    -----------
+    Parameters
+    ----------
     mm_tag : str
         MM tag string from BAM file
 
-    Returns:
-    --------
+    Returns
+    -------
     dict with keys:
         'modifications': list of tuples (base, modification_code, skip_positions)
         'cpg_mod_index': index of C+m modification (-1 if not found)
@@ -119,6 +191,41 @@ def parse_mm_tag(mm_tag):
     }
 
 
+def extract_cpg_ml_values(ml_array, mm_info):
+    """
+    Extract only the ML probability values corresponding to C+m modifications.
+
+    Parameters
+    ----------
+    ml_array : array-like
+        Full ML probability array
+    mm_info : dict
+        Output from parse_mm_tag()
+
+    Returns
+    -------
+    np.array
+        ML values for C+m positions only
+    """
+    if mm_info is None or mm_info["cpg_mod_index"] == -1:
+        return np.array([])
+
+    offset = mm_info["cpg_ml_offset"]
+    count = mm_info["cpg_count"]
+
+    # Extract the slice of ML values for C+m
+    if offset + count <= len(ml_array):
+        return np.array(ml_array[offset : offset + count])
+    else:
+        # Handle edge case where ML array is shorter than expected
+        return np.array(ml_array[offset:])
+
+
+# ============================================================
+# Numba-accelerated CpG scanning
+# ============================================================
+
+
 @nb.njit(fastmath=True, cache=True)
 def cpg_scan(seq_bytes, ml_values, tr=122):
     """Return CpG offsets (0-based) and methylation states for one read (ONT)."""
@@ -130,9 +237,9 @@ def cpg_scan(seq_bytes, ml_values, tr=122):
         if seq_bytes[i] == CG_ASCII[0] and seq_bytes[i + 1] == CG_ASCII[1]:
             pos_buf.append(i)
             if cg_idx < len(ml_values):
-                state_buf.append(1 if ml_values[cg_idx] > tr else 0)  # m/unm
+                state_buf.append(METHYLATED if ml_values[cg_idx] > tr else UNMETHYLATED)
             else:
-                state_buf.append(2)  # missing
+                state_buf.append(UNKNOWN)
             cg_idx += 1
     return pos_buf, state_buf
 
@@ -153,13 +260,13 @@ def cpg_scan_wgbs_forward(ref_bytes, read_bytes):
 
             if i < len(read_bytes):
                 if read_bytes[i] == ord("C"):
-                    state_buf.append(1)  # Methylated
+                    state_buf.append(METHYLATED)
                 elif read_bytes[i] == ord("T"):
-                    state_buf.append(0)  # Unmethylated
+                    state_buf.append(UNMETHYLATED)
                 else:
-                    state_buf.append(2)  # Ambiguous
+                    state_buf.append(UNKNOWN)
             else:
-                state_buf.append(2)
+                state_buf.append(UNKNOWN)
 
     return pos_buf, state_buf
 
@@ -179,45 +286,326 @@ def cpg_scan_wgbs_reverse(ref_bytes, read_bytes):
 
             if i + 1 < len(read_bytes):
                 if read_bytes[i + 1] == ord("G"):
-                    state_buf.append(1)  # Methylated
+                    state_buf.append(METHYLATED)
                 elif read_bytes[i + 1] == ord("A"):
-                    state_buf.append(0)  # Unmethylated
+                    state_buf.append(UNMETHYLATED)
                 else:
-                    state_buf.append(2)  # Ambiguous
+                    state_buf.append(UNKNOWN)
             else:
-                state_buf.append(2)
+                state_buf.append(UNKNOWN)
 
     return pos_buf, state_buf
 
 
-def extract_cpg_ml_values(ml_array, mm_info):
-    """
-    Extract only the ML probability values corresponding to C+m modifications.
+# ============================================================
+# CIGAR sequence processing
+# ============================================================
 
-    Parameters:
-    -----------
-    ml_array : array-like
-        Full ML probability array
-    mm_info : dict
-        Output from parse_mm_tag()
 
-    Returns:
-    --------
-    np.array
-        ML values for C+m positions only
+def clean_cigar_sequence(read):
     """
+    Process CIGAR string to align read sequence to reference coordinates.
+
+    Similar to wgbstools' clean_CIGAR function:
+    - Removes inserted bases (I) from the read sequence
+    - Adds 'N' placeholders for deleted bases (D) in reference
+    - Removes soft-clipped bases (S)
+
+    Returns
+    -------
+    str: Processed read sequence that aligns 1:1 with reference positions
+    """
+    if read.cigartuples is None:
+        return read.query_alignment_sequence
+
+    seq = read.query_sequence  # Full query sequence including soft clips
+    result = []
+    seq_pos = 0  # Position in query sequence
+
+    for op, length in read.cigartuples:
+        if op == 0:  # M - Match/mismatch: consume both query and reference
+            result.append(seq[seq_pos : seq_pos + length])
+            seq_pos += length
+        elif op == 1:  # I - Insertion: consume query only, skip these bases
+            seq_pos += length  # Skip inserted bases
+        elif op == 2:  # D - Deletion: consume reference only, add placeholder
+            result.append("N" * length)  # Add N's for deleted reference positions
+        elif op == 3:  # N - Reference skip (intron): add placeholder
+            result.append("N" * length)
+        elif op == 4:  # S - Soft clip: consume query only, skip these bases
+            seq_pos += length
+        elif op == 5:  # H - Hard clip: doesn't consume query
+            pass
+        elif op == 7:  # = - Sequence match: same as M
+            result.append(seq[seq_pos : seq_pos + length])
+            seq_pos += length
+        elif op == 8:  # X - Sequence mismatch: same as M
+            result.append(seq[seq_pos : seq_pos + length])
+            seq_pos += length
+
+    return "".join(result)
+
+
+# ============================================================
+# CpG statistics
+# ============================================================
+
+
+def compute_cpg_stats(meth_states):
+    """
+    Compute CpG methylation statistics from a list of states.
+
+    Only METHYLATED and UNMETHYLATED calls are counted in the total;
+    UNKNOWN states are excluded.
+
+    Parameters
+    ----------
+    meth_states : list of int
+        Methylation states (METHYLATED=1, UNMETHYLATED=0, UNKNOWN=2)
+
+    Returns
+    -------
+    dict with 'methylated', 'unmethylated', 'total', 'methylation_rate'
+    """
+    methylated = sum(1 for s in meth_states if s == METHYLATED)
+    unmethylated = sum(1 for s in meth_states if s == UNMETHYLATED)
+    total = methylated + unmethylated
+    rate = methylated / total if total > 0 else 0.0
+    return {
+        "methylated": methylated,
+        "unmethylated": unmethylated,
+        "total": total,
+        "methylation_rate": rate,
+    }
+
+
+# ============================================================
+# Read filtering and CpG extraction helpers
+# ============================================================
+
+
+def _passes_quality_filters(
+    read,
+    interesting_chromosomes=None,
+    min_mapq=10,
+    require_flags=3,
+    exclude_flags=1796,
+):
+    """
+    Check if a read passes quality filters matching SAMtools -f 3 -F 1796 -q 10.
+
+    Parameters
+    ----------
+    read : pysam.AlignedSegment
+        BAM read object
+    interesting_chromosomes : list or None
+        List of chromosomes to process (None = process all)
+    min_mapq : int
+        Minimum mapping quality threshold
+    require_flags : int
+        SAM flags that must ALL be set (SAMtools -f)
+    exclude_flags : int
+        SAM flags to exclude if ANY are set (SAMtools -F)
+
+    Returns
+    -------
+    bool
+        True if the read passes all filters
+    """
+    # Filter by chromosome if specified
+    if interesting_chromosomes and read.reference_name not in interesting_chromosomes:
+        return False
+
+    # Check if ALL require_flags are set (SAMtools -f)
+    if require_flags and (read.flag & require_flags) != require_flags:
+        return False
+
+    # Check if ANY of the exclude_flags are set (SAMtools -F)
+    if exclude_flags and (read.flag & exclude_flags):
+        return False
+
+    # Skip reads below minimum mapping quality (SAMtools -q)
+    if read.mapping_quality < min_mapq:
+        return False
+
+    return True
+
+
+def _extract_cpgs_ont(read, methyl_tr=122):
+    """
+    Extract CpG positions and methylation states from an ONT read.
+
+    Uses MM/ML tags to identify C+m modifications and their probabilities.
+
+    Parameters
+    ----------
+    read : pysam.AlignedSegment
+        BAM read with MM and ML tags
+    methyl_tr : int
+        Methylation probability threshold (default: 122, ~48% on 0-255 scale)
+
+    Returns
+    -------
+    tuple of (pos_in_read, meth_states, seq, read_length) or None
+        Returns None if tags are missing or no CpG modifications found.
+    """
+    try:
+        ml_values_full = read.get_tag("ML")
+        mm_tag = read.get_tag("MM")
+    except KeyError:
+        return None
+
+    # Parse MM tag to find C+m modifications
+    mm_info = parse_mm_tag(mm_tag)
     if mm_info is None or mm_info["cpg_mod_index"] == -1:
-        return np.array([])
+        return None
 
-    offset = mm_info["cpg_ml_offset"]
-    count = mm_info["cpg_count"]
+    # Extract only the ML values for C+m
+    ml_values = extract_cpg_ml_values(ml_values_full, mm_info)
+    if len(ml_values) == 0:
+        return None
 
-    # Extract the slice of ML values for C+m
-    if offset + count <= len(ml_array):
-        return np.array(ml_array[offset : offset + count])
+    seq = read.get_forward_sequence()
+    read_length = len(seq)
+
+    # Scan for CpGs using extracted C+m probabilities
+    pos_in_read, meth_states = cpg_scan(seq.encode(), ml_values, methyl_tr)
+    return pos_in_read, meth_states, seq, read_length
+
+
+def _extract_cpgs_wgbs(read, ref_fasta):
+    """
+    Extract CpG positions and methylation states from a WGBS read.
+
+    Compares bisulfite-converted read sequence against the reference genome
+    to infer methylation at CpG sites.
+
+    Parameters
+    ----------
+    read : pysam.AlignedSegment
+        BAM read object
+    ref_fasta : pysam.FastaFile
+        Open reference genome file
+
+    Returns
+    -------
+    tuple of (pos_in_read, meth_states, ref_seq, read_length) or None
+        Returns None if reference fetch or CIGAR cleaning fails.
+    """
+    chromosome = read.reference_name
+    r_beg, r_end = read.reference_start, read.reference_end
+
+    # Get reference sequence for this region
+    try:
+        # Fetch +1 character in case region ends with CG
+        ref_seq = ref_fasta.fetch(chromosome, r_beg, r_end + 1).upper()
+        # Only keep the extra character if it completes a terminal CG
+        if ref_seq[-2:] != "CG":
+            ref_seq = ref_seq[:-1]
+    except (ValueError, KeyError, IndexError, RuntimeError, OSError):
+        return None
+
+    read_seq = clean_cigar_sequence(read)
+    if read_seq is None:
+        return None
+
+    read_length = len(ref_seq)
+
+    # Scan for CpGs and infer methylation from bisulfite conversion
+    if read.is_reverse:
+        pos_in_read, meth_states = cpg_scan_wgbs_reverse(
+            ref_seq.encode(), read_seq.encode()
+        )
     else:
-        # Handle edge case where ML array is shorter than expected
-        return np.array(ml_array[offset:])
+        pos_in_read, meth_states = cpg_scan_wgbs_forward(
+            ref_seq.encode(), read_seq.encode()
+        )
+
+    return pos_in_read, meth_states, ref_seq, read_length
+
+
+def _build_methylation_encoding(pos_in_read, meth_states, encoding_length):
+    """
+    Build a per-base methylation encoding string.
+
+    Parameters
+    ----------
+    pos_in_read : list of int
+        0-based positions of CpGs within the sequence
+    meth_states : list of int
+        Methylation states at each CpG position
+    encoding_length : int
+        Length of the output encoding string
+
+    Returns
+    -------
+    str
+        String of length encoding_length where each character is
+        '0' (unmethylated), '1' (methylated), or '2' (unknown/no CpG)
+    """
+    meth_enc = [str(UNKNOWN)] * encoding_length
+    for pos, state in zip(pos_in_read, meth_states):
+        if pos < encoding_length:
+            meth_enc[pos] = str(state)
+    return "".join(meth_enc)
+
+
+def _build_read_record(read, pos_in_read, meth_states, seq, data_type):
+    """
+    Assemble the output dictionary for a single processed read.
+
+    Parameters
+    ----------
+    read : pysam.AlignedSegment
+        BAM read object
+    pos_in_read : list of int
+        0-based CpG positions within the sequence
+    meth_states : list of int
+        Methylation states at each CpG
+    seq : str
+        Sequence (forward sequence for ONT, reference for WGBS)
+    data_type : str
+        'ont' or 'wgbs'
+
+    Returns
+    -------
+    dict
+        Read-level methylation data
+    """
+    r_beg, r_end = read.reference_start, read.reference_end
+    cpg_positions = [r_beg + off for off in pos_in_read]
+    methylation_encoding = _build_methylation_encoding(
+        pos_in_read, meth_states, len(seq)
+    )
+
+    total_cpgs = len(pos_in_read)
+    methylated_cpgs = sum(1 for s in meth_states if s == METHYLATED)
+    unmethylated_cpgs = sum(1 for s in meth_states if s == UNMETHYLATED)
+    methylation_rate = methylated_cpgs / total_cpgs if total_cpgs > 0 else 0.0
+
+    return {
+        "read_name": read.query_name,
+        "chromosome": read.reference_name,
+        "read_start": r_beg,
+        "read_end": r_end,
+        "read_length": r_end - r_beg,
+        "seq": seq,
+        "methylation_encoding": methylation_encoding,
+        "cpg_positions": cpg_positions,
+        "meth_states": list(meth_states),
+        "total_cpgs": total_cpgs,
+        "methylated_cpgs": methylated_cpgs,
+        "unmethylated_cpgs": unmethylated_cpgs,
+        "methylation_rate": methylation_rate,
+        "mapping_quality": read.mapping_quality,
+        "is_reverse": read.is_reverse,
+        "data_type": data_type,
+    }
+
+
+# ============================================================
+# Single read processing
+# ============================================================
 
 
 def process_single_read(
@@ -232,11 +620,10 @@ def process_single_read(
     min_cpgs=1,
 ):
     """
-    Process a single read and return its methylation data as-is (no chunking or DMR filtering).
-    This function can be used independently for testing.
+    Process a single read and return its methylation data.
 
-    Parameters:
-    -----------
+    Parameters
+    ----------
     read : pysam.AlignedSegment
         BAM read object
     data_type : str
@@ -254,207 +641,97 @@ def process_single_read(
         matching SAMtools -f 3). Set to 0 to disable required flag filtering.
         Flag breakdown: 1 (paired) + 2 (properly paired)
     exclude_flags : int
-        SAM flags to exclude if ANY are set (default: 1796 = unmapped + secondary + failed QC + duplicate,
-        matching SAMtools -F 1796). Set to 0 to disable flag filtering.
-        Flag breakdown: 4 (unmapped) + 256 (secondary) + 512 (failed QC) + 1024 (duplicate)
+        SAM flags to exclude if ANY are set (default: 1796 = unmapped + secondary
+        + failed QC + duplicate, matching SAMtools -F 1796). Set to 0 to disable.
+        Flag breakdown: 4 (unmapped) + 256 (secondary) + 512 (failed QC)
+        + 1024 (duplicate)
     min_cpgs : int
         Minimum number of CpG sites required in the read (default: 1).
         Reads with fewer CpGs are skipped.
 
-    Returns:
-    --------
+    Returns
+    -------
     list of dict
         List with a single dictionary containing read-level methylation data,
         or empty list if read is filtered out.
     """
-    # Filter by chromosome if specified
-    if interesting_chromosomes and read.reference_name not in interesting_chromosomes:
+    # Quality filtering
+    if not _passes_quality_filters(
+        read, interesting_chromosomes, min_mapq, require_flags, exclude_flags
+    ):
         return []
 
-    # Quality filters matching SAMtools -f 3 -F 1796 -q 10
-    # Check if ALL require_flags are set (SAMtools -f)
-    if require_flags and (read.flag & require_flags) != require_flags:
-        return []
-
-    # Check if ANY of the exclude_flags are set (SAMtools -F)
-    if exclude_flags and (read.flag & exclude_flags):
-        return []
-
-    # Skip reads below minimum mapping quality (SAMtools -q)
-    if read.mapping_quality < min_mapq:
-        return []
-
-    chrom = read.reference_name
-    r_beg, r_end = read.reference_start, read.reference_end
-
-    # ========== Process based on data type ==========
-    if data_type == "ont":
-        # ONT processing with MM/ML tag parsing
-        try:
-            ml_values_full = read.get_tag("ML")
-            mm_tag = read.get_tag("MM")
-        except KeyError:
-            return []
-
-        # Parse MM tag to find C+m modifications
-        mm_info = parse_mm_tag(mm_tag)
-        if mm_info is None or mm_info["cpg_mod_index"] == -1:
-            # No C+m modification found in this read
-            return []
-
-        # Extract only the ML values for C+m
-        ml_values = extract_cpg_ml_values(ml_values_full, mm_info)
-
-        if len(ml_values) == 0:
-            return []
-
-        seq = read.get_forward_sequence()
-        read_length = len(seq)
-
-        # Scan for CpGs using extracted C+m probabilities
-        pos_in_read, meth_states = cpg_scan(seq.encode(), ml_values, methyl_tr)
-        total_cpgs = len(pos_in_read)
-
-        # Filter by minimum CpG count
-        if total_cpgs < min_cpgs:
-            return []
-
-        cpg_positions = [r_beg + off for off in pos_in_read]
-
-        # Build methylation encoding
-        meth_enc = ["2" for _ in range(read_length)]
-        for x, y in zip(pos_in_read, meth_states):
-            meth_enc[x] = str(y)
-        methylation_encoding = "".join(meth_enc)
-
-    else:  # WGBS
+    # Data-type-specific CpG extraction
+    if data_type == DataType.ONT.value:
+        result = _extract_cpgs_ont(read, methyl_tr)
+    elif data_type == DataType.WGBS.value:
         if ref_fasta is None:
             raise ValueError("Reference genome (ref_fasta) required for WGBS data")
+        result = _extract_cpgs_wgbs(read, ref_fasta)
+    else:
+        raise ValueError(f"Unknown data type: {data_type}")
 
-        # Get reference sequence for this region
-        try:
-            # We are parsing +1 one character from ref_seq in case it ends with CG.
-            ref_seq = ref_fasta.fetch(chrom, r_beg, r_end + 1).upper()
-            # We are checking if string ends with CG and only keeping last character if it does
-            if ref_seq[-2:] != "CG":
-                ref_seq = ref_seq[:-1]
-        except:
-            return []
+    if result is None:
+        return []
 
-        read_seq = clean_cigar_sequence(read)
-        if read_seq is None:
-            return []
+    pos_in_read, meth_states, seq, _read_length = result
 
-        read_length = len(ref_seq)
+    # Filter by minimum CpG count
+    if len(pos_in_read) < min_cpgs:
+        return []
 
-        # Scan for CpGs and infer methylation
-        if read.is_reverse:
-            pos_in_read, meth_states = cpg_scan_wgbs_reverse(
-                ref_seq.encode(), read_seq.encode()
-            )
-        else:
-            pos_in_read, meth_states = cpg_scan_wgbs_forward(
-                ref_seq.encode(), read_seq.encode()
-            )
-
-        total_cpgs = len(pos_in_read)
-
-        # Filter by minimum CpG count
-        if total_cpgs < min_cpgs:
-            return []
-
-        cpg_positions = [r_beg + off for off in pos_in_read]
-
-        seq = ref_seq
-
-        # Build methylation encoding
-        meth_enc = ["2" for _ in range(read_length)]
-        for x, y in zip(pos_in_read, meth_states):
-            if x < len(meth_enc):
-                meth_enc[x] = str(y)
-        methylation_encoding = "".join(meth_enc)
-
-    # ========== Calculate CpG statistics ==========
-    methylated_cpgs = sum(1 for s in meth_states if s == 1)
-    unmethylated_cpgs = sum(1 for s in meth_states if s == 0)
-    methylation_rate = methylated_cpgs / total_cpgs if total_cpgs > 0 else 0.0
-
-    # ========== Return read data as a single entry ==========
-    read_data = {
-        "read_name": read.query_name,
-        "chromosome": chrom,
-        "read_start": r_beg,
-        "read_end": r_end,
-        "read_length": r_end - r_beg,
-        "seq": seq,
-        "methylation_encoding": methylation_encoding,
-        "cpg_positions": cpg_positions,
-        "meth_states": list(meth_states),
-        "total_cpgs": total_cpgs,
-        "methylated_cpgs": methylated_cpgs,
-        "unmethylated_cpgs": unmethylated_cpgs,
-        "methylation_rate": methylation_rate,
-        "mapping_quality": read.mapping_quality,
-        "is_reverse": read.is_reverse,
-        "data_type": data_type,
-    }
-
-    return [read_data]
+    return [_build_read_record(read, pos_in_read, meth_states, seq, data_type)]
 
 
-def process_tabular_chunk(args):
+# ============================================================
+# Chunk-level processing
+# ============================================================
+
+
+def process_tabular_chunk(task):
     """
-    Process chunk with support for both ONT and WGBS data.
-    Now uses the refactored process_single_read function.
+    Process a genomic chunk and extract read-level methylation data.
 
-    Quality filtering: By default, filters reads matching SAMtools -f 3 -F 1796 -q 10
-    (requires paired + properly paired; excludes unmapped, secondary, failed QC, duplicates; MAPQ >= 10).
-    Also filters reads with fewer than min_cpgs CpG sites.
+    Supports both ONT and WGBS data. Quality filtering defaults match
+    SAMtools -f 3 -F 1796 -q 10 with a minimum CpG count filter.
+
+    Parameters
+    ----------
+    task : ChunkTask
+        Processing parameters for this genomic chunk.
     """
-    (
-        chrom,
-        chunk_start,
-        chunk_end,
-        bam_path,
-        interesting_chromosomes,
-        estimate_cov,
-        methyl_tr,
-        data_type,
-        reference_path,
-        min_mapq,
-        require_flags,
-        exclude_flags,
-        min_cpgs,
-    ) = args
-
     tabular_data = []
 
     # Open reference genome if WGBS
     ref_fasta = None
-    if data_type == "wgbs":
-        if reference_path is None:
+    if task.data_type == DataType.WGBS.value:
+        if task.reference_path is None:
             raise ValueError("Reference genome path required for WGBS data")
-        ref_fasta = pysam.FastaFile(reference_path)
+        ref_fasta = pysam.FastaFile(task.reference_path)
 
-    with pysam.AlignmentFile(bam_path, "rb") as bam:
-        for read in bam.fetch(chrom, chunk_start, chunk_end):
-            # Skip reads that don't START within this chunk to avoid duplicate counting
-            # bam.fetch() returns all reads that OVERLAP the region, but we only want
-            # to process each read once (in the chunk where it starts)
-            if read.reference_start < chunk_start or read.reference_start >= chunk_end:
+    with pysam.AlignmentFile(task.bam_path, "rb") as bam:
+        for read in bam.fetch(task.chromosome, task.chunk_start, task.chunk_end):
+            # Skip reads that don't START within this chunk to avoid duplicate
+            # counting.  bam.fetch() returns all reads that OVERLAP the region,
+            # but we only want to process each read once (in the chunk where
+            # it starts).
+            if (
+                read.reference_start < task.chunk_start
+                or read.reference_start >= task.chunk_end
+            ):
                 continue
 
             # Process single read with quality filters
             read_data = process_single_read(
                 read=read,
-                data_type=data_type,
-                methyl_tr=methyl_tr,
+                data_type=task.data_type,
+                methyl_tr=task.methyl_tr,
                 ref_fasta=ref_fasta,
-                interesting_chromosomes=interesting_chromosomes,
-                min_mapq=min_mapq,
-                require_flags=require_flags,
-                exclude_flags=exclude_flags,
-                min_cpgs=min_cpgs,
+                interesting_chromosomes=task.interesting_chromosomes,
+                min_mapq=task.min_mapq,
+                require_flags=task.require_flags,
+                exclude_flags=task.exclude_flags,
+                min_cpgs=task.min_cpgs,
             )
 
             # Add all read entries (each read returns a list with one dict)
@@ -464,6 +741,11 @@ def process_tabular_chunk(args):
         ref_fasta.close()
 
     return tabular_data
+
+
+# ============================================================
+# BAM-level orchestration
+# ============================================================
 
 
 def process_bam_with_chunking(
@@ -487,8 +769,8 @@ def process_bam_with_chunking(
     For ONT: Properly handles MM tags with multiple modifications (A+a, C+m, etc.)
     For WGBS: Uses reference genome comparison
 
-    Parameters:
-    -----------
+    Parameters
+    ----------
     bam_path : str
         Path to BAM file
     chromosomes : list
@@ -523,8 +805,8 @@ def process_bam_with_chunking(
         merged, spanning the full fragment. Also adds reference-based CpG counts
         including 'unknown_cpgs' for CpGs in the insert region. (default: True)
 
-    Returns:
-    --------
+    Returns
+    -------
     pd.DataFrame
         DataFrame with read-level methylation data.
         If merge_pairs=True, returns merged fragment entries with additional columns:
@@ -535,48 +817,47 @@ def process_bam_with_chunking(
 
     # Auto-detect data type if not specified
     if data_type is None:
-        print("Auto-detecting data type...")
+        logger.info("Auto-detecting data type...")
         data_type = detect_bam_data_type(bam_path)
-        print(f"Detected data type: {data_type.upper()}")
+        logger.info("Detected data type: %s", data_type.upper())
 
     # Validate inputs
-    if data_type == "wgbs" and reference_path is None:
+    if data_type == DataType.WGBS.value and reference_path is None:
         raise ValueError("Reference genome path is required for WGBS data")
 
     # Get chromosome lengths from BAM
-    print("Reading BAM file...")
+    logger.info("Reading BAM file...")
     with pysam.AlignmentFile(bam_path, "rb") as bam:
         chr_lengths = {ref: length for ref, length in zip(bam.references, bam.lengths)}
 
     # Generate genomic chunks for parallel processing
     tasks = []
-    for chrom in chromosomes:
-        if chrom not in chr_lengths:
-            print(f"Warning: {chrom} not found in BAM file")
+    for chromosome in chromosomes:
+        if chromosome not in chr_lengths:
+            logger.warning("%s not found in BAM file", chromosome)
             continue
 
-        chr_len = chr_lengths[chrom]
+        chr_len = chr_lengths[chromosome]
         for start in range(0, chr_len, chunk_size_genomic):
             end = min(start + chunk_size_genomic, chr_len)
             tasks.append(
-                (
-                    chrom,
-                    start,
-                    end,
-                    bam_path,
-                    chromosomes,
-                    False,
-                    methyl_tr,
-                    data_type,
-                    reference_path,
-                    min_mapq,
-                    require_flags,
-                    exclude_flags,
-                    min_cpgs,
+                ChunkTask(
+                    chromosome=chromosome,
+                    chunk_start=start,
+                    chunk_end=end,
+                    bam_path=bam_path,
+                    interesting_chromosomes=chromosomes,
+                    methyl_tr=methyl_tr,
+                    data_type=data_type,
+                    reference_path=reference_path,
+                    min_mapq=min_mapq,
+                    require_flags=require_flags,
+                    exclude_flags=exclude_flags,
+                    min_cpgs=min_cpgs,
                 )
             )
 
-    print(f"Processing {len(tasks)} genomic chunks with {n_jobs} workers...")
+    logger.info("Processing %d genomic chunks with %d workers...", len(tasks), n_jobs)
 
     # Process in parallel
     if n_jobs > 1:
@@ -590,66 +871,22 @@ def process_bam_with_chunking(
     for result in results:
         all_data.extend(result)
 
-    print(f"Collected {len(all_data)} reads")
+    logger.info("Collected %d reads", len(all_data))
 
     # Convert to DataFrame
     df = pd.DataFrame(all_data)
 
     # Optionally merge paired-end reads into fragments
     if merge_pairs and len(df) > 0:
-        print("Merging paired-end reads into fragments...")
+        logger.info("Merging paired-end reads into fragments...")
         df = merge_paired_reads(df, verbose=True)
-
-        # # Add reference CpG counts to get accurate unknown counts
-        # # This counts all CpGs in the fragment span, including insert region
-        # if reference_path is not None:
-        #     df = add_reference_cpg_counts(df, reference_path, verbose=True)
 
     return df
 
 
-def clean_cigar_sequence(read):
-    """
-    Process CIGAR string to align read sequence to reference coordinates.
-
-    Similar to wgbstools' clean_CIGAR function:
-    - Removes inserted bases (I) from the read sequence
-    - Adds 'N' placeholders for deleted bases (D) in reference
-    - Removes soft-clipped bases (S)
-
-    Returns:
-    --------
-    str: Processed read sequence that aligns 1:1 with reference positions
-    """
-    if read.cigartuples is None:
-        return read.query_alignment_sequence
-
-    seq = read.query_sequence  # Full query sequence including soft clips
-    result = []
-    seq_pos = 0  # Position in query sequence
-
-    for op, length in read.cigartuples:
-        if op == 0:  # M - Match/mismatch: consume both query and reference
-            result.append(seq[seq_pos : seq_pos + length])
-            seq_pos += length
-        elif op == 1:  # I - Insertion: consume query only, skip these bases
-            seq_pos += length  # Skip inserted bases
-        elif op == 2:  # D - Deletion: consume reference only, add placeholder
-            result.append("N" * length)  # Add N's for deleted reference positions
-        elif op == 3:  # N - Reference skip (intron): add placeholder
-            result.append("N" * length)
-        elif op == 4:  # S - Soft clip: consume query only, skip these bases
-            seq_pos += length
-        elif op == 5:  # H - Hard clip: doesn't consume query
-            pass
-        elif op == 7:  # = - Sequence match: same as M
-            result.append(seq[seq_pos : seq_pos + length])
-            seq_pos += length
-        elif op == 8:  # X - Sequence mismatch: same as M
-            result.append(seq[seq_pos : seq_pos + length])
-            seq_pos += length
-
-    return "".join(result)
+# ============================================================
+# Paired-end read merging
+# ============================================================
 
 
 def merge_paired_reads(df, verbose=True):
@@ -658,16 +895,16 @@ def merge_paired_reads(df, verbose=True):
 
     For paired-end sequencing, both mates represent the same DNA fragment and should
     be merged. This function:
-    1. Groups reads by read_name AND dmr_label (both mates share the same name, merge per DMR)
+    1. Groups reads by read_name AND grg_label (both mates share the same name, merge per grg)
     2. Merges methylation information, handling overlapping CpGs
     3. Creates a single fragment entry spanning both mates
 
-    Parameters:
-    -----------
+    Parameters
+    ----------
     df : pd.DataFrame
         DataFrame from process_bam_with_chunking with columns:
         - read_name: Read identifier (shared by both mates)
-        - dmr_label: Single DMR associated with this entry
+        - grg_label: Single GRG associated with this entry
         - read_start, read_end: Genomic coordinates
         - chromosome: Chromosome
         - methylation_encoding: String encoding methylation states
@@ -677,54 +914,51 @@ def merge_paired_reads(df, verbose=True):
     verbose : bool
         Print progress information
 
-    Returns:
-    --------
+    Returns
+    -------
     pd.DataFrame
         DataFrame with paired mates merged into single fragment entries.
-        Each entry is for a single DMR with clipped CpG counts for UXM classification.
+        Each entry is for a single GRG with clipped CpG counts for UXM classification.
     """
     if len(df) == 0:
         return df
 
-    # Determine grouping columns - use dmr_label if available
-    if "dmr_label" in df.columns:
-        group_cols = ["read_name", "dmr_label"]
+    # Determine grouping columns - use grg_label if available
+    if "grg_label" in df.columns:
+        group_cols = ["read_name", "grg_label"]
     else:
         group_cols = ["read_name"]
 
-    # Count reads per (name, dmr_label) to identify pairs vs singletons
+    # Count reads per (name, grg_label) to identify pairs vs singletons
     read_counts = df.groupby(group_cols).size()
     singletons = read_counts[read_counts == 1].index
     pairs = read_counts[read_counts == 2].index
     multiplets = read_counts[read_counts > 2].index
 
     if verbose:
-        print(f"Read distribution (grouped by {group_cols}):")
-        print(f"  Singletons: {len(singletons)}")
-        print(f"  Paired (2 mates): {len(pairs)}")
-        print(
-            f"  Multiplets (>2): {len(multiplets)} (will be treated as separate entries)"
+        logger.info("Read distribution (grouped by %s):", group_cols)
+        logger.info("  Singletons: %d", len(singletons))
+        logger.info("  Paired (2 mates): %d", len(pairs))
+        logger.info(
+            "  Multiplets (>2): %d (will be treated as separate entries)",
+            len(multiplets),
         )
 
-    merged_data = []
-
-    # Process singletons - keep as is
+    # Separate singletons, pairs, and multiplets using DataFrame slicing
+    # (avoids row-wise iteration for singletons and multiplets)
     if len(group_cols) == 2:
-        singleton_mask = df.set_index(group_cols).index.isin(singletons)
-        singleton_df = df[singleton_mask]
+        idx = df.set_index(group_cols).index
+        singleton_df = df[idx.isin(singletons)]
+        pairs_df = df[idx.isin(pairs)]
+        multiplet_df = df[idx.isin(multiplets)]
     else:
         singleton_df = df[df["read_name"].isin(singletons)]
-    for _, row in singleton_df.iterrows():
-        merged_data.append(row.to_dict())
-
-    # Process pairs - merge mates
-    if len(group_cols) == 2:
-        pairs_mask = df.set_index(group_cols).index.isin(pairs)
-        pairs_df = df[pairs_mask]
-    else:
         pairs_df = df[df["read_name"].isin(pairs)]
+        multiplet_df = df[df["read_name"].isin(multiplets)]
 
-    for key, group in pairs_df.groupby(group_cols):
+    # Process pairs — merge mates (requires per-pair logic)
+    merged_pairs = []
+    for _key, group in pairs_df.groupby(group_cols):
         if len(group) != 2:
             continue
 
@@ -734,24 +968,20 @@ def merge_paired_reads(df, verbose=True):
         if mate2["read_start"] < mate1["read_start"]:
             mate1, mate2 = mate2, mate1
 
-        # Merge the pair
-        merged_fragment = _merge_mate_pair(mate1, mate2)
-        merged_data.append(merged_fragment)
+        merged_pairs.append(_merge_mate_pair(mate1, mate2))
 
-    # Process multiplets - keep each entry separately (unusual case)
-    if len(group_cols) == 2:
-        multiplet_mask = df.set_index(group_cols).index.isin(multiplets)
-        multiplet_df = df[multiplet_mask]
-    else:
-        multiplet_df = df[df["read_name"].isin(multiplets)]
-    for _, row in multiplet_df.iterrows():
-        merged_data.append(row.to_dict())
+    merged_pairs_df = pd.DataFrame(merged_pairs) if merged_pairs else pd.DataFrame()
 
-    result_df = pd.DataFrame(merged_data)
+    # Concatenate all groups efficiently
+    result_df = pd.concat(
+        [singleton_df, merged_pairs_df, multiplet_df], ignore_index=True
+    )
 
     if verbose:
-        print(
-            f"Merged result: {len(result_df)} fragments (from {len(df)} read entries)"
+        logger.info(
+            "Merged result: %d fragments (from %d read entries)",
+            len(result_df),
+            len(df),
         )
 
     return result_df
@@ -761,15 +991,15 @@ def _merge_mate_pair(mate1, mate2):
     """
     Merge two mates of a paired-end read into a single fragment.
 
-    Parameters:
-    -----------
+    Parameters
+    ----------
     mate1 : pd.Series
         First mate (should have smaller read_start)
     mate2 : pd.Series
         Second mate
 
-    Returns:
-    --------
+    Returns
+    -------
     dict
         Merged fragment with combined methylation information
     """
@@ -791,16 +1021,16 @@ def _merge_mate_pair(mate1, mate2):
         frag_end,
     )
 
-    # Handle DMR info - use singular dmr_label if available, fall back to dmr_labels
-    dmr_label = mate1.get("dmr_label", "") or mate1.get("dmr_labels", "")
-    dmr_type = mate1.get("dmr_type", "") or mate1.get("dmr_types", "")
-    dmr_start = mate1.get("dmr_start", 0)
-    dmr_end = mate1.get("dmr_end", 0)
+    # Handle grg info - use singular grg_label if available, fall back to grg_labels
+    grg_label = mate1.get("grg_label", "") or mate1.get("grg_labels", "")
+    grg_type = mate1.get("grg_type", "") or mate1.get("grg_types", "")
+    grg_start = mate1.get("grg_start", 0)
+    grg_end = mate1.get("grg_end", 0)
 
     # Merge clipped sequences if available
-    # For merged fragments, we need to recalculate clipped data within DMR boundaries
-    if "seq_clipped" in mate1.index and dmr_start and dmr_end:
-        # Merge clipped sequences within DMR boundaries
+    # For merged fragments, we need to recalculate clipped data within grg boundaries
+    if "seq_clipped" in mate1.index and grg_start and grg_end:
+        # Merge clipped sequences within grg boundaries
         clipped_encoding, clipped_stats = _merge_methylation_encodings(
             mate1.get("seq_clipped", ""),
             mate1.get("methylation_clipped", ""),
@@ -808,8 +1038,8 @@ def _merge_mate_pair(mate1, mate2):
             mate2.get("seq_clipped", ""),
             mate2.get("methylation_clipped", ""),
             mate2.get("clip_start", mate2["read_start"]),
-            dmr_start,
-            dmr_end,
+            grg_start,
+            grg_end,
         )
         clipped_methylated = clipped_stats["methylated"]
         clipped_unmethylated = clipped_stats["unmethylated"]
@@ -849,13 +1079,13 @@ def _merge_mate_pair(mate1, mate2):
         "mate1_end": mate1["read_end"],
         "mate2_start": mate2["read_start"],
         "mate2_end": mate2["read_end"],
-        # DMR info (singular)
-        "overlaps_dmr": mate1.get("overlaps_dmr", False)
-        or mate2.get("overlaps_dmr", False),
-        "dmr_label": dmr_label,
-        "dmr_type": dmr_type,
-        "dmr_start": dmr_start,
-        "dmr_end": dmr_end,
+        # grg info (singular)
+        "overlaps_grg": mate1.get("overlaps_grg", False)
+        or mate2.get("overlaps_grg", False),
+        "grg_label": grg_label,
+        "grg_type": grg_type,
+        "grg_start": grg_start,
+        "grg_end": grg_end,
         # Clipped data for UXM classification
         "seq_clipped": clipped_encoding.get("seq", ""),
         "methylation_clipped": clipped_encoding.get("methylation_encoding", ""),
@@ -872,6 +1102,11 @@ def _merge_mate_pair(mate1, mate2):
     return merged
 
 
+# ============================================================
+# Methylation encoding merging
+# ============================================================
+
+
 def _merge_methylation_encodings(
     seq1, enc1, start1, seq2, enc2, start2, frag_start, frag_end
 ):
@@ -884,9 +1119,10 @@ def _merge_methylation_encodings(
     - If they DISAGREE (both known but different), use '2' (unknown)
     """
     frag_length = frag_end - frag_start
+    unknown_str = str(UNKNOWN)
 
     # Initialize merged arrays with 'unknown' state
-    merged_enc = ["2"] * frag_length
+    merged_enc = [unknown_str] * frag_length
     merged_seq = ["N"] * frag_length
 
     # Fill in mate1 data
@@ -908,10 +1144,10 @@ def _merge_methylation_encodings(
             merged_seq[pos] = base2
             meth = enc2[i]
 
-            if existing == "2":
+            if existing == unknown_str:
                 # No data from mate1 (or unknown), use mate2
                 merged_enc[pos] = meth
-            elif meth == "2":
+            elif meth == unknown_str:
                 # No data from mate2, keep mate1
                 pass
             elif existing == meth:
@@ -920,18 +1156,12 @@ def _merge_methylation_encodings(
             else:
                 # CONFLICT: both are known ('0' or '1') but different
                 # Mark as unknown, matching wgbstools behavior
-                merged_enc[pos] = "2"
+                merged_enc[pos] = unknown_str
 
     # Calculate CpG statistics from merged encoding
-    # Only count confident calls ('1' and '0'), not unknowns ('2')
-    methylated = sum(1 for x in merged_enc if x == "1")
-    unmethylated = sum(1 for x in merged_enc if x == "0")
-    total = methylated + unmethylated
-    meth_rate = methylated / total if total > 0 else 0.0
+    stats = compute_cpg_stats([int(x) for x in merged_enc])
 
-    return {"seq": "".join(merged_seq), "methylation_encoding": "".join(merged_enc)}, {
-        "total": total,
-        "methylated": methylated,
-        "unmethylated": unmethylated,
-        "methylation_rate": meth_rate,
-    }
+    return {
+        "seq": "".join(merged_seq),
+        "methylation_encoding": "".join(merged_enc),
+    }, stats

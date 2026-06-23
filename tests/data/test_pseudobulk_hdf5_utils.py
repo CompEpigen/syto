@@ -8,11 +8,11 @@ import unittest
 import numpy as np
 import pandas as pd
 
-from syto.data.hdf5_utils import (
+from syto.data.pseudobulk_hdf5_utils import (
     PseudobulkResult,
     GenerationParameters,
     CheckpointManager,
-    HDF5BatchWriter,
+    PseudobulkHDF5BatchWriter,
 )
 
 
@@ -25,7 +25,7 @@ class TestPseudobulkResult(unittest.TestCase):
             index=0,
             target_proportions=np.array([0.5, 0.5]),
             actual_proportions=np.array([0.48, 0.52]),
-            n_reads_really_sampled=100,
+            n_reads_sampled=100,
             n_samples_per_class_per_grg=np.array([[50, 50], [48, 52]]),
             seed=42,
             aggregated_features=pd.DataFrame({"col1": [1, 2], "col2": [3, 4]}),
@@ -85,14 +85,14 @@ class TestCheckpointManager(unittest.TestCase):
         self.assertEqual(missing, [1, 3, 4])
 
 
-class TestHDF5BatchWriter(unittest.TestCase):
-    """Tests for HDF5BatchWriter."""
+class TestPseudobulkHDF5BatchWriter(unittest.TestCase):
+    """Tests for PseudobulkHDF5BatchWriter."""
 
     def setUp(self):
         """Set up temporary directory for batch files."""
         self.temp_dir = tempfile.mkdtemp()
         self.batches_dir = Path(self.temp_dir) / "batches"
-        self.writer = HDF5BatchWriter(self.batches_dir)
+        self.writer = PseudobulkHDF5BatchWriter(self.batches_dir)
 
     def tearDown(self):
         """Clean up temporary directory."""
@@ -105,7 +105,7 @@ class TestHDF5BatchWriter(unittest.TestCase):
                 index=0,
                 target_proportions=np.array([0.5, 0.5]),
                 actual_proportions=np.array([0.48, 0.52]),
-                n_reads_really_sampled=100,
+                n_reads_sampled=100,
                 n_samples_per_class_per_grg=np.array([[25, 25], [24, 26]]),
                 seed=42,
                 aggregated_features=pd.DataFrame(
@@ -116,7 +116,7 @@ class TestHDF5BatchWriter(unittest.TestCase):
                 index=1,
                 target_proportions=np.array([0.3, 0.7]),
                 actual_proportions=np.array([0.29, 0.71]),
-                n_reads_really_sampled=100,
+                n_reads_sampled=100,
                 n_samples_per_class_per_grg=np.array([[15, 15], [35, 35]]),
                 seed=43,
                 aggregated_features=pd.DataFrame(
@@ -145,7 +145,7 @@ class TestHDF5BatchWriter(unittest.TestCase):
                 index=0,
                 target_proportions=np.array([1.0]),
                 actual_proportions=np.array([1.0]),
-                n_reads_really_sampled=10,
+                n_reads_sampled=10,
                 n_samples_per_class_per_grg=np.array([[10]]),
                 seed=1,
                 aggregated_features=pd.DataFrame({"col": [1]}),

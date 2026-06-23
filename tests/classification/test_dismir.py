@@ -222,7 +222,7 @@ class TestDismirTraining(DismirTestBase):
             device=torch.device("cuda"),
             classifier_type=classifier_type,
             num_grg_labels=100,
-            dmr_label_col="dmr_label",
+            grg_label_column="dmr_label",
         )
 
         # Train for a few epochs
@@ -749,7 +749,7 @@ class TestDismirSoftLabels(DismirTestBase):
             probs = np.random.dirichlet(np.ones(num_classes))
             soft_labels.append(probs.tolist())
         df["soft_label"] = soft_labels
-        # Also add dmr_label_col for DMR tests
+        # Also add grg_label_column for DMR tests
         df["dmr_label"] = np.random.randint(0, 5, len(df))
 
         df.to_parquet(self.train_path)
@@ -768,7 +768,7 @@ class TestDismirSoftLabels(DismirTestBase):
             classifier_type="grg_attention_based",
             num_labels=3,
             num_grg_labels=5,
-            dmr_label_col="dmr_label",
+            grg_label_column="dmr_label",
             soft_labels=True,
             device=torch.device("cpu"),
         )
@@ -806,7 +806,7 @@ class TestDismirSoftLabels(DismirTestBase):
             classifier_type="grg_attention_based",
             num_labels=3,
             num_grg_labels=5,
-            dmr_label_col="dmr_label",
+            grg_label_column="dmr_label",
             soft_labels=True,
             device=torch.device("cpu"),
         )

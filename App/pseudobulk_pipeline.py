@@ -1,41 +1,54 @@
 """
 Pseudo-Bulk Generation Pipeline
 
-End-to-end pipeline orchestrating:
-    1. Loading / rebalancing train/valid/test splits
-    2. Read preparation (derived columns, optional UXM alignment)
-    3. Classifier prediction (MethylBERT / Dismir / CancerDetector)
-    4. Parallel IO-example generation (random or target-proportion mode)
-    5. Consolidation of partial pickles into a single .npz
+End-to-end pipeline using the new PseudobulkGenerator class with:
+    - Crash-resilient batch processing with HDF5 checkpointing
+    - Dask-based parallel generation
+    - Full reproducibility metadata storage
+
+This module orchestrates:
+    1. Loading train/valid/test splits
+    2. Read preparation (renaming and deriving columns)
+    3. Classifier prediction (if needed)
+    4. Pseudobulk generation with the new HDF5-based generator
 """
 
 import json
 import logging
-import os
 import pickle
-from typing import Any, Dict, List, Optional, Tuple
+from pathlib import Path
+from typing import Any, Dict
 
 import numpy as np
 import pandas as pd
 
-from syto.data import LOYFER_CELL_TYPE_MATCH_DICT
-from syto.data.pseudo_bulk_generation import (
-    consolidate_ios_pickles,
-    run_ios_generation_parallel,
-)
 from syto.data.read_preparation import prepare_splits_for_pseudobulk
+from syto.data.pseudobulk_generator import PseudobulkGenerator
+from syto.data.pseudobulk_hdf5_utils import (
+    GenerationMetadata,
+    GenerationParameters,
+)
 from syto.classification.classifiers.lazy_classifier_factory import (
     read_classifier_factory,
 )
+from syto.data.dataset import resolve_column
 
 
 class PseudoBulkPipeline:
-    """Orchestrate pseudo-bulk mixture generation end-to-end.
+    """Orchestrate pseudo-bulk mixture generation using PseudobulkGenerator.
+
+    This pipeline replaces the legacy pickle-based generation with a new
+    HDF5-based approach that provides:
+    - Crash-resilient checkpointing at the batch level
+    - Full reproducibility metadata (seeds, samples per GRG, etc.)
+    - Dask-based parallel generation
+    - Pure profile generation and uniform prior computation
 
     Parameters
     ----------
     config : dict
-        Parsed YAML configuration.
+        Parsed YAML configuration. See App/config/pseudobulk_v2_template.yaml
+        for available options.
     logger : logging.Logger
         Logger instance.
     """
@@ -49,470 +62,311 @@ class PseudoBulkPipeline:
         with open(labels_dict_path, "r", encoding="utf-8") as f:
             raw = json.load(f)
             self.labels_dict: Dict[int, str] = {int(k): v for k, v in raw.items()}
-        self.num_labels = config.get("num_labels", len(self.labels_dict))
-        self.num_prediction_classes = config.get(
-            "num_prediction_classes", None
-        )  # Auto-detected from data if not set
-
-        # Cell-type matching dict
-        self.cell_type_match_dict = config.get(
-            "cell_type_match_dict", LOYFER_CELL_TYPE_MATCH_DICT
-        )
+        self.num_labels = config["num_labels"]
 
         # Output paths
-        self.output_dir = config["output_dir"]
-        os.makedirs(self.output_dir, exist_ok=True)
-        self.ios_dir = os.path.join(self.output_dir, "ios_deconvolution")
-        os.makedirs(self.ios_dir, exist_ok=True)
+        self.output_dir = Path(config["output_dir"])
+        self.output_dir.mkdir(parents=True, exist_ok=True)
 
-        self.ios_base_path = os.path.join(self.ios_dir, "ios_deconvolution_data.pkl")
-        self.consolidated_path = os.path.join(self.output_dir, "ios_full_matrices.npz")
+        # Generator parameters
+        self.batch_size = config["batch_size"]
+        self.n_workers = config["n_workers"]
+        self.n_reads_to_sample = config["n_reads_to_sample"]
+
+        # columns
+        self.class_label_column = config["class_label_column"]
+        self.grg_label_column = config["grg_label_column"]
+        self.columns_to_keep = config.get("columns_to_keep")
+
+        # [for Debug] parameter to generate n pseudobulks by sampling first n from the target proportions
+        self.n_pseudobulks_to_sample = config.get("n_pseudobulks_to_sample", None)
 
     # ═══════════════════════════════════════════════════════════════
     #  Public API
     # ═══════════════════════════════════════════════════════════════
 
-    def run(self) -> Dict[str, Any]:
+    def run(self) -> Path:
         """Execute the full pseudo-bulk generation pipeline.
 
         Returns
         -------
-        dict
-            Consolidated output arrays keyed by ``proportions``,
-            ``features_train``, ``features_valid``, ``features_test``.
+        Path
+            Path to the final consolidated HDF5 file.
         """
-        if self.config["input_type"] == "raw_splits":
-            # ── Stage 1: Load splits ──────────────────────────────────
-            self.logger.info("Stage 1: Loading data splits ...")
-            splits_data = self._load_splits()
-            sizes = ", ".join(f"{name}={len(df)}" for name, df in splits_data.items())
-            self.logger.info(f"  {sizes} reads")
+        # ── Stage 1: Load splits ──────────────────────────────────
+        self.logger.info("Stage 1: Loading data splits ...")
+        splits_data = self._load_splits()
+        sizes = ", ".join(f"{name}={len(df)}" for name, df in splits_data.items())
+        self.logger.info(f"  {sizes} reads")
 
-            # ── Stage 1b: Optional rebalancing ────────────────────────
-            if self.config.get("rebalance_splits", False):
-                self.logger.warning("Split rebalancing has been removed.")
-
-            # ── Stage 2: Prepare reads ────────────────────────────────
+        # ── Stage 2: Prepare reads ────────────────────────────────
+        input_type = self.config["input_type"]
+        if input_type == "raw_splits":
             self.logger.info("Stage 2: Preparing reads ...")
-            generate_uxm = self.config.get("generate_uxm_inputs", True)
-            atlas_path = self.config.get("atlas_path")
-
-            splits_data = prepare_splits_for_pseudobulk(
-                splits_data,
-                labels_dict=self.labels_dict,
-                num_labels=self.num_labels,
-                generate_uxm_inputs=generate_uxm,
-                atlas_path=atlas_path,
-                cell_type_match_dict=self.cell_type_match_dict,
-            )
-            sizes = ", ".join(f"{name}={len(df)}" for name, df in splits_data.items())
-            self.logger.info(f"  After preparation: {sizes}")
-            with open(
-                os.path.join(self.output_dir, "uxm_prepared_reads.pkl"), "wb"
-            ) as f:
-                pickle.dump(splits_data, f)
-        elif self.config["input_type"] == "uxm_prepared":
-            self.logger.info("Skipping Stage 1 and 2: Loading uxm prepared reads ...")
-            with open(
-                os.path.join(self.output_dir, "uxm_prepared_reads.pkl"), "rb"
-            ) as f:
-                splits_data = pickle.load(f)
-            sizes = ", ".join(f"{name}={len(df)}" for name, df in splits_data.items())
-            self.logger.info(f"  After loading: {sizes}")
-        elif self.config["input_type"] == "pre_predicted":
-            self.logger.info("Skipping Stage 1,2,3: Loading reads with predictions ..")
-            splits_data = self._load_splits()
-            sizes = ", ".join(f"{name}={len(df)}" for name, df in splits_data.items())
-            self.logger.info(f"  {sizes} reads")
+            splits_data = self._prepare_reads(splits_data)
+        elif input_type == "pre_predicted":
+            self.logger.info("Stage 2: Skipped (input already has predictions)")
+        else:
+            raise ValueError(f"Unknown input_type: '{input_type}'")
 
         # ── Stage 3: Classifier predictions (if needed) ───────────
-        if self.config["input_type"] in ["raw_splits", "uxm_prepared"]:
-            self.logger.info("Stage 3: Running classifier predictions ...")
-            classifier_config = self.config.get("classifier_config", {})
-            read_level_classifier = read_classifier_factory(
-                name=self.config["classifier_type"],
-                path=self.config["classifier_checkpoint"],
-                labels_dict=self.labels_dict,
-                num_labels=self.num_labels,
-                seq_length=classifier_config.get("seq_length", 150),
-                foundation_model_path=classifier_config.get(
-                    "foundation_model", "hanyangii/methylbert_hg19_12l"
-                ),
-                classifier_head_implementation=classifier_config.get(
-                    "classifier_head_implementation", "grg_attention_based"
-                ),
-                dmr_label_column=classifier_config.get(
-                    "dmr_label_column", "dmr_ctype_label"
-                ),
-                soft_labels=classifier_config.get("soft_labels", True),
-                dismir_flavor=classifier_config.get("dismir_flavor", "lstm"),
-                batch_size=classifier_config.get("batch_size", 2200),
-            )
-
-            for name, df in splits_data.items():
-                self.logger.info(f"  Predicting {name} split ({len(df)} reads) ...")
-                predicted = read_level_classifier.predict_split(df, **classifier_config)
-
-                # Save intermediate predicted split
-                intermediate_path = os.path.join(
-                    self.output_dir, f"{name}_predicted.pkl"
-                )
-                with open(intermediate_path, "wb") as f:
-                    pickle.dump(predicted, f)
-                self.logger.info(f"  Saved predicted {name} to {intermediate_path}")
-
-                splits_data[name] = predicted
+        if input_type in ["raw_splits"]:
+            splits_data = self._run_classifier_predictions(splits_data)
         else:
             self.logger.info("Stage 3: Skipped (input already has predictions)")
 
-        # ── Stage 4: Generate IO examples ─────────────────────────
-        self.logger.info("Stage 4: Generating pseudo-bulk IO examples ...")
-        generate_uxm_in_ios = self.config.get("generate_uxm_inputs_in_ios", True)
+        # ── Stage 4: Generate pseudobulks ─────────────────────────
+        self.logger.info("Stage 4: Generating pseudobulk samples ...")
 
-        self.logger.info("  Filtering unused columns to optimize RAM usage ...")
-        self._filter_split_columns(splits_data, generate_uxm_in_ios)
+        # Filter columns to reduce memory usage
+        self._filter_split_columns(splits_data)
 
-        # Auto-detect num_prediction_classes from actual data if not set
-        if self.num_prediction_classes is None:
-            sample_df = next(iter(splits_data.values()))
-            pred_cols = [
-                c
-                for c in sample_df.columns
-                if c.startswith("prediction_") and c[11:].isdigit()
-            ]
-            self.num_prediction_classes = (
-                len(pred_cols) if pred_cols else self.num_labels
-            )
-            self.logger.info(
-                f"  Auto-detected num_prediction_classes="
-                f"{self.num_prediction_classes} "
-                f"(num_labels={self.num_labels})"
-            )
+        # Load target proportions
+        target_proportions_per_split = self._load_target_proportions()
 
-        split_generation = self.config.get("split_generation")
+        # Build metadata and parameters
+        metadata = self._build_metadata(splits_data)
+        parameters = self._build_parameters()
 
-        if split_generation is not None:
-            # ── Per-split generation mode ──────────────────────────
-            self._run_per_split_generation(
-                splits_data, split_generation, generate_uxm_in_ios
-            )
-        else:
-            # ── Legacy shared generation mode ─────────────────────
-            self._run_shared_generation(splits_data, generate_uxm_in_ios)
-
-        # ── Stage 5: Consolidate ──────────────────────────────────
-        self.logger.info("Stage 5: Consolidating partial pickles ...")
-
-        if split_generation is not None:
-            # Per-split generation writes to subdirectories; consolidate
-            # each subdirectory, then merge all results into one .npz.
-            merged_result = {}
-            for split_name in split_generation:
-                split_ios_dir = os.path.join(self.ios_dir, split_name)
-                if not os.path.isdir(split_ios_dir):
-                    continue
-                pkl_files = [f for f in os.listdir(split_ios_dir) if f.endswith(".pkl")]
-                if not pkl_files:
-                    continue
-
-                split_output = os.path.join(
-                    self.output_dir, f"ios_full_matrices_{split_name}.npz"
-                )
-                part = consolidate_ios_pickles(
-                    ios_dir=split_ios_dir,
-                    output_path=split_output,
-                    num_labels=self.num_labels,
-                    num_prediction_classes=self.num_prediction_classes,
-                    labels_dict=self.labels_dict,
-                )
-                merged_result.update(part)
-
-            # Write combined .npz
-            np.savez_compressed(self.consolidated_path, **merged_result)
-            result = merged_result
-        else:
-            result = consolidate_ios_pickles(
-                ios_dir=self.ios_dir,
-                output_path=self.consolidated_path,
-                num_labels=self.num_labels,
-                num_prediction_classes=self.num_prediction_classes,
-                labels_dict=self.labels_dict,
-            )
-
-        # Log summary — handle both legacy and variant-aware key schemes
-        if "proportions" in result:
-            n_examples = result["proportions"].shape[0]
-        else:
-            # Pick the first proportions_{split} key
-            prop_keys = [k for k in result if k.startswith("proportions_")]
-            if prop_keys:
-                n_examples = result[prop_keys[0]].shape[0]
-            else:
-                n_examples = 0
-        self.logger.info(
-            f"  Consolidated {n_examples} examples to " f"{self.consolidated_path}"
+        # Create and run generator
+        generator = PseudobulkGenerator(
+            splits_df=splits_data,
+            output_directory=self.output_dir / "pseudobulk_generation",
+            target_proportions_per_split=target_proportions_per_split,
+            batch_size=self.batch_size,
+            n_workers=self.n_workers,
+            metadata=metadata,
+            parameters=parameters,
+            n_reads_to_sample=self.n_reads_to_sample,
+            class_label_column=self.class_label_column,
+            grg_label_column=self.grg_label_column,
+            columns_to_keep=self.columns_to_keep,
+            logger=self.logger,
         )
 
-        return result
+        output_path = generator.run()
+        self.logger.info(f"Generation complete: {output_path}")
+
+        return output_path
 
     # ═══════════════════════════════════════════════════════════════
-    #  Stage-4 generation helpers
+    #  Stage helpers
     # ═══════════════════════════════════════════════════════════════
 
-    def _filter_split_columns(
-        self,
-        splits_data: Dict[str, pd.DataFrame],
-        generate_uxm_in_ios: bool,
-    ) -> None:
-        """Filter dataframes to retain only the necessary columns for pseudo-bulk logic."""
+    def _prepare_reads(
+        self, splits_data: Dict[str, pd.DataFrame]
+    ) -> Dict[str, pd.DataFrame]:
+        """Prepare reads for pseudobulk generation."""
+        from syto.data.atlases.uxm_atlases import UXMMethylationAtlas
+
+        atlas_path = self.config["atlas_path"]
+        atlas_name = self.config["atlas_name"]
+        atlas = UXMMethylationAtlas(
+            atlas_name=atlas_name,
+            reference_genome="hg38" if "hg38" in atlas_path else "hg19",
+            atlas_path=atlas_path,
+            sep="\t",
+        )
+
+        splits_data = prepare_splits_for_pseudobulk(
+            splits_data,
+            num_labels=self.num_labels,
+            atlas=atlas,
+        )
+        sizes = ", ".join(f"{name}={len(df)}" for name, df in splits_data.items())
+        self.logger.info(f"  After preparation: {sizes}")
+        return splits_data
+
+    def _run_classifier_predictions(
+        self, splits_data: Dict[str, pd.DataFrame]
+    ) -> Dict[str, pd.DataFrame]:
+        """Run classifier predictions on all splits."""
+        self.logger.info("Stage 3: Running classifier predictions ...")
+        classifier_config = self.config["classifier_config"]
+
+        read_level_classifier = read_classifier_factory(
+            name=self.config["classifier_type"],
+            path=self.config["classifier_checkpoint"],
+            labels_dict=self.labels_dict,
+            num_labels=self.num_labels,
+            seq_length=classifier_config.get("seq_length"),
+            foundation_model_path=classifier_config.get("foundation_model"),
+            classifier_head_implementation=classifier_config.get(
+                "classifier_head_implementation"
+            ),
+            grg_label_column=classifier_config.get("grg_label_column"),
+            soft_labels=classifier_config.get("soft_labels", True),
+            dismir_flavor=classifier_config.get("dismir_flavor", "lstm"),
+            batch_size=classifier_config.get("batch_size"),
+        )
+
+        for name, df in splits_data.items():
+            self.logger.info(f"  Predicting {name} split ({len(df)} reads) ...")
+            predicted = read_level_classifier.predict_split(df, **classifier_config)
+
+            # Save intermediate predicted split
+            intermediate_path = self.output_dir / f"{name}_predicted.pkl"
+            with open(intermediate_path, "wb") as f:
+                pickle.dump(predicted, f)
+            self.logger.info(f"  Saved predicted {name} to {intermediate_path}")
+
+            splits_data[name] = predicted
+
+        return splits_data
+
+    def _filter_split_columns(self, splits_data: Dict[str, pd.DataFrame]) -> None:
+        """Filter dataframes to retain only necessary columns."""
+        self.logger.info("  Filtering unused columns to optimize RAM usage ...")
+
+        # Detect prediction columns
+        sample_df = next(iter(splits_data.values()))
+        pred_cols = [
+            c
+            for c in sample_df.columns
+            if c.startswith("prediction_") and c[11:].isdigit()
+        ]
+        dna_col = resolve_column(sample_df.columns, "input_ids")
+        meth_col = resolve_column(sample_df.columns, "methylation_ids")
+
+        # Required columns for pseudobulk generation
         base_cols = [
+            dna_col,
+            meth_col,
             "original_label",
             "dmr_ctype_label",
             "dmr_ctype",
             "NCPGS",
             "total_marked_cpgs",
-            "M_rate",
-            "methylation_level",
             "chr",
             "chromosome",
             "label",
         ]
-
-        if generate_uxm_in_ios:
-            base_cols.extend(["name", "record_M", "record_U", "record_X"])
+        if (
+            "trimmed_start" in sample_df.columns
+            and "read_start" not in sample_df.columns
+        ):
+            base_cols.extend(["trimmed_start", "trimmed_end"])
+        elif "read_start" in sample_df.columns:
+            base_cols.extend(["read_start", "read_end"])
+        if "file" in sample_df.columns:
+            base_cols.append("file")
+        if "name" in sample_df.columns:
+            base_cols.append("name")
 
         for split_name, df in splits_data.items():
-            pred_cols = [
-                c
-                for c in df.columns
-                if c.startswith("prediction_") and c[11:].isdigit()
-            ]
-            # Keep only columns that exist in the dataframe to avoid KeyErrors
             keep_cols = [c for c in base_cols + pred_cols if c in df.columns]
-
-            # Select the columns in-place conceptually
-            # (assigning a sub-slice reference back to the dict)
             splits_data[split_name] = df[keep_cols]
 
-    def _build_shared_kwargs(
-        self,
-        splits_data: Dict[str, pd.DataFrame],
-        generate_uxm_in_ios: bool,
-    ) -> dict:
-        """Build the keyword arguments shared across generation calls."""
-        return dict(
-            splits=splits_data,
-            file_name=self.ios_base_path,
-            n_workers=self.config.get("n_workers"),
-            batch_size=self.config.get("batch_size", 100),
-            checkpoint_interval=self.config.get("checkpoint_interval", 1000),
-            start_checkpoint_idx=self.config.get("start_checkpoint_idx", 0),
-            n_read_per_split=self.config.get("n_read_per_split"),
-            num_labels=self.num_labels,
-            num_prediction_classes=self.num_prediction_classes,
-            generate_uxm_inputs=generate_uxm_in_ios,
+    def _build_metadata(
+        self, splits_data: Dict[str, pd.DataFrame]
+    ) -> GenerationMetadata:
+        """Build generation metadata from configuration and data."""
+        # Compute data watermark (hash of first few rows of each split)
+        watermark_parts = []
+        for split_name, df in sorted(splits_data.items()):
+            sample = df.head(100).to_json()
+            watermark_parts.append(f"{split_name}:{hash(sample)}")
+        data_watermark = ":".join(watermark_parts)
+
+        # Compute data stats
+        data_stats = {}
+        for split_name, df in splits_data.items():
+            data_stats[split_name] = {
+                "n_reads": len(df),
+                "n_unique_labels": (
+                    df["original_label"].nunique()
+                    if "original_label" in df.columns
+                    else 0
+                ),
+                "n_unique_grg": (
+                    df["dmr_ctype_label"].nunique()
+                    if "dmr_ctype_label" in df.columns
+                    else 0
+                ),
+            }
+
+        return GenerationMetadata(
+            grg_id_column=self.grg_label_column,
+            labeling_scheme=self.config["labeling_scheme"],
+            classifier=self.config["classifier_type"],
+            data_watermark=data_watermark,
+            data_stats=data_stats,
         )
 
-    def _run_shared_generation(
-        self,
-        splits_data: Dict[str, pd.DataFrame],
-        generate_uxm_in_ios: bool,
-    ) -> None:
-        """Run legacy shared-proportions generation (all splits share config).
+    def _build_parameters(self) -> GenerationParameters:
+        """Build generation parameters from configuration and data."""
+        # Build cell types mapping from labels_dict
+        cell_types_mapping = {v: k for k, v in self.labels_dict.items()}
 
-        Uses top-level ``generation_mode``, ``target_proportions_path``,
-        and a single ``dmr_sampling`` list that applies to all splits.
-        """
-        generation_mode = self.config["generation_mode"]
-        shared_kwargs = self._build_shared_kwargs(splits_data, generate_uxm_in_ios)
+        # Specific to Loyfer dataset: we build one GR group per ctype
+        gr_groups_mapping = {
+            f"{ctype}_grg": i for i, ctype in enumerate(cell_types_mapping.keys())
+        }
 
-        # Resolve dmr_sampling variants from config (default: ["uniform_multinomial"])
-        dmr_sampling = self.config.get("dmr_sampling", ["uniform_multinomial"])
-        if isinstance(dmr_sampling, str):
-            dmr_sampling = [dmr_sampling]
+        # Get substitution method
+        substitution_method = self.config["substitution_method"]
 
-        if generation_mode == "random":
-            allowed_labels = self.config.get("allowed_labels")
-            if allowed_labels is None:
-                allowed_labels = list(range(self.num_labels))
+        # Get GR sampling method
+        grg_sampling_method = self.config["grg_sampling_method"]
 
-            ios, exceptions = run_ios_generation_parallel(
-                n_io_examples=self.config.get("n_io_examples", 30000),
-                allowed_labels=allowed_labels,
-                n_cells_max=self.config.get("n_cells_max", 10),
-                dmr_sampling_variants=dmr_sampling,
-                **shared_kwargs,
-            )
-        elif generation_mode == "target_proportions":
-            self.logger.info(
-                f"Using provided target proportions for generation "
-                f"with start checkpoint index of "
-                f"{shared_kwargs['start_checkpoint_idx']}"
-            )
-            target_proportions_path = self.config["target_proportions_path"]
-            target_proportions = np.load(target_proportions_path)
-            target_proportions = target_proportions["proportions"]
-            ios, exceptions = run_ios_generation_parallel(
-                target_proportions=target_proportions,
-                dmr_sampling_variants=dmr_sampling,
-                **shared_kwargs,
-            )
-        else:
-            raise ValueError(
-                f"Unknown generation_mode: '{generation_mode}'. "
-                "Must be 'random' or 'target_proportions'."
-            )
-
-        self._log_generation_exceptions(exceptions)
-
-    def _run_per_split_generation(
-        self,
-        splits_data: Dict[str, pd.DataFrame],
-        split_generation: Dict[str, Any],
-        generate_uxm_in_ios: bool,
-    ) -> None:
-        """Run per-split generation with independent configs per split.
-
-        Each split entry in ``split_generation`` may specify:
-
-        - ``target_proportions_path`` — path to a ``.npz`` file with a
-          ``proportions`` key.
-        - ``dmr_sampling`` — list of strategies (``["uniform_multinomial"]``,).
-          Defaults to ``["uniform_multinomial"]``.
-        """
-        for split_name, split_cfg in split_generation.items():
-            if split_name not in splits_data:
-                self.logger.warning(
-                    f"  Split '{split_name}' in split_generation but not "
-                    f"in loaded splits — skipping."
-                )
-                continue
-
-            self.logger.info(f"  Generating IO examples for split '{split_name}' ...")
-
-            # Per-split DMR sampling variants
-            dmr_sampling = split_cfg.get("dmr_sampling", ["uniform_multinomial"])
-            if isinstance(dmr_sampling, str):
-                dmr_sampling = [dmr_sampling]
-            self.logger.info(f"    DMR sampling variants: {dmr_sampling}")
-
-            # Load per-split target proportions
-            tp_path = split_cfg.get("target_proportions_path")
-            if tp_path is not None:
-                tp_data = np.load(tp_path)
-                target_proportions = tp_data["proportions"]
-                self.logger.info(
-                    f"    Target proportions: {len(target_proportions)} "
-                    f"vectors from {tp_path}"
-                )
-            else:
-                target_proportions = None
-
-            # Build per-split kwargs — pass only this split's data
-            split_ios_dir = os.path.join(self.ios_dir, split_name)
-            os.makedirs(split_ios_dir, exist_ok=True)
-            ios_base_path = os.path.join(split_ios_dir, "ios_deconvolution_data.pkl")
-
-            shared_kwargs = dict(
-                splits={split_name: splits_data[split_name]},
-                file_name=ios_base_path,
-                n_workers=self.config.get("n_workers"),
-                batch_size=self.config.get("batch_size", 100),
-                checkpoint_interval=self.config.get("checkpoint_interval", 1000),
-                start_checkpoint_idx=split_cfg.get(
-                    "start_checkpoint_idx",
-                    self.config.get("start_checkpoint_idx", 0),
-                ),
-                n_read_per_split=self.config.get("n_read_per_split"),
-                num_labels=self.num_labels,
-                num_prediction_classes=self.num_prediction_classes,
-                generate_uxm_inputs=generate_uxm_in_ios,
-            )
-
-            if target_proportions is not None:
-                ios, exceptions = run_ios_generation_parallel(
-                    target_proportions=target_proportions,
-                    dmr_sampling_variants=dmr_sampling,
-                    **shared_kwargs,
-                )
-            else:
-                # Random mode for this split
-                allowed_labels = split_cfg.get(
-                    "allowed_labels",
-                    self.config.get("allowed_labels"),
-                )
-                if allowed_labels is None:
-                    allowed_labels = list(range(self.num_labels))
-
-                ios, exceptions = run_ios_generation_parallel(
-                    n_io_examples=split_cfg.get(
-                        "n_io_examples",
-                        self.config.get("n_io_examples", 30000),
-                    ),
-                    allowed_labels=allowed_labels,
-                    n_cells_max=split_cfg.get(
-                        "n_cells_max",
-                        self.config.get("n_cells_max", 10),
-                    ),
-                    dmr_sampling_variants=dmr_sampling,
-                    **shared_kwargs,
-                )
-
-            self._log_generation_exceptions(exceptions)
-
-    def _log_generation_exceptions(self, exceptions: List[Any]) -> None:
-        """Log a summary of generation exceptions."""
-        if exceptions:
-            self.logger.warning(
-                f"  {len(exceptions)} example(s) failed during generation."
-            )
-            for lbl, prop, err in exceptions[:5]:
-                self.logger.warning(f"    labels={lbl}, proportions={prop}: {err}")
+        return GenerationParameters(
+            cell_types_mapping=cell_types_mapping,
+            gr_groups_mapping=gr_groups_mapping,
+            substitution_method=substitution_method,
+            grg_sampling_method=grg_sampling_method,
+        )
 
     # ═══════════════════════════════════════════════════════════════
-    #  Internal helpers
+    #  Data loading helpers
     # ═══════════════════════════════════════════════════════════════
 
-    def _load_splits(
-        self,
-    ) -> Dict[str, pd.DataFrame]:
+    def _load_splits(self) -> Dict[str, pd.DataFrame]:
         """Load configured splits from parquet or pickle."""
-        input_type = self.config["input_type"]
-        splits_cfg = self.config.get("splits", ["train", "valid", "test"])
+        splits_configs = self.config["split_information"]
         splits_data = {}
 
-        if input_type == "raw_splits":
-            data_path = self.config["data_path"]
-            for split_name in splits_cfg:
-                splits_data[split_name] = pd.read_parquet(
-                    os.path.join(data_path, f"{split_name}.parquet")
-                )
-                splits_data[split_name] = splits_data[split_name]
-        elif input_type == "pre_predicted":
-            pickle_paths = self.config["pickle_paths"]
-            first_pickle_file = pickle_paths[list(pickle_paths.keys())[0]]
-            # Check if file exists and if not, try to switch for a likely alternative
-            if os.path.isfile(first_pickle_file):
-                for split_name in splits_cfg:
-                    with open(pickle_paths[split_name], "rb") as f:
-                        splits_data[split_name] = pickle.load(f)
+        for split_name, split_cfg in splits_configs.items():
+            path = Path(split_cfg["data_path"])
+            file_extension = path.suffix.lower()
+            if file_extension == ".parquet":
+                splits_data[split_name] = pd.read_parquet(path)
+            elif file_extension in [".pkl", ".pickle"]:
+                with open(path, "rb") as f:
+                    splits_data[split_name] = pickle.load(f)
             else:
-                predicted_dict_path = os.path.join(
-                    "/".join(first_pickle_file.split("/")[:-1]), "predicted_reads.pkl"
+                raise ValueError(
+                    f"Unsupported file extension '{file_extension}' for split '{split_name}'. "
+                    "Expected .parquet or .pkl/.pickle."
                 )
-                with open(predicted_dict_path, "rb") as f:
-                    splits_data = pickle.load(f)
-                if len(set(splits_data.keys()).intersection(splits_cfg)) == len(
-                    splits_cfg
-                ):
-                    pass
-                else:
-                    raise ValueError(
-                        "The target per split files were not found and Predictions dictionary file was used instead, but dict split names do not match the target splits names"
-                    )
-        else:
-            raise ValueError(
-                f"Unknown input_type: '{input_type}'. " "Must be 'parquet' or 'pickle'."
-            )
+            self.logger.debug("  Loaded %s from %s", split_name, path)
+
+            splits_data[split_name] = splits_data[split_name]
 
         return splits_data
+
+    def _load_target_proportions(self) -> Dict[str, np.ndarray]:
+        """Load target proportions for each split."""
+        target_proportions_per_split = {}
+
+        splits_configs = self.config["split_information"]
+
+        # Per-split target proportions
+        for split_name, split_cfg in splits_configs.items():
+
+            tp_path = split_cfg["target_proportions_path"]
+            tp_data = np.load(tp_path)
+            proportions = tp_data["proportions"]
+            if self.n_pseudobulks_to_sample is not None:
+                self.logger.info(
+                    "  n_pseudobulks_to_sample was set in config. Sampling first %d pseudobulks",
+                    self.n_pseudobulks_to_sample,
+                )
+                proportions = proportions[: self.n_pseudobulks_to_sample]
+
+            self.logger.info(
+                "  Loaded %d proportions for %s", len(proportions), split_name
+            )
+
+            target_proportions_per_split[split_name] = proportions
+
+        return target_proportions_per_split

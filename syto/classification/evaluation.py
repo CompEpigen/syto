@@ -107,9 +107,8 @@ def preprocess_logits_for_prediction(
 ):
     """
     Preprocess logits for predictions.
-    Returns probabilities:
-    - For binary (2 classes): probability of positive class
-    - For multi-class (>2 classes): probability distribution across all classes
+    Returns softmax probabilities across all classes (sums to 1).
+    Applies uniformly for both binary (num_labels=2) and multi-class settings.
     """
     if isinstance(logits, tuple):  # Unpack logits if it's a tuple
         logits = logits[0]
@@ -118,30 +117,7 @@ def preprocess_logits_for_prediction(
         # Reshape logits to 2D if needed
         logits = logits.reshape(-1, logits.shape[-1])
 
-    num_classes = logits.shape[-1]
-
-    if num_classes == 2:
-        # Binary classification: return probability of positive class (class 1)
-        # Using sigmoid for compatibility with BCE loss, or softmax for CE loss
-        # Sigmoid approach (works with both):
-        return torch.sigmoid(logits)
-
-        # Alternative softmax approach (more consistent with CE loss):
-        # return torch.softmax(logits, dim=-1)[:, 1]
-    else:
-        # Multi-class classification: return full probability distribution
-        return torch.softmax(logits, dim=-1)
-
-
-def keep_logits_only(raw_model_output, labels):
-    """
-    We want to keep only the first item so that the Trainer
-    concatenates an (N, num_labels) tensor nothing else.
-    """
-    if isinstance(raw_model_output, tuple):
-        raw_model_output = raw_model_output[0]  # grab logits
-    # (if it is already a Tensor, we just fall through)
-    return raw_model_output
+    return torch.softmax(logits, dim=-1)
 
 
 def make_compute_metrics(
@@ -232,3 +208,32 @@ compute_metrics = make_compute_metrics(background_threshold_func=None)
 compute_metrics_soft_labels = make_compute_metrics(
     background_threshold_func=lambda n: 0.5
 )
+
+
+def extract_trainer_metrics(trainer) -> dict:
+    """Extract the train/validation metrics a HuggingFace ``Trainer`` already computed.
+
+    Scans ``trainer.state.log_history`` for the training-summary entry
+    (``train_loss``, ``train_runtime``, ...) produced at the end of
+    ``Trainer.train()``, and the last evaluation entry (``eval_loss``,
+    ``eval_accuracy``, ...) produced by ``compute_metrics`` /
+    ``compute_metrics_soft_labels`` during periodic evaluation.
+    ``eval_*`` keys are renamed to ``val_*`` for consistency with the
+    ``train_*``/``val_*`` convention used by other classifiers' ``history``
+    records.
+    """
+    metrics: dict = {}
+    for entry in trainer.state.log_history:
+        if "train_loss" in entry:
+            metrics.update(
+                {k: v for k, v in entry.items() if isinstance(v, (int, float))}
+            )
+        elif any(k.startswith("eval_") for k in entry):
+            metrics.update(
+                {
+                    (f"val_{k[len('eval_'):]}" if k.startswith("eval_") else k): v
+                    for k, v in entry.items()
+                    if isinstance(v, (int, float))
+                }
+            )
+    return metrics

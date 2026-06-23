@@ -46,7 +46,7 @@ LABELS_DICT_PATH = os.path.join(
 OUTPUT_DIR = os.path.join(DATA_DIR, "calibration_results")
 
 LINEAR_NORM_METHODS = [
-    "clip0-normalize",
+    "clip-normalize",
     "simplex-projection",
 ]
 CALIBRATION_METHODS = [
@@ -274,7 +274,7 @@ def save_calibration_summary_csv(results, output_dir):
             {
                 "deconvolver": DECONV_NAME,
                 "calibration_method": calib_name,
-                "overall_r2": m["r2"],
+                "r2": m["r2"],
                 "loa_lower": m["loa_lower"],
                 "loa_upper": m["loa_upper"],
                 "worst_class_loa_lower": m["worst_class_loa_lower"],
@@ -371,7 +371,7 @@ def run_confidence_intervals(deconv_out, labels_dict, output_dir):
             "  %30s  R2=%.6f  MAE=%.6f [%.6f, %.6f]  MSE=%.6f [%.6f, %.6f]  "
             "KL=%.6f [%.6f, %.6f]",
             method,
-            m.get("overall_r2", m.get("r2", float("nan"))),
+            m.get("r2", m.get("r2", float("nan"))),
             m["mae"],
             m.get("mae_ci_lower", float("nan")),
             m.get("mae_ci_upper", float("nan")),

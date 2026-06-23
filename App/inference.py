@@ -15,10 +15,14 @@ import logging
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 import torch
-from copy import deepcopy
 
 import numpy as np
 import pandas as pd
+from baselines.deconvolution.base import BaselineDeconvolver
+from baselines.deconvolution.uxm import mark_records_methyl_state
+from baselines.deconvolution.uxm.uxm import UXMDeconvolver
+from baselines.deconvolution.celfie.celfie import CelFiEDeconvolver
+from baselines.deconvolution.celfieish.celfieish import CelFiEISHDeconvolver
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -32,12 +36,7 @@ from syto.classification.prediction_aggregation import (
 from syto.classification.classifiers.lazy_classifier_factory import (
     read_classifier_factory,
 )
-from syto.deconvolution.uxm import (
-    prepare_reads_for_uxm,
-    uxm_deconvolution,
-    rearange_uxm_deconvolution_results,
-    load_atlas,
-)
+from syto.data.atlases.uxm_atlases import UXMMethylationAtlas
 from syto.deconvolution.feature_selection import apply_feature_mask
 from syto.deconvolution.least_squares_deconvolvers import (
     PSLSDeconvolver,
@@ -51,7 +50,9 @@ from syto.deconvolution.xgbdeconvolver import (
 from syto.calibration.linear_calibrator import LinearCalibrator
 from syto.calibration.vector_scaling_calibrator import VectorScalingCalibrator
 
-LINEAR_NORM_METHODS = ["clip0-normalize", "simplex-projection"]
+from syto.data.dataset import resolve_column
+
+LINEAR_NORM_METHODS = ["clip-normalize", "simplex-projection"]
 
 
 class InferencePipeline:
@@ -95,10 +96,19 @@ class InferencePipeline:
 
         # ── Load atlas ──────────────────────────────────────────────────
         atlas_path = config["atlas_path"]
-        self.atlas = pd.read_csv(atlas_path, sep="\t")
-        self.logger.info(
-            f"Loaded atlas with {len(self.atlas)} regions from {atlas_path}"
+        atlas_name = config.get("atlas_name", Path(atlas_path).stem)
+        self.atlas = UXMMethylationAtlas(
+            atlas_name=atlas_name,
+            reference_genome="hg38" if "hg38" in atlas_path else "hg19",
+            atlas_path=atlas_path,
+            sep="\t",
         )
+        self.logger.info(
+            f"Loaded atlas with {len(self.atlas.atlas)} regions from {atlas_path}"
+        )
+
+        # ── Load baseline deconvolvers ───────────────────────────────
+        self._baseline_deconvolvers = self._load_baseline_deconvolvers()
 
         # ── Placeholder attributes populated during run() ───────────────
         self.processed_reads: Optional[pd.DataFrame] = None
@@ -106,7 +116,6 @@ class InferencePipeline:
         self.predictions_df: Optional[pd.DataFrame] = None
         self.dmr_aggregated: Optional[pd.DataFrame] = None
         self.deconvolution_results: Dict[str, Any] = {}
-        self.features_mask = np.load(config["features_mask_path"])["features_mask"]
 
         # By default the algorithm assumes that we have at least some data for each DMR group.
         self.fill_in_missing_labels = self.config.get("fill_in_missing_labels", False)
@@ -130,8 +139,11 @@ class InferencePipeline:
             self.num_labels = len(self.labels_dict)
         else:
             self.num_labels = self.config["num_labels"]
-
-        self.input_length = int(np.sum(self.features_mask))
+        deconv_cfg = self.config.get("deconvolution", {})
+        self.syto_methods_enabled = deconv_cfg.get("syto", False)
+        if self.syto_methods_enabled:
+            self.features_mask = np.load(config["features_mask_path"])["features_mask"]
+            self.input_length = int(np.sum(self.features_mask))
 
     # ═══════════════════════════════════════════════════════════════════
     #  Public API
@@ -140,8 +152,17 @@ class InferencePipeline:
     def run(self) -> List[Tuple[str, str, np.ndarray]]:
         """Execute the full inference pipeline end-to-end."""
         # pylint: disable=attribute-defined-outside-init
-
         self.skip_classification = False
+        self.skip_reads_processing = False
+        self.skip_aggregation_for_syto = False
+        self.logger.info(
+            f"The config doesn't feature syto methods --> related classification and feature extraction methods will be skipped"
+        )
+
+        if not self.syto_methods_enabled:
+            self.skip_classification = True
+            self.skip_aggregation_for_syto = True
+
         # ── Stage 1: obtain processed reads ─────────────────────────────
         input_cfg = self.config["input"]
         if input_cfg["type"] == "bam":
@@ -158,13 +179,14 @@ class InferencePipeline:
                 f"Classified reads were provided: {len(self.predictions_df)} processed reads. Proceeding with deconvolution."
             )
             self.skip_classification = True
+            self.skip_reads_processing = True
         else:
             raise ValueError(
                 f"Unknown input type: {input_cfg['type']}. "
                 "Must be 'bam' or 'parsed_reads' or 'predicted_reads'."
             )
         if not self.processed_reads is None:
-            if not self.skip_classification:
+            if not self.skip_reads_processing:
                 self.logger.info(
                     f"Stage 1 complete: {len(self.processed_reads)} processed reads"
                 )
@@ -176,16 +198,22 @@ class InferencePipeline:
                 )
 
                 # ── Stage 3: classifier predictions ─────────────────────────────
-                self.predictions_df = self._predict_classifier()
-                self.logger.info(
-                    f"Stage 3 complete: predictions for {len(self.predictions_df)} reads"
-                )
+                if not self.skip_classification:
+                    self.predictions_df = self._predict_classifier()
+                    self.logger.info(
+                        f"Stage 3 complete: predictions for {len(self.predictions_df)} reads"
+                    )
 
         # ── Stage 4: aggregate to DMR level ────────────────────────────
-        self.dmr_aggregated = self._aggregate_to_dmr()
-        self.logger.info(
-            f"Stage 4 complete: {len(self.dmr_aggregated)} DMR-level aggregations"
-        )
+        if not self.skip_aggregation_for_syto:
+            self.dmr_aggregated = self._aggregate_to_dmr()
+            self.logger.info(
+                f"Stage 4 complete: {len(self.dmr_aggregated)} DMR-level aggregations"
+            )
+        else:
+            self.logger.info(
+                f"Stage 4 is skipped as no prediction aggregation is required for baseline methods"
+            )
         # ── Stage 5: deconvolution ─────────────────────────────────────
         self.deconvolution_results = self._run_deconvolution()
         self.logger.info(
@@ -308,51 +336,33 @@ class InferencePipeline:
     # ═══════════════════════════════════════════════════════════════════
 
     def _prepare_reads(self) -> pd.DataFrame:
-        """
-        Overlap processed reads with atlas regions and resolve DMR labels.
+        """Overlap processed reads with atlas regions and resolve DMR labels.
 
-        Uses ``prepare_reads_for_uxm`` which:
-        - iterates atlas regions and scans sorted reads for overlaps
-        - trims reads to region boundaries
-        - computes M / U / X counts
-        - resolves ``dmr_ctype_label`` via labels_dict_reversed and
-          cell_type_match_dict
-
-        Returns
-        -------
-        pd.DataFrame
-            Prepared reads with atlas-region annotations.  Column names
-            are kept as-is (``seq``, ``pattern``, …) so that the
-            :class:`AbstractReadClassifier` can handle any downstream
-            transformations internally.
+        Calls ``atlas.prepare_reads`` which:
+        - overlaps reads with atlas regions (adds ``name``, region coords)
+        - trims reads to region boundaries (coordinates, seq, pattern)
+        - resolves ``dmr_ctype_label`` via labels_dict and cell_type_match_dict
         """
         df = self.processed_reads.copy()
-
-        # Sort by chromosome and start position (required by prepare_reads_for_uxm)
         df = df.sort_values(["chromosome", "read_start"]).reset_index(drop=True)
 
-        # For inference from BAM, reads don't have ground-truth labels.
-        # Add dummy columns so prepare_reads_for_uxm doesn't break.
-        if "original_label" not in df.columns:
-            df["original_label"] = -1
-        if "label" not in df.columns:
-            df["label"] = -1
-
         self.logger.info("Overlapping reads with atlas regions ...")
-        prepared_uxm = prepare_reads_for_uxm(
-            reads_data=df,
-            atlas=self.atlas,
+        prepared = self.atlas.prepare_reads(
+            df,
+            trim=True,
             labels_dict=self.labels_dict,
             cell_type_match_dict=self.cell_type_match_dict,
         )
 
-        if len(prepared_uxm) == 0:
+        prepared = mark_records_methyl_state(prepared)
+
+        if len(prepared) == 0:
             raise RuntimeError(
                 "No reads overlapped with atlas regions. "
                 "Check that chromosome naming is consistent between BAM and atlas."
             )
 
-        return prepared_uxm
+        return prepared
 
     def _predict_classifier(self) -> pd.DataFrame:
         """
@@ -378,7 +388,7 @@ class InferencePipeline:
             classifier_head_implementation=classifier_cfg.get(
                 "classifier_head_implementation", "grg_attention_based"
             ),
-            dmr_label_column=classifier_cfg.get("dmr_label_column", "dmr_ctype_label"),
+            grg_label_column=classifier_cfg.get("grg_label_column", "dmr_ctype_label"),
             dismir_flavor=classifier_cfg.get("dismir_flavor", "lstm"),
             cancer_detector_prior_type=classifier_cfg.get(
                 "cancer_detector_prior_type", "uniform"
@@ -388,10 +398,10 @@ class InferencePipeline:
         )
 
         self.logger.info("Running classifier predictions ...")
-        result_df = read_classifier.predict_split(self.prepared_reads, **classifier_cfg)
 
+        result_df = read_classifier.predict_split(self.prepared_reads, **classifier_cfg)
         result_df = result_df.dropna(
-            subset=result_df.columns.difference(["soft_label"])
+            subset=result_df.columns.difference(["soft_label", "ctype"])
         )
         if "M_rate" in result_df.columns:
             result_df.rename(columns={"M_rate": "methylation_level"}, inplace=True)
@@ -399,57 +409,43 @@ class InferencePipeline:
         return result_df
 
     def _load_or_compute_uniform_prior(self) -> pd.DataFrame:
-        """Load or compute the uniform prior matrix for missing-label substitution.
+        """Load the uniform prior matrix from the pseudobulk HDF5 file.
 
-        Resolution order:
-        1. ``uniform_prior_path`` — load from pre-computed ``.npz``.
-        2. ``pure_profiles_path`` — load pure profiles ``.pkl``, compute the
-           prior on-the-fly, and optionally cache it next to the profiles.
+        Reads ``outputs/{split}/pure_profiles/uniform_prior`` from the HDF5
+        produced by the pseudobulk generation pipeline and returns it as a
+        DataFrame with a ``dmr_ctype_label`` column, ready for
+        :func:`aggregate_predictions_by_grg`.
+
+        Config keys
+        -----------
+        pseudobulk_h5_path : str
+            Path to the pseudobulk HDF5 file containing pure profiles.
+        pure_profiles_split : str, optional
+            Split name from which to read the prior (default ``"train"``).
 
         Raises
         ------
         ValueError
-            If neither path is configured.
+            If ``pseudobulk_h5_path`` is not configured.
+        KeyError
+            If the HDF5 file has no pure profiles for the requested split.
         """
-        from syto.data.pure_profile_generation import (
-            compute_uniform_prior_matrix,
-            load_uniform_prior,
-            save_uniform_prior,
-        )
+        from syto.data.pseudobulk_hdf5_utils import PseudobulkHDF5Reader
 
-        uniform_prior_path = self.config.get("uniform_prior_path", None)
-        pure_profiles_path = self.config.get("pure_profiles_path", None)
-
-        # Option 1: direct .npz
-        if uniform_prior_path and os.path.exists(uniform_prior_path):
-            self.logger.info(f"Loading uniform prior from {uniform_prior_path}")
-            return load_uniform_prior(uniform_prior_path)
-
-        # Option 2: compute from pure profiles pickle
-        if pure_profiles_path and os.path.exists(pure_profiles_path):
-            self.logger.info(
-                f"Computing uniform prior from pure profiles: " f"{pure_profiles_path}"
-            )
-            with open(pure_profiles_path, "rb") as f:
-                pure_profiles = pickle.load(f)
-
-            split_key = self.config.get("pure_profiles_split_key", "train")
-            prior = compute_uniform_prior_matrix(
-                pure_profiles,
-                split_key=split_key,
-                num_input_labels=len(self.labels_dict),
+        h5_path = self.config.get("pseudobulk_h5_path")
+        if not h5_path:
+            raise ValueError(
+                f"missing_label_strategy='{self.missing_label_strategy}' requires "
+                "'pseudobulk_h5_path' in config pointing to a pseudobulk HDF5 file "
+                "with pre-computed pure profiles."
             )
 
-            # Cache for future runs
-            cache_path = str(Path(pure_profiles_path).parent / "uniform_prior.npz")
-            save_uniform_prior(prior, cache_path)
-            self.logger.info(f"Cached uniform prior to {cache_path}")
-            return prior
-
-        raise ValueError(
-            f"missing_label_strategy='{self.missing_label_strategy}' requires "
-            f"either 'uniform_prior_path' or 'pure_profiles_path' in config."
+        split = self.config.get("pure_profiles_split", "train")
+        self.logger.info(
+            "Loading uniform prior from pseudobulk HDF5 (split=%r): %s", split, h5_path
         )
+        reader = PseudobulkHDF5Reader(h5_path, logger=self.logger)
+        return reader.read_uniform_prior(split)
 
     # ═════════════════════════════════════════════════════════════════
     #  Stage 4: aggregate predictions by DMR
@@ -495,11 +491,10 @@ class InferencePipeline:
             or "None", proportions array).
         """
         deconv_cfg = self.config.get("deconvolution", {})
-        methods = deconv_cfg.get("methods", [])
-
         results: List[Tuple[str, str, np.ndarray]] = []
 
-        for method_cfg in methods:
+        # ── Syto feature-based methods ──────────────────────────────────
+        for method_cfg in deconv_cfg.get("syto", []):
             if not method_cfg.get("enabled", False):
                 continue
 
@@ -513,8 +508,6 @@ class InferencePipeline:
 
                 if name == "xgboost":
                     proportions = self._run_xgboost_deconvolution(method_cfg)
-                elif name == "uxm":
-                    proportions = self._run_uxm_deconvolution(method_cfg)
                 elif name in ["3Layer_MLP", "Shallow_Wide_Network"]:
                     proportions = self._run_nn_deconvolution(method_cfg)
                 elif name == "ls":
@@ -525,27 +518,28 @@ class InferencePipeline:
                     )
                     continue
 
-                # Uncalibrated result
                 results.append((base_name, "None", proportions))
 
-                # ── Apply all discovered calibrators ────────────────────
                 calibrators_dir = method_cfg.get("calibrators_dir", None)
-                # Legacy single-calibrator fallback
                 if calibrators_dir is None and method_cfg.get(
                     "use_callibration", False
                 ):
                     calibrators_dir = str(Path(method_cfg["callibrator_path"]).parent)
-
                 if calibrators_dir is not None:
-                    calibrated = self._apply_all_calibrators(
-                        proportions, calibrators_dir, base_name
+                    results.extend(
+                        self._apply_all_calibrators(
+                            proportions, calibrators_dir, base_name
+                        )
                     )
-                    results.extend(calibrated)
 
             except Exception as e:  # pylint: disable=broad-exception-caught
                 self.logger.error(
                     f"Deconvolution method '{name}' failed: {e}", exc_info=True
                 )
+
+        # ── Read-based baseline methods ─────────────────────────────────
+        for deconvolver in self._baseline_deconvolvers:
+            results.extend(self._run_baseline(deconvolver))
 
         return results
 
@@ -726,71 +720,119 @@ class InferencePipeline:
 
         return proportions
 
-    def _run_uxm_deconvolution(self, method_cfg: Dict[str, Any]) -> np.ndarray:
-        """
-        Run UXM deconvolution.
-        """
-        # Load atlas for UXM (uses its own loader)
-        atlas_path = self.config["atlas_path"]
-        uxm_atlas, ref_cells = load_atlas(atlas_path)
+    def _load_baseline_deconvolvers(self) -> List[BaselineDeconvolver]:
+        """Instantiate deconvolvers for all baselines listed under deconvolution.baselines."""
+        baselines_cfg = self.config.get("deconvolution", {}).get("baselines", [])
+        deconvolvers: List[BaselineDeconvolver] = []
 
-        # Build UXM-compatible input from the prepared reads
-        uxm_input = self._build_uxm_input(uxm_atlas, ref_cells)
+        for cfg in baselines_cfg:
+            if not cfg.get("enabled", True):
+                continue
+            model = cfg["model"]
 
-        # Run UXM deconvolution
-        uxm_proportions = uxm_deconvolution(
-            atlas=uxm_atlas,
-            ref_cells=ref_cells,
-            sf=uxm_input["scaling_factors"],
-            counts=uxm_input["counts"],
-            sample_names=["sample"],
-        )[0]
+            if model == "uxm":
+                from syto.data.atlases.uxm_atlases import (
+                    UXMMethylationAtlas as _UXMAtlas,
+                )
 
-        # Align proportions to match labels_dict order
-        ref_cells = [x for x in ref_cells if x != "Megakaryocytes"]
+                atlas_path = cfg["atlas_path"]
+                uxm_atlas = _UXMAtlas(
+                    atlas_name=cfg.get("atlas_name", Path(atlas_path).stem),
+                    reference_genome=cfg.get("reference_genome", "hg38"),
+                    atlas_path=atlas_path,
+                )
+                ignore_cells = cfg.get("ignore_cells", [])
+                ref_cells = [c for c in uxm_atlas.ref_cells if c not in ignore_cells]
+                self.logger.info(
+                    "UXM baseline: %d reference cell types", len(ref_cells)
+                )
+                deconvolvers.append(UXMDeconvolver(uxm_atlas, ref_cells=ref_cells))
 
-        proportions_aligned = rearange_uxm_deconvolution_results(
-            self.labels_dict_reversed, uxm_proportions, ref_cells
-        )
-        proportions_aligned = np.round(np.array(proportions_aligned), 4)
+            elif model in ("celfieish", "celfie"):
+                from syto.data.atlases.celfieish_atlases import (
+                    CpGBetaCountsMethylationAtlas,
+                )
 
-        self.logger.debug(f"UXM proportions: {proportions_aligned}")
-        return proportions_aligned
+                atlas_path = cfg["atlas_path"]
+                atlas = CpGBetaCountsMethylationAtlas(
+                    atlas_name=cfg.get("atlas_name", Path(atlas_path).stem),
+                    reference_genome=cfg.get("reference_genome", "hg38"),
+                    atlas_path=atlas_path,
+                )
+                self.logger.info(
+                    "%s baseline: %d reference cell types",
+                    model.upper(),
+                    len(atlas.ref_cells),
+                )
+                em_checkpoints = cfg.get("em_checkpoints")
+                num_iterations = cfg.get("num_iterations", 50)
+                convergence_criteria = cfg.get("convergence_criteria", 0.001)
 
-    def _build_uxm_input(
-        self, uxm_atlas: pd.DataFrame, ref_cells: list
-    ) -> Dict[str, Any]:
-        """
-        Build UXM-compatible input from prepared reads.
+                if model == "celfieish":
+                    deconvolvers.append(
+                        CelFiEISHDeconvolver(
+                            atlas,
+                            num_iterations=num_iterations,
+                            convergence_criteria=convergence_criteria,
+                            em_checkpoints=em_checkpoints,
+                        )
+                    )
+                else:
+                    deconvolvers.append(
+                        CelFiEDeconvolver(
+                            atlas,
+                            num_iterations=num_iterations,
+                            convergence_criteria=convergence_criteria,
+                            random_restarts=cfg.get("random_restarts", 1),
+                            em_checkpoints=em_checkpoints,
+                        )
+                    )
 
-        Computes per-region scaling factors and methylation counts
-        in the format expected by ``decon_single_samp``.
-        """
-        prepared = self.prepared_reads.copy()
+            else:
+                self.logger.warning(
+                    "Unknown baseline model %r in config; skipping.", model
+                )
 
-        results_agg = (
-            prepared[prepared["NCPGS"] > 3]
-            .groupby("name")
-            .aggregate({"record_M": "sum", "record_U": "sum", "record_X": "sum"})
-            .reset_index()
-        )
-        results_agg["count"] = (
-            results_agg["record_M"] + results_agg["record_U"] + results_agg["record_X"]
-        )
-        results_agg["sf"] = results_agg["record_U"] / results_agg["count"]
-        # TODO: Derrive direction from the source
-        results_agg["direction"] = "U"
-        sample_name = "sample"
+        return deconvolvers
 
-        sf = deepcopy(results_agg[["name", "direction"]])
-        sf[sample_name] = results_agg["sf"]
-        counts = results_agg[["name", "direction", "count"]]
-        counts.columns = ["name", "direction", sample_name]
+    def _run_baseline(
+        self, deconvolver: BaselineDeconvolver
+    ) -> List[Tuple[str, str, np.ndarray]]:
+        """Run a single baseline deconvolver and return result tuples."""
+        model = deconvolver.name
+        self.logger.info(f"Running baseline deconvolution: {model}")
 
-        return {
-            "scaling_factors": sf,
-            "counts": counts,
-        }
+        if self.processed_reads is None:
+            self.logger.warning(
+                "%s: requires processed_reads (not available for predicted_reads input); skipping.",
+                model,
+            )
+            return []
+
+        try:
+            result = deconvolver.deconvolute_reads(
+                self.processed_reads,
+                self.labels_dict_reversed,
+                n_labels=self.num_labels,
+                prepare=True,
+            )
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            self.logger.error(f"Baseline method '{model}' failed: {e}", exc_info=True)
+            return []
+
+        if result is None:
+            self.logger.warning("%s: no overlapping reads, skipping.", model)
+            return []
+
+        em_checkpoints = getattr(deconvolver, "em_checkpoints", None)
+        if em_checkpoints is not None:
+            return [
+                (f"{model}_{n_steps}_steps", "None", np.round(np.array(aligned), 4))
+                for n_steps, aligned in result
+            ]
+
+        self.logger.debug("%s proportions: %s", model, result)
+        return [(model, "None", np.round(np.array(result), 4))]
 
     # ═══════════════════════════════════════════════════════════════════
     #  Output
@@ -799,7 +841,7 @@ class InferencePipeline:
     def _save_results(self) -> None:
         """Save all pipeline outputs to the configured output directory."""
         output_cfg = self.config.get("output", {})
-        output_dir = output_cfg.get("output_dir", "./inference_output")
+        output_dir = self.config.get("output_dir", "./inference_output")
         os.makedirs(output_dir, exist_ok=True)
 
         # ── Processed reads (pickle) ───────────────────────────────────

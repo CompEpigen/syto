@@ -1,0 +1,56 @@
+# Classifier Fitting - MethylBERT
+# =================================
+# Run with:
+#   python App/main.py --task classifier_fit --config App/config/classifiers_fitting/methylbert.yaml
+#
+# Expected data layout (datasets: all -> files directly under data_path):
+#   <data_path>/train.{parquet,csv,txt}
+#   <data_path>/valid.{parquet,csv,txt}   (optional, used for validation metrics)
+# Required columns: seq, pattern, label, dmr_ctype_label (GRG/DMR id)
+
+# Model Configuration
+model:
+  architecture: methylbert
+  foundation_model: foundationalModels/methylbert_hg19_12l  # local path to a cached MethylBERT checkpoint
+  num_labels: 40
+  num_grg_labels: 39
+  classifier_head_implementation: grg_attention_based
+  soft_labels: false
+
+# Data Configuration
+data_path: /home/luna.kuleuven.be/u0169940/Data/Loyfer/
+max_sequence_length: 150
+prediction_batch_size: 2200
+datasets: SoftLabelsTrainingData_205files_pooled_Jaccard_hg38_mincpg_4_minlen_10_no_data_leak_d041
+
+# Output Configuration
+output:
+  output_dir: tmp/classifier_fit_test/methylbert
+
+# MLflow Configuration
+mlflow:
+  enabled: true
+  experiment_name: classifier_fit_test_methylbert
+  tracking_uri: null  # Leave as null for local tracking or specify remote URI
+
+# Training Configuration (forwarded to MethylBert.fit_split as kwargs)
+training:
+  grg_label_column: dmr_ctype_label
+  training_args:
+    learning_rate: 0.0004
+    weight_decay: 0.1
+    warmup_steps: 100
+    adam_epsilon: 0.000001
+    logging_steps: 200
+    eval_steps: 200
+    save_steps: 200
+    per_device_train_batch_size: 512
+    per_device_eval_batch_size: 2200
+    num_train_epochs: 1
+    eval_strategy: steps
+    fp16: true
+    gradient_accumulation_steps: 1
+    max_grad_norm: 1.0
+    adam_beta1: 0.9
+    adam_beta2: 0.98
+    seed: 950410

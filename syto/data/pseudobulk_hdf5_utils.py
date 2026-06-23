@@ -10,7 +10,7 @@ import shutil
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, Iterator, List, Literal, Optional
 import hashlib
 import json
 import logging
@@ -29,7 +29,7 @@ _module_logger = logging.getLogger(__name__)
 # =============================================================================
 
 
-class HDF5Schema:
+class PseudobulkHDF5Schema:
     """Constants defining the HDF5 file structure for pseudobulk data."""
 
     # Top-level groups
@@ -107,7 +107,7 @@ class PseudobulkResult:
     index: int
     target_proportions: np.ndarray
     actual_proportions: np.ndarray
-    n_reads_really_sampled: int
+    n_reads_sampled: int
     n_samples_per_class_per_grg: np.ndarray
     seed: int
     aggregated_features: pd.DataFrame
@@ -118,7 +118,7 @@ class PseudobulkResult:
             "index": self.index,
             "target_proportions": self.target_proportions,
             "actual_proportions": self.actual_proportions,
-            "n_reads_really_sampled": self.n_reads_really_sampled,
+            "n_reads_sampled": self.n_reads_sampled,
             "n_samples_per_class_per_grg": self.n_samples_per_class_per_grg,
             "seed": self.seed,
             "aggregated_features": self.aggregated_features,
@@ -452,7 +452,7 @@ class CheckpointManager:
 # =============================================================================
 
 
-class HDF5BatchWriter:
+class PseudobulkHDF5BatchWriter:
     """Writes pseudobulk batches to HDF5 files atomically."""
 
     def __init__(
@@ -492,7 +492,7 @@ class HDF5BatchWriter:
                     grp = f.create_group(f"pseudobulk_{result.index}")
                     grp.attrs["index"] = result.index
                     grp.attrs["seed"] = result.seed
-                    grp.attrs["n_reads_really_sampled"] = result.n_reads_really_sampled
+                    grp.attrs["n_reads_sampled"] = result.n_reads_sampled
                     grp.attrs["sampling_function"] = (
                         "_sample_read_ids_from_grouped_dataframe"
                     )
@@ -500,20 +500,20 @@ class HDF5BatchWriter:
                     grp.create_dataset(
                         "target_proportions",
                         data=result.target_proportions,
-                        compression=HDF5Schema.COMPRESSION,
-                        compression_opts=HDF5Schema.COMPRESSION_LEVEL,
+                        compression=PseudobulkHDF5Schema.COMPRESSION,
+                        compression_opts=PseudobulkHDF5Schema.COMPRESSION_LEVEL,
                     )
                     grp.create_dataset(
                         "actual_proportions",
                         data=result.actual_proportions,
-                        compression=HDF5Schema.COMPRESSION,
-                        compression_opts=HDF5Schema.COMPRESSION_LEVEL,
+                        compression=PseudobulkHDF5Schema.COMPRESSION,
+                        compression_opts=PseudobulkHDF5Schema.COMPRESSION_LEVEL,
                     )
                     grp.create_dataset(
                         "n_reads_per_gr",
                         data=result.n_samples_per_class_per_grg,
-                        compression=HDF5Schema.COMPRESSION,
-                        compression_opts=HDF5Schema.COMPRESSION_LEVEL,
+                        compression=PseudobulkHDF5Schema.COMPRESSION,
+                        compression_opts=PseudobulkHDF5Schema.COMPRESSION_LEVEL,
                     )
                     # Store aggregated features - handle numeric and string columns
                     numeric_cols = result.aggregated_features.select_dtypes(
@@ -528,8 +528,8 @@ class HDF5BatchWriter:
                         grp.create_dataset(
                             "aggregated_features",
                             data=result.aggregated_features[numeric_cols].values,
-                            compression=HDF5Schema.COMPRESSION,
-                            compression_opts=HDF5Schema.COMPRESSION_LEVEL,
+                            compression=PseudobulkHDF5Schema.COMPRESSION,
+                            compression_opts=PseudobulkHDF5Schema.COMPRESSION_LEVEL,
                         )
                         grp.attrs["feature_columns"] = numeric_cols
 
@@ -601,7 +601,7 @@ class HDF5BatchWriter:
                     index=grp.attrs["index"],
                     target_proportions=grp["target_proportions"][...],
                     actual_proportions=grp["actual_proportions"][...],
-                    n_reads_really_sampled=grp.attrs["n_reads_really_sampled"],
+                    n_reads_sampled=grp.attrs["n_reads_sampled"],
                     n_samples_per_class_per_grg=grp["n_reads_per_gr"][...],
                     seed=grp.attrs["seed"],
                     aggregated_features=aggregated_features,
@@ -620,7 +620,7 @@ class HDF5BatchWriter:
 # =============================================================================
 
 
-class HDF5ConsolidationWriter:
+class PseudobulkHDF5ConsolidationWriter:
     """Consolidates batch files into the final HDF5 output."""
 
     def __init__(
@@ -683,17 +683,21 @@ class HDF5ConsolidationWriter:
         input_dfs: Dict[str, pd.DataFrame],
     ) -> None:
         """Write inputs group with metadata and input DataFrames."""
-        inputs_grp = f.create_group(HDF5Schema.INPUTS)
+        inputs_grp = f.create_group(PseudobulkHDF5Schema.INPUTS)
 
         # Metadata subgroup
         meta_grp = inputs_grp.create_group("metadata")
-        meta_grp.attrs[HDF5Schema.ATTR_GR_ID_COLUMN] = metadata.grg_id_column
-        meta_grp.attrs[HDF5Schema.ATTR_LABELING_SCHEME] = metadata.labeling_scheme
-        meta_grp.attrs[HDF5Schema.ATTR_CLASSIFIER] = metadata.classifier
-        meta_grp.attrs[HDF5Schema.ATTR_DATA_WATERMARK] = metadata.data_watermark
+        meta_grp.attrs[PseudobulkHDF5Schema.ATTR_GR_ID_COLUMN] = metadata.grg_id_column
+        meta_grp.attrs[PseudobulkHDF5Schema.ATTR_LABELING_SCHEME] = (
+            metadata.labeling_scheme
+        )
+        meta_grp.attrs[PseudobulkHDF5Schema.ATTR_CLASSIFIER] = metadata.classifier
+        meta_grp.attrs[PseudobulkHDF5Schema.ATTR_DATA_WATERMARK] = (
+            metadata.data_watermark
+        )
         if metadata.data_stats:
             meta_grp.create_dataset(
-                HDF5Schema.DATASET_DATA_STATS,
+                PseudobulkHDF5Schema.DATASET_DATA_STATS,
                 data=json.dumps(metadata.data_stats),
             )
 
@@ -710,8 +714,8 @@ class HDF5ConsolidationWriter:
                 split_grp.create_dataset(
                     "numeric_data",
                     data=df[numeric_cols].values,
-                    compression=HDF5Schema.COMPRESSION,
-                    compression_opts=HDF5Schema.COMPRESSION_LEVEL,
+                    compression=PseudobulkHDF5Schema.COMPRESSION,
+                    compression_opts=PseudobulkHDF5Schema.COMPRESSION_LEVEL,
                 )
                 split_grp.attrs["numeric_columns"] = numeric_cols
 
@@ -730,7 +734,7 @@ class HDF5ConsolidationWriter:
 
     def _write_parameters(self, f: h5py.File, parameters: GenerationParameters) -> None:
         """Write parameters group."""
-        params_grp = f.create_group(HDF5Schema.PARAMETERS)
+        params_grp = f.create_group(PseudobulkHDF5Schema.PARAMETERS)
 
         # Cell types mapping as structured dataset
         cell_types = list(parameters.cell_types_mapping.items())
@@ -748,10 +752,10 @@ class HDF5ConsolidationWriter:
         params_grp.create_dataset("gr_groups_mapping", data=gr_groups_arr)
 
         # Attributes
-        params_grp.attrs[HDF5Schema.ATTR_SUBSTITUTION_METHOD] = (
+        params_grp.attrs[PseudobulkHDF5Schema.ATTR_SUBSTITUTION_METHOD] = (
             parameters.substitution_method
         )
-        params_grp.attrs[HDF5Schema.ATTR_GR_SAMPLING_METHOD] = (
+        params_grp.attrs[PseudobulkHDF5Schema.ATTR_GR_SAMPLING_METHOD] = (
             parameters.grg_sampling_method
         )
 
@@ -763,41 +767,41 @@ class HDF5ConsolidationWriter:
         pure_profile: Optional[PureProfileResult],
     ) -> None:
         """Write outputs for a single split."""
-        split_grp = f.create_group(HDF5Schema.outputs_split(split_name))
+        split_grp = f.create_group(PseudobulkHDF5Schema.outputs_split(split_name))
         pseudobulks_grp = split_grp.create_group("pseudobulks")
 
         # Read and write all batches
         batches_dir = checkpoint_manager.get_split_batches_dir(split_name)
-        batch_writer = HDF5BatchWriter(batches_dir)
+        batch_writer = PseudobulkHDF5BatchWriter(batches_dir)
 
         checkpoint = checkpoint_manager.load_split_checkpoint(split_name)
         for batch_idx in sorted(checkpoint.completed_batches):
             results = batch_writer.read_batch(batch_idx)
             for result in results:
                 pb_grp = pseudobulks_grp.create_group(f"i_{result.index}")
-                pb_grp.attrs[HDF5Schema.ATTR_SEED] = result.seed
-                pb_grp.attrs[HDF5Schema.ATTR_SAMPLING_FUNCTION] = (
+                pb_grp.attrs[PseudobulkHDF5Schema.ATTR_SEED] = result.seed
+                pb_grp.attrs[PseudobulkHDF5Schema.ATTR_SAMPLING_FUNCTION] = (
                     "_sample_read_ids_from_grouped_dataframe"
                 )
-                pb_grp.attrs["n_reads_really_sampled"] = result.n_reads_really_sampled
+                pb_grp.attrs["n_reads_sampled"] = result.n_reads_sampled
 
                 pb_grp.create_dataset(
-                    HDF5Schema.DATASET_TARGET_PROPORTIONS,
+                    PseudobulkHDF5Schema.DATASET_TARGET_PROPORTIONS,
                     data=result.target_proportions,
-                    compression=HDF5Schema.COMPRESSION,
-                    compression_opts=HDF5Schema.COMPRESSION_LEVEL,
+                    compression=PseudobulkHDF5Schema.COMPRESSION,
+                    compression_opts=PseudobulkHDF5Schema.COMPRESSION_LEVEL,
                 )
                 pb_grp.create_dataset(
-                    HDF5Schema.DATASET_ACTUAL_PROPORTIONS,
+                    PseudobulkHDF5Schema.DATASET_ACTUAL_PROPORTIONS,
                     data=result.actual_proportions,
-                    compression=HDF5Schema.COMPRESSION,
-                    compression_opts=HDF5Schema.COMPRESSION_LEVEL,
+                    compression=PseudobulkHDF5Schema.COMPRESSION,
+                    compression_opts=PseudobulkHDF5Schema.COMPRESSION_LEVEL,
                 )
                 pb_grp.create_dataset(
-                    HDF5Schema.DATASET_N_READS_PER_GR,
+                    PseudobulkHDF5Schema.DATASET_N_READS_PER_GR,
                     data=result.n_samples_per_class_per_grg,
-                    compression=HDF5Schema.COMPRESSION,
-                    compression_opts=HDF5Schema.COMPRESSION_LEVEL,
+                    compression=PseudobulkHDF5Schema.COMPRESSION,
+                    compression_opts=PseudobulkHDF5Schema.COMPRESSION_LEVEL,
                 )
                 # Store aggregated features - handle numeric and string columns
                 numeric_cols = result.aggregated_features.select_dtypes(
@@ -810,10 +814,10 @@ class HDF5ConsolidationWriter:
                 # Store numeric features
                 if numeric_cols:
                     pb_grp.create_dataset(
-                        HDF5Schema.DATASET_AGGREGATED_FEATURES,
+                        PseudobulkHDF5Schema.DATASET_AGGREGATED_FEATURES,
                         data=result.aggregated_features[numeric_cols].values,
-                        compression=HDF5Schema.COMPRESSION,
-                        compression_opts=HDF5Schema.COMPRESSION_LEVEL,
+                        compression=PseudobulkHDF5Schema.COMPRESSION,
+                        compression_opts=PseudobulkHDF5Schema.COMPRESSION_LEVEL,
                     )
                     pb_grp.attrs["feature_columns"] = numeric_cols
 
@@ -834,16 +838,16 @@ class HDF5ConsolidationWriter:
         if pure_profile:
             pp_grp = split_grp.create_group("pure_profiles")
             pp_grp.create_dataset(
-                HDF5Schema.DATASET_FEATURE_MATRICES,
+                PseudobulkHDF5Schema.DATASET_FEATURE_MATRICES,
                 data=pure_profile.feature_matrices,
-                compression=HDF5Schema.COMPRESSION,
-                compression_opts=HDF5Schema.COMPRESSION_LEVEL,
+                compression=PseudobulkHDF5Schema.COMPRESSION,
+                compression_opts=PseudobulkHDF5Schema.COMPRESSION_LEVEL,
             )
             pp_grp.create_dataset(
-                HDF5Schema.DATASET_UNIFORM_PRIOR,
+                PseudobulkHDF5Schema.DATASET_UNIFORM_PRIOR,
                 data=pure_profile.uniform_prior,
-                compression=HDF5Schema.COMPRESSION,
-                compression_opts=HDF5Schema.COMPRESSION_LEVEL,
+                compression=PseudobulkHDF5Schema.COMPRESSION,
+                compression_opts=PseudobulkHDF5Schema.COMPRESSION_LEVEL,
             )
             pp_grp.attrs["numeric_columns"] = pure_profile.numeric_columns
 
@@ -856,3 +860,418 @@ class HDF5ConsolidationWriter:
                     dtype=str_dtype,
                 )
                 pp_grp.attrs["string_columns"] = pure_profile.string_columns
+
+
+# =============================================================================
+# HDF5 Reader
+# =============================================================================
+
+
+class PseudobulkHDF5Reader:
+    """Read pseudobulk and pure-profile data from a consolidated HDF5 file.
+
+    This is the counterpart of :class:`PseudobulkHDF5ConsolidationWriter`.
+    It exposes convenience methods to reconstruct the matrices required by
+    downstream consumers (e.g. the deconvolution fitting pipeline) directly
+    from the single ``pseudobulk.h5`` file produced by
+    :class:`~syto.data.pseudobulk_generator.PseudobulkGenerator`.
+    """
+
+    def __init__(
+        self,
+        path: "os.PathLike | str",
+        logger: logging.Logger = _module_logger,
+    ):
+        """Initialize the reader.
+
+        Args:
+            path: Path to the consolidated ``pseudobulk.h5`` file.
+            logger: Logger instance for logging messages.
+        """
+        self.path = Path(path)
+        self.logger = logger
+
+    # --- Low level helpers ---
+
+    @staticmethod
+    def _decode_columns(raw: Any) -> List[str]:
+        """Decode an HDF5 column-name attribute into a list of ``str``."""
+        return [
+            c.decode() if isinstance(c, (bytes, bytearray)) else str(c) for c in raw
+        ]
+
+    @staticmethod
+    def _prediction_indices(columns: List[str], num_pred_classes: int) -> List[int]:
+        """Return the column indices of the ``prediction_{i}_wavg`` features.
+
+        Args:
+            columns: Ordered list of feature-column names.
+            num_pred_classes: Number of prediction classes to extract.
+
+        Returns:
+            List of indices (length ``num_pred_classes``) into ``columns``.
+        """
+        indices: List[int] = []
+        for i in range(num_pred_classes):
+            name = f"prediction_{i}_wavg"
+            if name not in columns:
+                raise KeyError(
+                    f"Expected feature column '{name}' not found in HDF5 file "
+                    f"(available columns: {columns})."
+                )
+            indices.append(columns.index(name))
+        return indices
+
+    # --- Public API ---
+
+    def list_splits(self) -> List[str]:
+        """List the split names present in the ``outputs`` group."""
+        with h5py.File(self.path, "r") as f:
+            if PseudobulkHDF5Schema.OUTPUTS not in f:
+                return []
+            return list(f[PseudobulkHDF5Schema.OUTPUTS].keys())
+
+    def read_pure_feature_matrix(
+        self, split_name: str, num_pred_classes: int
+    ) -> np.ndarray:
+        """Read pure cell-type profiles for a split.
+
+        Args:
+            split_name: Name of the split (e.g. ``"train"``).
+            num_pred_classes: Number of prediction classes to keep
+                (selects ``prediction_0_wavg`` ... ``prediction_{n-1}_wavg``).
+
+        Returns:
+            Array of shape ``(n_cell_types, n_gr_groups, num_pred_classes)``.
+        """
+        pp_group = PseudobulkHDF5Schema.pure_profiles_group(split_name)
+        with h5py.File(self.path, "r") as f:
+            if pp_group not in f:
+                raise KeyError(
+                    f"No pure profiles found for split '{split_name}' at "
+                    f"'{pp_group}' in {self.path}."
+                )
+            grp = f[pp_group]
+            feature_matrices = grp[PseudobulkHDF5Schema.DATASET_FEATURE_MATRICES][...]
+            columns = self._decode_columns(grp.attrs["numeric_columns"])
+        pred_idx = self._prediction_indices(columns, num_pred_classes)
+        return feature_matrices[:, :, pred_idx]
+
+    def read_uniform_prior(self, split_name: str) -> pd.DataFrame:
+        """Read the uniform prior matrix for a split from the HDF5 file.
+
+        The uniform prior is stored as the per-GR-group average of all
+        pure-profile feature matrices (i.e. ``feature_matrices.mean(axis=0)``
+        over cell types).  Row index 0 … n_gr_groups-1 corresponds directly
+        to ``dmr_ctype_label`` values used in the aggregated prediction DataFrames.
+
+        Args:
+            split_name: Name of the split (e.g. ``"train"``).
+
+        Returns:
+            DataFrame with columns from ``numeric_columns`` plus a
+            ``dmr_ctype_label`` integer column, suitable for passing to
+            :func:`aggregate_predictions_by_grg`.
+
+        Raises:
+            KeyError: If no pure profiles are found for *split_name*.
+        """
+        pp_group = PseudobulkHDF5Schema.pure_profiles_group(split_name)
+        with h5py.File(self.path, "r") as f:
+            if pp_group not in f:
+                raise KeyError(
+                    f"No pure profiles found for split '{split_name}' at "
+                    f"'{pp_group}' in {self.path}."
+                )
+            grp = f[pp_group]
+            uniform_prior = grp[PseudobulkHDF5Schema.DATASET_UNIFORM_PRIOR][...]
+            columns = self._decode_columns(grp.attrs["numeric_columns"])
+
+        df = pd.DataFrame(uniform_prior, columns=columns)
+        # df.insert(0, "dmr_ctype_label", range(len(df)))
+        return df
+
+    def read_pseudobulk_matrices(
+        self, split_name: str, num_pred_classes: int
+    ) -> "tuple[np.ndarray, np.ndarray]":
+        """Read pseudobulk feature matrices and target proportions for a split.
+
+        Args:
+            split_name: Name of the split (e.g. ``"train"``).
+            num_pred_classes: Number of prediction classes to keep
+                (selects ``prediction_0_wavg`` ... ``prediction_{n-1}_wavg``).
+
+        Returns:
+            Tuple ``(features, target_proportions)`` where:
+            - ``features`` has shape
+              ``(n_pseudobulks, n_gr_groups, num_pred_classes)``.
+            - ``target_proportions`` has shape ``(n_pseudobulks, n_classes)``.
+        """
+        pbs_group = PseudobulkHDF5Schema.pseudobulks_group(split_name)
+        features: List[np.ndarray] = []
+        target_proportions: List[np.ndarray] = []
+
+        with h5py.File(self.path, "r") as f:
+            if pbs_group not in f:
+                raise KeyError(
+                    f"No pseudobulks found for split '{split_name}' at "
+                    f"'{pbs_group}' in {self.path}."
+                )
+            pbs = f[pbs_group]
+            keys = sorted(pbs.keys(), key=lambda k: int(k.split("_")[1]))
+            pred_idx: Optional[List[int]] = None
+            for key in keys:
+                grp = pbs[key]
+                aggregated = grp[PseudobulkHDF5Schema.DATASET_AGGREGATED_FEATURES][...]
+                if pred_idx is None:
+                    columns = self._decode_columns(grp.attrs["feature_columns"])
+                    pred_idx = self._prediction_indices(columns, num_pred_classes)
+                features.append(aggregated[:, pred_idx])
+                target_proportions.append(
+                    grp[PseudobulkHDF5Schema.DATASET_TARGET_PROPORTIONS][...]
+                )
+
+        if not features:
+            raise ValueError(
+                f"No pseudobulk samples found for split '{split_name}' in {self.path}."
+            )
+
+        return np.stack(features, axis=0), np.stack(target_proportions, axis=0)
+
+    # --- Reconstruction of sampled read subsets ---
+
+    def _read_input_dataframe(self, split_name: str) -> pd.DataFrame:
+        """Read back the original per-split input DataFrame.
+
+        Reconstructs the DataFrame written by
+        :meth:`PseudobulkHDF5ConsolidationWriter._write_inputs`, preserving
+        the row order of the data used during generation (required for
+        :meth:`iter_pseudobulk_read_subsets` to reproduce the same sampling).
+
+        Args:
+            split_name: Name of the split (e.g. ``"train"``).
+
+        Returns:
+            DataFrame with the same rows and columns as the input passed to
+            :class:`~syto.data.pseudobulk_generator.PseudobulkGenerator`.
+        """
+        split_group = f"{PseudobulkHDF5Schema.INPUTS}/{split_name}"
+        with h5py.File(self.path, "r") as f:
+            if split_group not in f:
+                raise KeyError(
+                    f"No input data found for split '{split_name}' at "
+                    f"'{split_group}' in {self.path}."
+                )
+            grp = f[split_group]
+            df_parts: List[pd.DataFrame] = []
+            if "numeric_data" in grp:
+                numeric_cols = self._decode_columns(grp.attrs["numeric_columns"])
+                df_parts.append(
+                    pd.DataFrame(grp["numeric_data"][...], columns=numeric_cols)
+                )
+            if "string_data" in grp:
+                string_cols = self._decode_columns(grp.attrs["string_columns"])
+                string_df = pd.DataFrame(grp["string_data"][...], columns=string_cols)
+                string_df = string_df.apply(lambda col: col.str.decode("utf-8"))
+                df_parts.append(string_df)
+
+        if not df_parts:
+            return pd.DataFrame()
+        return pd.concat(df_parts, axis=1)
+
+    def _read_gr_groups_mapping(self) -> Dict[str, int]:
+        """Read the GR-group label -> index mapping from the parameters group."""
+        with h5py.File(self.path, "r") as f:
+            arr = f[PseudobulkHDF5Schema.PARAMS_GR_GROUPS_MAPPING][...]
+        return {name.decode(): int(idx) for name, idx in arr}
+
+    def _read_grg_label_column(self) -> str:
+        """Read the GR-group label column name used during generation."""
+        with h5py.File(self.path, "r") as f:
+            raw = f[PseudobulkHDF5Schema.INPUTS_METADATA].attrs[
+                PseudobulkHDF5Schema.ATTR_GR_ID_COLUMN
+            ]
+        return raw.decode() if isinstance(raw, (bytes, bytearray)) else str(raw)
+
+    @staticmethod
+    def _build_indices_per_class_and_grg(
+        df: pd.DataFrame,
+        class_label_column: str,
+        grg_label_column: str,
+        gr_groups_mapping: Dict[str, int],
+    ) -> Dict[tuple[int, int], np.ndarray]:
+        """Group row positions of ``df`` by ``(class_index, grg_index)``.
+
+        Mirrors
+        :meth:`~syto.data.pseudobulk_generator.PseudobulkGenerator._precompute_group_indices`
+        so that the resulting dictionary matches the one used at generation
+        time (required for the sampling RNG to reproduce the same draws).
+
+        Args:
+            df: Input DataFrame for the split (as returned by
+                :meth:`_read_input_dataframe`).
+            class_label_column: Column holding the (integer) class index.
+            grg_label_column: Column holding the GR-group label or index.
+            gr_groups_mapping: Mapping from GR-group label to GR-group index.
+
+        Returns:
+            Dictionary mapping ``(class_index, grg_index)`` to arrays of row
+            positions (suitable for ``DataFrame.iloc``).
+        """
+        for col in (class_label_column, grg_label_column):
+            if col not in df.columns:
+                raise KeyError(
+                    f"Column '{col}' not found in the reconstructed input "
+                    f"DataFrame (available columns: {list(df.columns)})."
+                )
+
+        grouped = df.groupby([class_label_column, grg_label_column], sort=False)
+        indices_dict: Dict[tuple[int, int], np.ndarray] = {}
+        for (class_label, grg_label), row_indices in grouped.indices.items():
+            class_index = int(class_label)
+            grg_key = (
+                str(grg_label) if str(grg_label) in gr_groups_mapping else grg_label
+            )
+            if grg_key in gr_groups_mapping:
+                grg_index = gr_groups_mapping[grg_key]
+            else:
+                grg_index = int(grg_label)
+            indices_dict[(class_index, grg_index)] = row_indices
+
+        return indices_dict
+
+    def iter_pseudobulk_read_subsets(
+        self,
+        split_name: str,
+        class_label_column: str = "original_label",
+    ) -> Iterator[tuple[pd.DataFrame, np.ndarray]]:
+        """Reconstruct the read-level subset sampled for each pseudobulk.
+
+        For every pseudobulk stored under
+        ``outputs/<split_name>/pseudobulks``, re-derives the exact rows of
+        the input DataFrame that were sampled (with replacement) to build
+        it, using the stored ``seed`` and ``n_reads_per_gr`` together with
+        :func:`syto.data.pseudobulk_generator._sample_read_ids_from_grouped_dataframe`.
+        This is the inverse of
+        :meth:`~syto.data.pseudobulk_generator.PseudobulkGenerator.generate_single_pseudobulk`.
+
+        Args:
+            split_name: Name of the split (e.g. ``"train"``).
+            class_label_column: Column in the input DataFrame holding the
+                (integer) class index of each read. Must match the
+                ``class_label_column`` used by
+                :class:`~syto.data.pseudobulk_generator.PseudobulkGenerator`
+                during generation (default: ``"original_label"``).
+
+        Yields:
+            Tuples ``(reads, target_proportions)`` in order of pseudobulk
+            index, where ``reads`` is the DataFrame subset of sampled reads
+            (rows may repeat, since sampling is performed with replacement)
+            and ``target_proportions`` has shape ``(n_classes,)``.
+        """
+        from syto.data.pseudobulk_generator import (
+            _sample_read_ids_from_grouped_dataframe,
+        )
+
+        input_df = self._read_input_dataframe(split_name)
+        grg_label_column = self._read_grg_label_column()
+        gr_groups_mapping = self._read_gr_groups_mapping()
+        indices_per_class_and_grg = self._build_indices_per_class_and_grg(
+            input_df, class_label_column, grg_label_column, gr_groups_mapping
+        )
+
+        pbs_group = PseudobulkHDF5Schema.pseudobulks_group(split_name)
+        with h5py.File(self.path, "r") as f:
+            if pbs_group not in f:
+                raise KeyError(
+                    f"No pseudobulks found for split '{split_name}' at "
+                    f"'{pbs_group}' in {self.path}."
+                )
+            pbs = f[pbs_group]
+            keys = sorted(pbs.keys(), key=lambda k: int(k.split("_")[1]))
+            for key in keys:
+                grp = pbs[key]
+                seed = int(grp.attrs[PseudobulkHDF5Schema.ATTR_SEED])
+                n_samples_per_class_per_grg = grp[
+                    PseudobulkHDF5Schema.DATASET_N_READS_PER_GR
+                ][...]
+                target_proportions = grp[
+                    PseudobulkHDF5Schema.DATASET_TARGET_PROPORTIONS
+                ][...]
+
+                read_ids = _sample_read_ids_from_grouped_dataframe(
+                    n_samples_per_class_per_grg,
+                    indices_per_class_and_grg,
+                    seed=seed,
+                )
+                reads = input_df.iloc[read_ids].reset_index(drop=True)
+                yield reads, target_proportions
+
+    def build_reconstruction_state(
+        self,
+        split_name: str,
+        class_label_column: str = "original_label",
+    ) -> "tuple[pd.DataFrame, Dict[tuple, np.ndarray]]":
+        """Load the shared state required to reconstruct pseudobulk read subsets.
+
+        Call this once per split before iterating with
+        :meth:`iter_pseudobulk_params`.  The returned objects are read-only and
+        safe to share across threads.
+
+        Args:
+            split_name: Name of the split (e.g. ``"train"``).
+            class_label_column: Column in the input DataFrame holding the
+                (integer) class index of each read.
+
+        Returns:
+            ``(input_df, indices_per_class_and_grg)`` where ``input_df`` is the
+            full per-split read DataFrame and ``indices_per_class_and_grg`` maps
+            ``(class_index, grg_index)`` to arrays of row positions for
+            ``DataFrame.iloc``.
+        """
+        input_df = self._read_input_dataframe(split_name)
+        grg_label_column = self._read_grg_label_column()
+        gr_groups_mapping = self._read_gr_groups_mapping()
+        indices_per_class_and_grg = self._build_indices_per_class_and_grg(
+            input_df, class_label_column, grg_label_column, gr_groups_mapping
+        )
+        return input_df, indices_per_class_and_grg
+
+    def iter_pseudobulk_params(
+        self,
+        split_name: str,
+    ) -> "Iterator[tuple[int, np.ndarray, np.ndarray]]":
+        """Yield the minimal per-pseudobulk parameters stored in the HDF5 file.
+
+        Unlike :meth:`iter_pseudobulk_read_subsets`, this method does **not**
+        reconstruct the read subset — it only reads the small arrays needed to
+        do so.  Pass the results together with the shared state from
+        :meth:`build_reconstruction_state` to a parallel worker that performs
+        the reconstruction and downstream processing.
+
+        Args:
+            split_name: Name of the split (e.g. ``"train"``).
+
+        Yields:
+            Tuples ``(seed, n_samples_per_class_per_grg, target_proportions)``
+            in pseudobulk index order.
+        """
+        pbs_group = PseudobulkHDF5Schema.pseudobulks_group(split_name)
+        with h5py.File(self.path, "r") as f:
+            if pbs_group not in f:
+                raise KeyError(
+                    f"No pseudobulks found for split '{split_name}' at "
+                    f"'{pbs_group}' in {self.path}."
+                )
+            pbs = f[pbs_group]
+            keys = sorted(pbs.keys(), key=lambda k: int(k.split("_")[1]))
+            for key in keys:
+                grp = pbs[key]
+                seed = int(grp.attrs[PseudobulkHDF5Schema.ATTR_SEED])
+                n_samples_per_class_per_grg = grp[
+                    PseudobulkHDF5Schema.DATASET_N_READS_PER_GR
+                ][...]
+                target_proportions = grp[
+                    PseudobulkHDF5Schema.DATASET_TARGET_PROPORTIONS
+                ][...]
+                yield seed, n_samples_per_class_per_grg, target_proportions

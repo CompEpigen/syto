@@ -29,8 +29,6 @@ class XGBDeconvolverConfig:
     min_child_weight: int = 3
     reg_alpha: float = 0.1
     reg_lambda: float = 1.0
-    # useless but kept for backwards compatibility
-    early_stopping_rounds: Optional[int] = 20
     random_state: int = 42
 
 

@@ -24,6 +24,7 @@ from syto.classification.classifiers.abstract_read_classifier import (
     AbstractReadClassifier,
 )
 from syto.classification.evaluation import compute_metrics
+from syto.classification.mlflow_tracking import mlflow_tracked_fit
 
 _module_logger = logging.getLogger(__name__)
 
@@ -157,6 +158,7 @@ class CancerDetectorClassifier(AbstractReadClassifier):
         eps_beta_fit: float = 1e-2,
         class_prior_type: str = "uniform",
         val_data: pd.DataFrame = None,
+        **kwargs,
     ) -> "CancerDetectorClassifier":
         """Fit Beta distributions for every (marker, class) pair and compute
         class priors.
@@ -514,8 +516,10 @@ class CancerDetectorClassifier(AbstractReadClassifier):
             )
 
     @classmethod
-    def load(cls, path: str, **kwargs) -> "CancerDetectorClassifier":
-        """Load model parameters from a .pkl file.
+    def load(
+        cls, path: Union[str, None] = None, **kwargs
+    ) -> "CancerDetectorClassifier":
+        """Load model parameters from a .pkl file, or build a fresh instance if path is None.
 
         Args:
             path: Path to the .pkl file from which to load the model parameters.
@@ -523,6 +527,8 @@ class CancerDetectorClassifier(AbstractReadClassifier):
         Returns:
             An instance of ``CancerDetectorClassifier`` with the loaded parameters.
         """
+        if path is None:
+            return cls()
 
         file_extension = Path(path).suffix
 
@@ -577,13 +583,16 @@ class CancerDetectorClassifier(AbstractReadClassifier):
             split_df: Input DataFrame with read-level data.
             **kwargs: Additional keyword arguments. Can include:
                 - grg_label_column: Column name for the Genomic Region Group (GRG) label
+                - batch_size: If provided, the number of reads to process in each batch for prediction.
+                    If not provided, processes all reads at once.
+                -
         """
         if not self.is_fitted:
             raise ValueError(
                 "CancerDetectorClassifier must be fitted before prediction."
             )
 
-        if not "grg_label_column" in kwargs:
+        if "grg_label_column" not in kwargs:
             _module_logger.warning(
                 "grg_label_column not provided in kwargs. Defaulting to 'dmr_ctype_label'."
             )
@@ -591,17 +600,77 @@ class CancerDetectorClassifier(AbstractReadClassifier):
         else:
             grg_label_column = kwargs["grg_label_column"]
 
-        probabilities = self.predict_proba(
-            test_data=split_df,
-            col_n_meth_cpgs="M",
-            col_n_unmeth_cpgs="U",
-            col_marker_label=grg_label_column,
-            return_likelihoods=False,
-            verbose=False,
-        )
+        if "batch_size" in kwargs:
+            use_batches = True
+            batch_size = kwargs["batch_size"]
+        else:
+            use_batches = False
+            batch_size = 999_999_999  # effectively no batching
+
+        if "copy_input_df" in kwargs:
+            copy_input_df = kwargs["copy_input_df"]
+        else:
+            copy_input_df = True
+
+        if not use_batches:
+            probabilities = self.predict_proba(
+                test_data=split_df,
+                col_n_meth_cpgs="M",
+                col_n_unmeth_cpgs="U",
+                col_marker_label=grg_label_column,
+                return_likelihoods=False,
+                verbose=False,
+            )
+        else:
+            probabilities = []
+            _module_logger.info(
+                "Predicting with CancerDetectorClassifier in batches of size %d",
+                batch_size,
+            )
+            for start in tqdm(
+                range(0, len(split_df), batch_size),
+                desc="CancerDetector predicting batches",
+            ):
+                end = start + batch_size
+                batch_df = split_df.iloc[start:end]
+                batch_probabilities = self.predict_proba(
+                    test_data=batch_df,
+                    col_n_meth_cpgs="M",
+                    col_n_unmeth_cpgs="U",
+                    col_marker_label=grg_label_column,
+                    return_likelihoods=False,
+                    verbose=False,
+                )
+                probabilities.append(batch_probabilities)
+            _module_logger.info(
+                "Completed batch prediction with CancerDetectorClassifier. Concatenating results."
+            )
+            probabilities = np.vstack(probabilities)
+
+        if copy_input_df:
+            result = split_df.copy()
+        else:
+            _module_logger.warning(
+                "copy_input_df is False, modifying split_df in place to add prediction columns."
+            )
+            result = split_df
+
         pred_cols = [f"prediction_{i}" for i in range(self.n_classes)]
-        pred_df = pd.DataFrame(probabilities, columns=pred_cols)
-        result = split_df.copy()
-        for col in pred_cols:
-            result[col] = pred_df[col].values
+        for i, col in enumerate(pred_cols):
+            result[col] = probabilities[:, i]
         return result
+
+    @mlflow_tracked_fit
+    def fit_classificaton(
+        self,
+        train_df: pd.DataFrame,
+        val_df: Union[pd.DataFrame, None] = None,
+        output_dir: Union[str, Path, None] = None,
+        **kwargs,
+    ) -> "CancerDetectorClassifier":
+        """Fit the classifier on training data for compatibility with AbstractReadClassifier."""
+        self.fit(train_data=train_df, val_data=val_df, **kwargs)
+        if output_dir:
+            Path(output_dir).mkdir(parents=True, exist_ok=True)
+            self.save(Path(output_dir) / "cancer_detector.joblib")
+        return self

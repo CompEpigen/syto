@@ -354,8 +354,13 @@ class TestEpigenDnabert2TrainerBranches(unittest.TestCase):
         trainer_kwargs = mocked_trainer.call_args.kwargs
         self.assertIs(trainer_kwargs["model"], model.model)
         self.assertIs(trainer_kwargs["args"], args)
-        self.assertNotIn("preprocess_logits_for_metrics", trainer_kwargs)
-        self.assertNotIn("compute_metrics", trainer_kwargs)
+        self.assertIs(
+            trainer_kwargs["preprocess_logits_for_metrics"],
+            dnabert2_module.preprocess_logits_for_prediction,
+        )
+        self.assertIs(
+            trainer_kwargs["compute_metrics"], dnabert2_module.compute_metrics
+        )
 
     def test_predict_uses_explicit_batch_size_and_clears_cache_for_binary_model(self):
         """Test that explicit batch sizes override defaults and still clear caches."""
@@ -438,16 +443,10 @@ class TestEpigenDnabert2TrainerBranches(unittest.TestCase):
                 expected_eval_batch_size,
             )
 
-        if num_labels == 2:
-            self.assertIs(
-                trainer_kwargs["preprocess_logits_for_metrics"],
-                dnabert2_module.preprocess_logits_for_prediction,
-            )
-        else:
-            self.assertIs(
-                trainer_kwargs["preprocess_logits_for_metrics"],
-                dnabert2_module.keep_logits_only,
-            )
+        self.assertIs(
+            trainer_kwargs["preprocess_logits_for_metrics"],
+            dnabert2_module.preprocess_logits_for_prediction,
+        )
         self.assertIs(trainer_kwargs["compute_metrics"], None)
         mocked_collect.assert_not_called()
         mocked_empty_cache.assert_not_called()

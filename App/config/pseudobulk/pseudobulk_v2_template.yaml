@@ -10,8 +10,7 @@
 #   - Pure profile generation and uniform prior computation
 #
 # Usage:
-#   python App/main.py --task generate_pseudobulk_v2 \
-#       --config App/config/pseudobulk/pseudobulk_v2_template.yaml
+#   python App/main.py --task generate_pseudobulk --config App/config/pseudobulk/pseudobulk.yaml
 
 # ══════════════════════════════════════════════════════════════════════════════
 # INPUT CONFIGURATION
@@ -25,45 +24,49 @@
 #                       (skips directly to stage 4)
 input_type: pre_predicted
 
-
 # ══════════════════════════════════════════════════════════════════════════════
 # PER SPLIT INFORMATION
 # ══════════════════════════════════════════════════════════════════════════════
 split_information:
   train:
     # path to the parquet file with pre-predicted reads for this split (if input_type == "pre_predicted")
-    # data_path: Data/training_data/SoftLabelsTrainingData_205files_pooled_Jaccard_hg38_mincpg_4_minlen_10_no_data_leak_d041/train.parquet
-    data_path: Data/extended_proportions/pseudobulk_v2/cancer_detector_soft_labels_uniform/train_predicted.pkl
+    # data_path: ~/Data/Loyfer//SoftLabelsTrainingData_205files_pooled_Jaccard_hg38_mincpg_4_minlen_10_no_data_leak_d041/train.parquet
+    data_path: /mnt/data/syto_experiments/pseudobulk/soft_labels_with_pooling/pseudobulk/train_predicted.pkl
     # path to the target proportions npz file for this split
-    target_proportions_path: Data/extended_proportions/proportions/target_proportions_train.npz
+    target_proportions_path: /data/dmytro/Experiments/target_proportions_train.npz
   valid:
-    # data_path: Data/training_data/SoftLabelsTrainingData_205files_pooled_Jaccard_hg38_mincpg_4_minlen_10_no_data_leak_d041/valid.parquet
-    data_path: Data/extended_proportions/pseudobulk_v2/cancer_detector_soft_labels_uniform/valid_predicted.pkl
-    target_proportions_path: Data/extended_proportions/proportions/target_proportions_valid.npz
+    # data_path: ~/Data/Loyfer//SoftLabelsTrainingData_205files_pooled_Jaccard_hg38_mincpg_4_minlen_10_no_data_leak_d041/valid.parquet
+    data_path: /mnt/data/syto_experiments/pseudobulk/soft_labels_with_pooling/pseudobulk/valid_predicted.pkl
+    target_proportions_path: /data/dmytro/Experiments/target_proportions_valid.npz
   test:
-    # data_path: Data/training_data/SoftLabelsTrainingData_205files_pooled_Jaccard_hg38_mincpg_4_minlen_10_no_data_leak_d041/test.parquet
-    data_path: Data/extended_proportions/pseudobulk_v2/cancer_detector_soft_labels_uniform/test_predicted.pkl
-    target_proportions_path: Data/extended_proportions/proportions/target_proportions_test.npz
+    # data_path: ~/Data/Loyfer//SoftLabelsTrainingData_205files_pooled_Jaccard_hg38_mincpg_4_minlen_10_no_data_leak_d041/test.parquet
+    data_path: /mnt/data/syto_experiments/pseudobulk/soft_labels_with_pooling/pseudobulk/test_predicted.pkl
+    target_proportions_path:  /data/dmytro/Experiments/target_proportions_test.npz
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CLASSIFIER CONFIGURATION (for input_type == "raw_splits" or "uxm_prepared")
 # ══════════════════════════════════════════════════════════════════════════════
 
 # Supported classifiers: methylbert | dismir | cancer_detector
-classifier_type: cancer_detector
+classifier_type: dismir
 
 # Path to the trained classifier checkpoint
-classifier_checkpoint: output/cancer_detector/CD_trainlen=2910114_epsbetafit=0.01_prior=uniform.pkl
+# classifier_checkpoint: /data/dmytro/Experiments/cfsort_rrbs/Dismir_Loyfer_205files_U25_attentionClassifier_hg38_dmr_ctype_label_mincpg_4_minlen_10_postfiltered_min_length_50_soft_labels_NO_POOLING/weight.pt
+classifier_checkpoint: /home/luna.kuleuven.be/u0169940/Repos/syto/output/SoftLabelsTrainingData_205files_pooled_Jaccard_hg38_mincpg_4_minlen_10_no_data_leak_d041/weight.pt
+
 
 classifier_config:
   seq_length: 150
   soft_labels: true
+  num_labels: 39
   batch_size: 2200
+  classifier_head_implementation: grg_attention_based
+  num_grg_labels: 39
+  grg_label_column: dmr_ctype_label
   # MethylBERT-specific:
   # foundation_model: hanyangii/methylbert_hg19_12l
-  # classifier_head_implementation: dmr_attention_based
   # Dismir-specific:
-  # dismir_flavor: lstm
+  dismir_flavor: lstm
 
 # ══════════════════════════════════════════════════════════════════════════════
 # LABELS & REFERENCE DATA
@@ -77,6 +80,9 @@ num_labels: 39
 
 # Path to UXM atlas (for read preparation)
 # atlas_path: /path/to/Atlas.U25.l4.hg38.full.tsv
+atlas_path: /home/luna.kuleuven.be/u0169940/Repos/UXM_deconv/supplemental/Atlas.U25.l4.hg38.full.tsv
+atlas_name: Atlas.U25.l4.hg38.full
+ignore_cells: ["Megakaryocytes"]
 
 # Labeling scheme used (soft_labels, hard_labels, etc.) (for metadata purposes)
 labeling_scheme: soft_labels
@@ -115,10 +121,10 @@ substitution_method: uniform_number
 # ══════════════════════════════════════════════════════════════════════════════
 
 # Number of Dask workers for parallel pseudobulk generation
-n_workers: 8
+n_workers: 10
 
 # Number of pseudobulks to generate per batch (checkpoint granularity)
-batch_size: 100
+batch_size: 200
 
 # ══════════════════════════════════════════════════════════════════════════════
 # OUTPUT CONFIGURATION
@@ -130,4 +136,14 @@ batch_size: 100
 #       - checkpoints/
 #       - batches/
 #       - pseudobulk.h5 (final consolidated HDF5)
-output_dir: Data/extended_proportions/pseudobulk_v2/cancer_detector_soft_labels_uniform
+output_dir: /mnt/data/syto_experiments/pseudobulk/soft_labels_with_pooling/pseudobulk
+
+# ══════════════════════════════════════════════════════════════════════════════
+# [Optional] Setting n pseudobulks to sample
+# ══════════════════════════════════════════════════════════════════════════════
+
+# By default, the pseudobulk generator will resolve the number of pseudobulks from
+# the length of target proportions. 
+# One can use this setting to explicitely set how many pseudobulks to generate by 
+# sampling first n target proportions. 
+# n_pseudobulks_to_sample: 100000

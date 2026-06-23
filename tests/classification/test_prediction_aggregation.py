@@ -6,7 +6,6 @@ import pandas as pd
 from syto.classification.prediction_aggregation import (
     aggregate_chuncked_predictions_weighted,
     aggregate_predictions_by_grg,
-    aggregate_predictions_by_grg_optimized,
     get_final_prediction,
     fill_in_missing_gr_groups,
 )
@@ -29,8 +28,6 @@ def build_read_level_prediction_df() -> pd.DataFrame:
                 "methylated_CpGs": 1,
                 "unmethylated_CpGs": 1,
                 "ctype": "meta_a",
-                "label": 7,
-                "chromosome": "chr1",
             },
             {
                 "dmr_label": "dmr_a",
@@ -45,8 +42,6 @@ def build_read_level_prediction_df() -> pd.DataFrame:
                 "methylated_CpGs": 2,
                 "unmethylated_CpGs": 4,
                 "ctype": "meta_a",
-                "label": 7,
-                "chromosome": "chr1",
             },
             {
                 "dmr_label": "dmr_b",
@@ -61,8 +56,6 @@ def build_read_level_prediction_df() -> pd.DataFrame:
                 "methylated_CpGs": 1,
                 "unmethylated_CpGs": 0,
                 "ctype": "meta_b",
-                "label": 3,
-                "chromosome": "chr2",
             },
             {
                 "dmr_label": "dmr_b",
@@ -77,8 +70,6 @@ def build_read_level_prediction_df() -> pd.DataFrame:
                 "methylated_CpGs": 0,
                 "unmethylated_CpGs": 2,
                 "ctype": "meta_b",
-                "label": 3,
-                "chromosome": "chr2",
             },
         ]
     )
@@ -155,7 +146,10 @@ class TestAggregatePredictionsByDmr(PredictionAggregationDataFrameTestBase):
 
     def test_aggregate_predictions_by_grg_with_defaults(self):
         """Aggregate with inferred prediction columns and weights created from CpG counts."""
-        result = aggregate_predictions_by_grg(self.read_level_prediction_df)
+        result = aggregate_predictions_by_grg(
+            self.read_level_prediction_df,
+            group_cols=["dmr_label", "original_label", "dmr_ctype"],
+        )
 
         self.assertNotIn("index", result.columns)
         self.assertEqual(len(result), 2)
@@ -169,10 +163,7 @@ class TestAggregatePredictionsByDmr(PredictionAggregationDataFrameTestBase):
         self.assertAlmostEqual(dmr_a["methylation_level_wavg"], 0.375)
         self.assertAlmostEqual(dmr_a["total_weight"], 8.0)
         self.assertEqual(dmr_a["n_reads"], 2)
-        self.assertEqual(dmr_a["ctype"], "meta_a")
         self.assertEqual(dmr_a["dmr_ctype"], "ctype_a")
-        self.assertEqual(dmr_a["label"], 7)
-        self.assertEqual(dmr_a["chromosome"], "chr1")
 
         dmr_b = result[result["dmr_label"] == "dmr_b"].iloc[0]
         self.assertAlmostEqual(dmr_b["prediction_0_avg"], 0.6)
@@ -270,8 +261,6 @@ class TestAggregatePredictionsByDmr(PredictionAggregationDataFrameTestBase):
                 "methylation_level",
                 "methylated_CpGs",
                 "unmethylated_CpGs",
-                "label",
-                "chromosome",
             ],
         ]
 
@@ -294,8 +283,6 @@ class TestAggregatePredictionsByDmr(PredictionAggregationDataFrameTestBase):
         self.assertAlmostEqual(existing_row["methylation_level_wavg"], 0.375)
         self.assertEqual(existing_row["n_reads"], 2)
         self.assertAlmostEqual(existing_row["total_weight"], 8.0)
-        self.assertEqual(existing_row["label"], 7)
-        self.assertEqual(existing_row["chromosome"], "chr1")
 
         missing_row = result[result["dmr_ctype_label"] == 1].iloc[0]
         self.assertEqual(missing_row["dmr_ctype"], "ctype_b")
@@ -304,9 +291,6 @@ class TestAggregatePredictionsByDmr(PredictionAggregationDataFrameTestBase):
         self.assertEqual(missing_row["prediction_0_wavg"], 0.5)
         self.assertEqual(missing_row["prediction_1_wavg"], 0.5)
         self.assertEqual(missing_row["n_reads"], 0)
-        self.assertEqual(missing_row["label"], -1)
-        self.assertEqual(missing_row["chromosome"], 0)
-        # self.assertEqual(missing_row["total_weight"], ???)
 
     def test_aggregate_predictions_by_grg_keeps_original_rows_when_no_labels_are_missing(
         self,
@@ -335,73 +319,6 @@ class TestAggregatePredictionsByDmr(PredictionAggregationDataFrameTestBase):
         self.assertEqual(len(result), 1)
         self.assertEqual(result.iloc[0]["dmr_ctype_label"], 0)
         self.assertEqual(result.iloc[0]["dmr_ctype"], "ctype_a")
-
-
-class TestAggregatePredictionsByDmrOptimized(PredictionAggregationDataFrameTestBase):
-    """Validate the vectorized aggregation implementation and its error path."""
-
-    def test_aggregate_predictions_by_grg_optimized_matches_expected_weighted_outputs(
-        self,
-    ):
-        """Compute weighted averages, counts, and metadata with the optimized code path."""
-        result = aggregate_predictions_by_grg_optimized(
-            self.read_level_prediction_df,
-            group_cols=["dmr_label", "file", "original_label"],
-        )
-
-        dmr_a = result[result["dmr_label"] == "dmr_a"].iloc[0]
-        self.assertAlmostEqual(dmr_a["prediction_0_wavg"], 0.5)
-        self.assertAlmostEqual(dmr_a["prediction_1_wavg"], 0.5)
-        self.assertAlmostEqual(dmr_a["methylation_level_wavg"], 0.375)
-        self.assertEqual(dmr_a["n_reads"], 2)
-        self.assertAlmostEqual(dmr_a["total_weight"], 8.0)
-        self.assertEqual(dmr_a["label"], 7)
-        self.assertEqual(dmr_a["chromosome"], "chr1")
-
-        dmr_b = result[result["dmr_label"] == "dmr_b"].iloc[0]
-        self.assertAlmostEqual(dmr_b["prediction_0_wavg"], 0.5)
-        self.assertAlmostEqual(dmr_b["prediction_1_wavg"], 0.5)
-        self.assertAlmostEqual(dmr_b["methylation_level_wavg"], 11 / 30)
-        self.assertEqual(dmr_b["total_weight"], 3)
-        self.assertEqual(dmr_b["n_reads"], 2)
-
-    def test_aggregate_predictions_by_grg_optimized_handles_zero_sum_weights_after_float_cast(
-        self,
-    ):
-        """Use clipped float weights so the optimized path also returns valid averages."""
-        result = aggregate_predictions_by_grg_optimized(
-            self.zero_weight_prediction_df,
-            group_cols=["dmr_label", "file", "original_label"],
-        )
-
-        row = result.iloc[0]
-        # As in the non-optimized path, equal fallback weights reduce the weighted
-        # averages to the same values as the simple per-group means.
-        self.assertAlmostEqual(row["prediction_0_wavg"], 0.6)
-        self.assertAlmostEqual(row["prediction_1_wavg"], 0.4)
-        self.assertAlmostEqual(row["methylation_level_wavg"], 0.5)
-        self.assertEqual(row["total_weight"], 0)
-        self.assertEqual(row["n_reads"], 2)
-
-    def test_aggregate_predictions_by_grg_optimized_raises_when_weight_is_missing(self):
-        """Raise a clear error when no usable weight information exists."""
-        df = pd.DataFrame(
-            [
-                {
-                    "group": "g1",
-                    "prediction_0": 0.2,
-                    "prediction_1": 0.8,
-                    "methylation_level": 0.5,
-                }
-            ]
-        )
-
-        with self.assertRaises(ValueError) as context:
-            aggregate_predictions_by_grg_optimized(df, group_cols=["group"])
-
-        self.assertIn(
-            "Weight column 'total_marked_cpgs' not found", str(context.exception)
-        )
 
 
 class TestAggregateChunkedPredictionsWeighted(unittest.TestCase):
@@ -561,8 +478,6 @@ def _build_aggregated_with_missing_label() -> tuple:
                 "prediction_1": 0.2,
                 "methylation_level": 0.6,
                 "total_weight": 5.0,
-                "label": 0,
-                "chromosome": "chr1",
             },
             {
                 "dmr_ctype_label": 0,
@@ -571,8 +486,6 @@ def _build_aggregated_with_missing_label() -> tuple:
                 "prediction_1": 0.3,
                 "methylation_level": 0.6,
                 "total_weight": 5.0,
-                "label": 0,
-                "chromosome": "chr1",
             },
         ]
     )
@@ -740,119 +653,6 @@ class TestSubstitutionStrategyValidation(unittest.TestCase):
                 uniform_prior=None,
             )
         self.assertIn("uniform_prior must be provided", str(ctx.exception))
-
-
-class TestComputeUniformPriorMatrix(unittest.TestCase):
-    """Test the compute_uniform_prior_matrix utility from pure_profile_generation."""
-
-    def _make_mock_pure_profiles(self):
-        """Build minimal mock pure profiles: 2 cell types, 2 prediction columns."""
-        from syto.data.pure_profile_generation import compute_uniform_prior_matrix
-
-        # Cell type 0: predictions [0.8, 0.2] for both DMR rows
-        subs_0 = {
-            "train": pd.DataFrame(
-                [
-                    {
-                        "dmr_ctype_label": 0,
-                        "dmr_ctype": "ctype_a",
-                        "prediction_0_wavg": 0.8,
-                        "prediction_1_wavg": 0.2,
-                        "methylation_level_wavg": 0.7,
-                    },
-                    {
-                        "dmr_ctype_label": 1,
-                        "dmr_ctype": "ctype_b",
-                        "prediction_0_wavg": 0.6,
-                        "prediction_1_wavg": 0.4,
-                        "methylation_level_wavg": 0.5,
-                    },
-                ]
-            )
-        }
-        profile_0 = (np.array([1.0, 0.0]), subs_0, None)
-
-        # Cell type 1: predictions [0.2, 0.8] for both DMR rows
-        subs_1 = {
-            "train": pd.DataFrame(
-                [
-                    {
-                        "dmr_ctype_label": 0,
-                        "dmr_ctype": "ctype_a",
-                        "prediction_0_wavg": 0.4,
-                        "prediction_1_wavg": 0.6,
-                        "methylation_level_wavg": 0.3,
-                    },
-                    {
-                        "dmr_ctype_label": 1,
-                        "dmr_ctype": "ctype_b",
-                        "prediction_0_wavg": 0.2,
-                        "prediction_1_wavg": 0.8,
-                        "methylation_level_wavg": 0.1,
-                    },
-                ]
-            )
-        }
-        profile_1 = (np.array([0.0, 1.0]), subs_1, None)
-
-        return [profile_0, profile_1]
-
-    def test_averaging_across_profiles(self):
-        from syto.data.pure_profile_generation import compute_uniform_prior_matrix
-
-        profiles = self._make_mock_pure_profiles()
-        prior = compute_uniform_prior_matrix(
-            profiles, split_key="train", num_input_labels=2
-        )
-
-        self.assertEqual(len(prior), 2)
-
-        row_a = prior[prior["dmr_ctype_label"] == 0].iloc[0]
-        # Average of 0.8 and 0.4
-        self.assertAlmostEqual(row_a["prediction_0_wavg"], 0.6)
-        # Average of 0.2 and 0.6
-        self.assertAlmostEqual(row_a["prediction_1_wavg"], 0.4)
-        # Average of 0.7 and 0.3
-        self.assertAlmostEqual(row_a["methylation_level_wavg"], 0.5)
-
-        row_b = prior[prior["dmr_ctype_label"] == 1].iloc[0]
-        # Average of 0.6 and 0.2
-        self.assertAlmostEqual(row_b["prediction_0_wavg"], 0.4)
-        # Average of 0.4 and 0.8
-        self.assertAlmostEqual(row_b["prediction_1_wavg"], 0.6)
-
-    def test_save_load_roundtrip(self):
-        import tempfile
-        from syto.data.pure_profile_generation import (
-            compute_uniform_prior_matrix,
-            save_uniform_prior,
-            load_uniform_prior,
-        )
-
-        profiles = self._make_mock_pure_profiles()
-        prior = compute_uniform_prior_matrix(
-            profiles, split_key="train", num_input_labels=2
-        )
-
-        with tempfile.NamedTemporaryFile(suffix=".npz", delete=False) as f:
-            path = f.name
-
-        save_uniform_prior(prior, path)
-        loaded = load_uniform_prior(path)
-
-        pd.testing.assert_frame_equal(
-            prior.reset_index(drop=True),
-            loaded.reset_index(drop=True),
-            check_dtype=False,
-        )
-
-    def test_all_none_profiles_raises(self):
-        from syto.data.pure_profile_generation import compute_uniform_prior_matrix
-
-        with self.assertRaises(ValueError):
-            compute_uniform_prior_matrix(
-                [None, None], split_key="train", num_input_labels=2
-            )
 
 
 class TestFillInMissingGrGroups(unittest.TestCase):

@@ -5,7 +5,6 @@ import torch
 from syto.classification.evaluation import (
     calculate_metric_with_sklearn,
     preprocess_logits_for_prediction,
-    keep_logits_only,
     compute_metrics,
     compute_metrics_soft_labels,
     make_compute_metrics,
@@ -64,16 +63,8 @@ class TestCalculateMetricWithSklearn(unittest.TestCase):
 class TestPreprocessLogitsForPrediction(unittest.TestCase):
     """Test suite for preprocess_logits_for_prediction."""
 
-    def test_binary_returns_sigmoid(self):
-        """2-class logits should return sigmoid probabilities."""
-        logits = torch.tensor([[2.0, -1.0], [0.0, 3.0]])
-        result = preprocess_logits_for_prediction(logits, None)
-        # Should be sigmoid of logits
-        expected = torch.sigmoid(logits)
-        self.assertTrue(torch.allclose(result, expected))
-
     def test_multiclass_returns_softmax(self):
-        """Multi-class (>2) logits should return softmax probabilities."""
+        """Multi-class (>=2) logits should return softmax probabilities."""
         logits = torch.randn(3, 5)
         result = preprocess_logits_for_prediction(logits, None)
         expected = torch.softmax(logits, dim=-1)
@@ -95,23 +86,6 @@ class TestPreprocessLogitsForPrediction(unittest.TestCase):
         result = preprocess_logits_for_prediction((logits, extra), None)
         expected = torch.softmax(logits, dim=-1)
         self.assertTrue(torch.allclose(result, expected))
-
-
-class TestKeepLogitsOnly(unittest.TestCase):
-    """Test suite for keep_logits_only."""
-
-    def test_tuple_input_returns_first_element(self):
-        """Tuple input should return only the first element (logits)."""
-        logits = torch.randn(3, 5)
-        extra = torch.randn(3, 5)
-        result = keep_logits_only((logits, extra), labels=None)
-        self.assertTrue(torch.equal(result, logits))
-
-    def test_tensor_input_passes_through(self):
-        """Plain tensor input should pass through unchanged."""
-        logits = torch.randn(3, 5)
-        result = keep_logits_only(logits, labels=None)
-        self.assertTrue(torch.equal(result, logits))
 
 
 class TestComputeMetrics(unittest.TestCase):

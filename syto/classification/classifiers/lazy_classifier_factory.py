@@ -15,6 +15,7 @@ _CLF_REGISTRY = {
     "dismir": "syto.classification.classifiers.dismir:Dismir",
     "lookup": "syto.classification.classifiers.lookup:LookupClassifier",
     "cancer_detector": "syto.classification.classifiers.cancer_detector:CancerDetectorClassifier",
+    "epigenbert2": "syto.classification.classifiers.dnabert2:EpigenDnabert2",
 }
 
 
@@ -31,7 +32,8 @@ for _key, _entry in _CLF_REGISTRY.items():
 
 def read_classifier_factory(name: str, path: str, **kwargs) -> AbstractReadClassifier:
     """
-    Factory function to load a read classifier from a checkpoint.
+    Factory function to load a read classifier from a checkpoint or initiate a fresh
+    instance, in case the path is not provided (delegated to implementation level).
 
     Args:
         name: Identifier for the classifier type (e.g. "methylbert").

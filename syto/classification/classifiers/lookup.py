@@ -33,6 +33,7 @@ from syto.data.omics_signatures_handlers.binary_cpg_signature import (
 from syto.classification.classifiers.abstract_read_classifier import (
     AbstractReadClassifier,
 )
+from syto.classification.mlflow_tracking import mlflow_tracked_fit
 
 _module_logger = logging.getLogger(__name__)
 
@@ -60,10 +61,6 @@ class LabelConfig:
     def from_dict(cls, d: dict) -> "LabelConfig":
         # pylint: disable=no-member
         return cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
-
-
-# Backward-compatible alias
-SoftLabelConfig = LabelConfig
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -115,6 +112,7 @@ class LookupClassifier(AbstractReadClassifier):
         df: pd.DataFrame,
         val_data: Optional[pd.DataFrame] = None,
         compute_train_metrics: bool = True,
+        **kwargs,
     ) -> "LookupClassifier":
         """Build the soft-label lookup table from a single DataFrame.
 
@@ -309,8 +307,18 @@ class LookupClassifier(AbstractReadClassifier):
         _module_logger.info("Saved LookupClassifier to %s", path)
 
     @classmethod
-    def load(cls, path: Union[str, Path], **kwargs) -> "LookupClassifier":
-        """Load a previously saved classifier."""
+    def load(cls, path: Union[str, Path, None] = None, **kwargs) -> "LookupClassifier":
+        """Load a previously saved classifier, or build a fresh instance if path is None.
+
+        When ``path`` is None, ``kwargs`` are interpreted as :class:`LabelConfig`
+        fields (``num_classes``, ``label_col``, ``label_mode``, ``min_reads``,
+        ``max_distance``) via :meth:`LabelConfig.from_dict`. Unrecognized keys
+        (e.g. shared classifier-factory kwargs such as ``num_labels`` or
+        ``seq_length``) are silently ignored.
+        """
+        if path is None:
+            return cls(LabelConfig.from_dict(kwargs))
+
         path = Path(path)
         file_extension = path.suffix.lower()
 
@@ -397,6 +405,23 @@ class LookupClassifier(AbstractReadClassifier):
         if cfg.label_col != "original_label":
             reads_df["original_label"] = reads_df[cfg.label_col]
         reads_df["original_label"] = reads_df["original_label"].astype(np.int32)
+
+        # Drop columns that DataDrivenSoftLabeler.compute_labels itself produces,
+        # so its merge back onto reads_df doesn't collide with same-named columns
+        # already present in df (e.g. a "soft_label" from a previous labeling pass).
+        labeler_output_cols = {
+            "signature",
+            "total_reads",
+            "raw_counts_pooled",
+            "num_signatures_pooled",
+            "soft_label",
+            *(f"raw_counts_{c}" for c in range(cfg.num_classes)),
+            *(f"pooled_counts_{c}" for c in range(cfg.num_classes)),
+            *(f"weighted_counts_{c}" for c in range(cfg.num_classes)),
+        }
+        reads_df = reads_df.drop(
+            columns=[c for c in labeler_output_cols if c in reads_df.columns]
+        )
 
         labeler = DataDrivenSoftLabeler(
             distance_name="jaccard",
@@ -556,3 +581,18 @@ class LookupClassifier(AbstractReadClassifier):
     def predict_split(self, split_df: pd.DataFrame, **kwargs) -> pd.DataFrame:
         """Predict method for compatibility with AbstractReadClassifier interface."""
         return self.predict(split_df)
+
+    @mlflow_tracked_fit
+    def fit_classificaton(
+        self,
+        train_df: pd.DataFrame,
+        val_df: Union[pd.DataFrame, None] = None,
+        output_dir: Union[str, Path, None] = None,
+        **kwargs,
+    ) -> "LookupClassifier":
+        """Fit the classifier on training data for compatibility with AbstractReadClassifier."""
+        self.fit(df=train_df, val_data=val_df, **kwargs)
+        if output_dir:
+            Path(output_dir).mkdir(parents=True, exist_ok=True)
+            self.save(Path(output_dir) / "lookup_classifier.joblib")
+        return self

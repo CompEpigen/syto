@@ -20,21 +20,21 @@ from syto.classification.prediction_aggregation import (
     aggregate_by_grg_from_np_arrays,
     fill_in_missing_gr_groups,
 )
-from syto.data.hdf5_utils import (
+from syto.data.pseudobulk_hdf5_utils import (
     PseudobulkResult,
     PureProfileResult,
     GenerationMetadata,
     GenerationParameters,
     CheckpointManager,
-    HDF5BatchWriter,
-    HDF5ConsolidationWriter,
+    PseudobulkHDF5BatchWriter,
+    PseudobulkHDF5ConsolidationWriter,
 )
 
 _module_logger = logging.getLogger(__name__)
 
 
 def build_target_columns(num_prediction_classes: int = 39) -> List[str]:
-    """Build the default list of target columns for GR-aggregated output.
+    """Build the default list of target columns for GRG-aggregated output.
 
     Args:
         num_prediction_classes: Number of classifier output classes.
@@ -44,7 +44,7 @@ def build_target_columns(num_prediction_classes: int = 39) -> List[str]:
     """
     cols = ["dmr_ctype_label", "dmr_ctype"]
     cols += [f"prediction_{i}_wavg" for i in range(num_prediction_classes)]
-    cols += ["methylation_level_wavg", "total_weight", "n_reads", "chromosome", "label"]
+    cols += ["methylation_level_wavg", "total_weight", "n_reads"]
     return cols
 
 
@@ -125,7 +125,7 @@ class PseudobulkGenerator:
     """Class for generating pseudobulk samples from read-level predictions.
 
     This class orchestrates the generation of pseudobulk samples across multiple
-    data splits (train/valid/test), with crash-resilient checkpointing and
+    data splits (eg. train/valid/test), with crash-resilient checkpointing and
     parallel execution using Dask.
 
     Attributes:
@@ -200,6 +200,11 @@ class PseudobulkGenerator:
 
         # Initialize checkpoint manager
         self.checkpoint_manager = CheckpointManager(self.output_directory, self.logger)
+        # Pre-heating checkpoints for target splits
+        for split_name, proportions in self.target_proportions_per_split.items():
+            _ = self.checkpoint_manager.create_split_checkpoint(
+                split_name, len(proportions), batch_size
+            )
 
         # Pre-compute indices and numpy arrays for each split
         self._precompute_group_indices()
@@ -338,18 +343,15 @@ class PseudobulkGenerator:
 
         # Generate pseudobulk for each split
         for split_name in config.splits_order:
-            if split_name in config.splits_completed:
-                self.logger.info("Skipping completed split: %s", split_name)
-                # Pure profiles are not persisted to intermediate batch files, so
-                # regenerate them here to make them available for consolidation.
-                pure_profiles[split_name] = self._generate_pure_profiles(split_name)
-                continue
-
             self.logger.info("Generating pseudobulk for split: %s", split_name)
 
             # Generate pure profiles for this split
             pure_profile = self._generate_pure_profiles(split_name)
             pure_profiles[split_name] = pure_profile
+
+            if split_name in config.splits_completed:
+                self.logger.info("Skipping completed split: %s", split_name)
+                continue
 
             # Generate pseudobulks for this split
             self._generate_single_split(
@@ -363,7 +365,7 @@ class PseudobulkGenerator:
         # Consolidate all batches into final HDF5
         self.logger.info("Consolidating batches into final HDF5...")
         output_path = self.output_directory / "pseudobulk.h5"
-        consolidator = HDF5ConsolidationWriter(output_path, self.logger)
+        consolidator = PseudobulkHDF5ConsolidationWriter(output_path, self.logger)
         final_path = consolidator.consolidate(
             checkpoint_manager=self.checkpoint_manager,
             metadata=self.metadata,
@@ -398,10 +400,6 @@ class PseudobulkGenerator:
 
         # Check for existing checkpoint or create new one
         checkpoint = self.checkpoint_manager.load_split_checkpoint(split_name)
-        if checkpoint is None:
-            checkpoint = self.checkpoint_manager.create_split_checkpoint(
-                split_name, n_pseudobulks, self.batch_size
-            )
 
         # Get missing batches
         missing_batches = self.checkpoint_manager.get_missing_batches(split_name)
@@ -418,7 +416,7 @@ class PseudobulkGenerator:
 
         # Initialize batch writer
         batches_dir = self.checkpoint_manager.get_split_batches_dir(split_name)
-        batch_writer = HDF5BatchWriter(batches_dir, self.logger)
+        batch_writer = PseudobulkHDF5BatchWriter(batches_dir, self.logger)
 
         # Get pre-computed indices for this split
         indices_dict = self._indices_per_split[split_name]
@@ -679,9 +677,9 @@ class PseudobulkGenerator:
                 )
 
         # compute actual proportions after adjustment
-        n_reads_really_sampled = n_samples_per_class_per_grg.sum()
+        n_reads_sampled = n_samples_per_class_per_grg.sum()
         actual_proportions = (
-            n_samples_per_class_per_grg.sum(axis=1) / n_reads_really_sampled
+            n_samples_per_class_per_grg.sum(axis=1) / n_reads_sampled
         )  # shape (n_classes,)
         seed = np.random.randint(0, 2**31 - 1)
 
@@ -690,7 +688,7 @@ class PseudobulkGenerator:
             n_samples_per_class_per_grg,
             indices_per_class_and_grg,
             seed=seed,
-        )  # shape (n_reads_really_sampled,)
+        )  # shape (n_reads_sampled,)
 
         # Aggregate directly from pre-extracted numpy arrays (no DataFrame slicing)
         weighted_avgs, counts, total_weights = aggregate_by_grg_from_np_arrays(
@@ -747,7 +745,7 @@ class PseudobulkGenerator:
             index=index,
             target_proportions=target_proportions,
             actual_proportions=actual_proportions,
-            n_reads_really_sampled=n_reads_really_sampled,
+            n_reads_sampled=n_reads_sampled,
             n_samples_per_class_per_grg=n_samples_per_class_per_grg,
             seed=seed,
             aggregated_features=aggregated_features,
