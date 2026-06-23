@@ -30,7 +30,7 @@ def save_config(config: dict, path: str) -> None:
 
 def default_save_path(task: str) -> str:
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return f"App/config/rrbs/{task}_{stamp}.yaml"
+    return f"App/config/{task}_{stamp}.yaml"
 
 
 def print_run_command(task: str, path: str) -> None:
