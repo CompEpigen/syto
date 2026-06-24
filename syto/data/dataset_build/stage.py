@@ -33,7 +33,9 @@ def stage_file(csv_path, atlas, region_index, labels_dict, staged_dir, counts_di
                *, sep="\t", cell_type_match_dict=None):
     """Read one CSV, stage it, and write per-bucket parquet + counts sidecar."""
     sample = Path(csv_path).stem
-    df = pd.read_csv(csv_path, sep=sep)
+    # Sequence / methylation patterns are numeric-looking strings (e.g.
+    # "0101..." or "2222...") and must not be type-inferred to int/float.
+    df = pd.read_csv(csv_path, sep=sep, dtype={"original_seq": str, "methyl_seq": str})
     n_in = len(df)
     staged, counts = stage_dataframe(
         df, atlas, region_index, labels_dict, sample,

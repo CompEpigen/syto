@@ -47,6 +47,9 @@ def finalize_bucket(staged_dir, bucket, out_dir, split_plan, *,
     # pyarrow cannot serialize it, so drop before writing.
     df = df.drop(columns=["signature"], errors="ignore")
     df = df.sort_values("name").reset_index(drop=True)
+    # Re-attach the partition key as a column (staging dropped it before writing
+    # shards) so consumers reading individual part files still see it.
+    df["region_bucket"] = bucket
 
     out_bucket = Path(out_dir) / f"region_bucket={bucket}"
     out_bucket.mkdir(parents=True, exist_ok=True)
