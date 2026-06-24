@@ -201,6 +201,15 @@ def run_pseudobulk_deconvolution(
     pipeline.run()
 
 
+def run_build_dataset(config: Dict[str, Any], logger: logging.Logger) -> None:
+    """Run the recovered-reads dataset build pipeline."""
+    from App.dataset_build_pipeline import DatasetBuildPipeline
+
+    logger.info("Starting recovered-reads dataset build pipeline")
+    summary = DatasetBuildPipeline(config=config, logger=logger).run()
+    logger.info("Dataset build summary: %s", summary)
+
+
 def run_confidence_intervals(config: Dict[str, Any], logger: logging.Logger) -> None:
     """Recompute metrics with bootstrap confidence intervals."""
     from conf_interval_pipeline import ConfidenceIntervalPipeline
@@ -241,6 +250,7 @@ Examples:
             "fit_calibration",
             "confidence_intervals",
             "deconvolute_pseudobulk",
+            "build_dataset",
         ],
         required=True,
         help="Task to perform",
@@ -396,6 +406,8 @@ Examples:
             run_confidence_intervals(config, logger)
         elif args.task == "deconvolute_pseudobulk":
             run_pseudobulk_deconvolution(config, logger)
+        elif args.task == "build_dataset":
+            run_build_dataset(config, logger)
 
         logger.info("Task completed successfully")
         return 0
