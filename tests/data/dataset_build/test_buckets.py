@@ -4,12 +4,14 @@ from syto.data.dataset_build.buckets import build_region_index, assign_region_bu
 
 
 def _atlas(n):
-    return pd.DataFrame({
-        "chr": ["chr1"] * n,
-        "start": list(range(100, 100 + 10 * n, 10)),
-        "end": list(range(105, 105 + 10 * n, 10)),
-        "name": [f"chr1:{100 + 10 * i}-{105 + 10 * i}" for i in range(n)],
-    })
+    return pd.DataFrame(
+        {
+            "chr": ["chr1"] * n,
+            "start": list(range(100, 100 + 10 * n, 10)),
+            "end": list(range(105, 105 + 10 * n, 10)),
+            "name": [f"chr1:{100 + 10 * i}-{105 + 10 * i}" for i in range(n)],
+        }
+    )
 
 
 class TestBuildRegionIndex(unittest.TestCase):
@@ -34,7 +36,9 @@ class TestBuildRegionIndex(unittest.TestCase):
 class TestAssignRegionBucket(unittest.TestCase):
     def test_join_and_drop_unknown(self):
         idx = build_region_index(_atlas(4), n_buckets=2)
-        reads = pd.DataFrame({"name": ["chr1:100-105", "chr1:130-135", "UNKNOWN"], "x": [1, 2, 3]})
+        reads = pd.DataFrame(
+            {"name": ["chr1:100-105", "chr1:130-135", "UNKNOWN"], "x": [1, 2, 3]}
+        )
         out = assign_region_bucket(reads, idx)
         self.assertEqual(len(out), 2)
         self.assertIn("region_bucket", out.columns)

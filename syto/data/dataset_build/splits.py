@@ -1,4 +1,5 @@
 """ """
+
 import numpy as np
 import pandas as pd
 
@@ -21,9 +22,11 @@ def plan_splits(counts, *, train_ratio=0.7, valid_ratio=0.15, test_ratio=0.15, s
         total = sum(fc.values())
 
         if n_files >= 3:
-            targets = {"train": total * train_ratio,
-                       "valid": total * valid_ratio,
-                       "test": total * test_ratio}
+            targets = {
+                "train": total * train_ratio,
+                "valid": total * valid_ratio,
+                "test": total * test_ratio,
+            }
             current = {"train": 0, "valid": 0, "test": 0}
             allocations = {"train": [], "valid": [], "test": []}
             for i, f in enumerate(files_sorted):
@@ -49,8 +52,11 @@ def plan_splits(counts, *, train_ratio=0.7, valid_ratio=0.15, test_ratio=0.15, s
             }
         else:
             read_level[(label, files_sorted[0])] = {
-                "seed": seed, "train_ratio": train_ratio,
-                "valid_ratio": valid_ratio / (valid_ratio + test_ratio) * (1 - train_ratio),
+                "seed": seed,
+                "train_ratio": train_ratio,
+                "valid_ratio": valid_ratio
+                / (valid_ratio + test_ratio)
+                * (1 - train_ratio),
             }
 
     return {"file_level": file_level, "read_level": read_level}
@@ -76,7 +82,7 @@ def apply_splits(df, plan):
         n_valid = int(round(cfg["valid_ratio"] * n))
         assign = np.array(["test"] * n, dtype=object)
         assign[order[:n_train]] = "train"
-        assign[order[n_train:n_train + n_valid]] = "valid"
+        assign[order[n_train : n_train + n_valid]] = "valid"
         df.loc[idx, "split"] = assign
 
     return df

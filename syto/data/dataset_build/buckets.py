@@ -1,4 +1,5 @@
 """ """
+
 import numpy as np
 import pandas as pd
 
@@ -14,9 +15,13 @@ def build_region_index(atlas_df: pd.DataFrame, n_buckets: int) -> pd.DataFrame:
     ordered = atlas_df.sort_values(["chr", "start", "end"]).reset_index(drop=True)
     n = len(ordered)
     if n == 0:
-        return pd.DataFrame({"name": pd.Series(dtype=str), "region_bucket": pd.Series(dtype=int)})
+        return pd.DataFrame(
+            {"name": pd.Series(dtype=str), "region_bucket": pd.Series(dtype=int)}
+        )
     buckets = np.minimum((np.arange(n) * n_buckets) // n, n_buckets - 1)
-    return pd.DataFrame({"name": ordered["name"].to_numpy(), "region_bucket": buckets.astype(int)})
+    return pd.DataFrame(
+        {"name": ordered["name"].to_numpy(), "region_bucket": buckets.astype(int)}
+    )
 
 
 def assign_region_bucket(df: pd.DataFrame, region_index: pd.DataFrame) -> pd.DataFrame:

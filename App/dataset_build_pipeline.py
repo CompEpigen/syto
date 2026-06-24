@@ -4,6 +4,7 @@ Two phases:
   stage    -- per-file overlap+trim+label+bucket (parallel by file)
   finalize -- per-bucket soft/hard labels + split + compaction
 """
+
 import json
 import logging
 from concurrent.futures import ProcessPoolExecutor
@@ -34,7 +35,8 @@ class DatasetBuildPipeline:
 
     def _atlas(self):
         return UXMMethylationAtlas(
-            atlas_name="build", reference_genome=self.config["reference_genome"],
+            atlas_name="build",
+            reference_genome=self.config["reference_genome"],
             atlas_path=self.config["atlas_path"],
         )
 
@@ -63,16 +65,21 @@ class DatasetBuildPipeline:
 
         def _work(path):
             return stage_file(
-                str(path), self._atlas(), region_index, labels_dict,
-                str(self.staged_dir), str(self.counts_dir),
-                sep=self.config.get("sep", "\t"), cell_type_match_dict=cell_match,
+                str(path),
+                self._atlas(),
+                region_index,
+                labels_dict,
+                str(self.staged_dir),
+                str(self.counts_dir),
+                sep=self.config.get("sep", "\t"),
+                cell_type_match_dict=cell_match,
             )
 
         if n_workers > 1:
             with ProcessPoolExecutor(max_workers=n_workers) as ex:
-                stats = list(tqdm(
-                    ex.map(_work, csvs), total=len(csvs), desc="Staging files"
-                ))
+                stats = list(
+                    tqdm(ex.map(_work, csvs), total=len(csvs), desc="Staging files")
+                )
         else:
             stats = [_work(p) for p in tqdm(csvs, desc="Staging files")]
 
@@ -98,11 +105,16 @@ class DatasetBuildPipeline:
         )
         written = []
         for b in tqdm(buckets, desc="Finalizing buckets"):
-            written.append(finalize_bucket(
-                str(self.staged_dir), b, str(self.final_dir), plan,
-                num_classes=num_classes,
-                max_distance=self.config.get("max_distance", 0.5),
-                min_reads=self.config.get("min_reads", 30),
-            ))
+            written.append(
+                finalize_bucket(
+                    str(self.staged_dir),
+                    b,
+                    str(self.final_dir),
+                    plan,
+                    num_classes=num_classes,
+                    max_distance=self.config.get("max_distance", 0.5),
+                    min_reads=self.config.get("min_reads", 30),
+                )
+            )
         self.logger.info("Finalized %d buckets", len(written))
         return {"buckets": len(written), "paths": written}

@@ -1,20 +1,25 @@
 import unittest
 import pandas as pd
-from syto.data.dataset_build.schema import adapt_recovered_reads, RECOVERED_READS_REQUIRED
+from syto.data.dataset_build.schema import (
+    adapt_recovered_reads,
+    RECOVERED_READS_REQUIRED,
+)
 
 LABELS = {"0": "Adipocytes", "1": "Endothel"}
 
 
 class TestAdaptRecoveredReads(unittest.TestCase):
     def setUp(self):
-        self.df = pd.DataFrame({
-            "ref_name": ["chr1", "chr1"],
-            "ref_pos": [1000, 2000],
-            "original_seq": ["ACGTACG", "ACG"],
-            "methyl_seq": ["2210122", "210"],
-            "ctype": ["Adipocytes", "UnknownType"],
-            "dmr_label": [0, 1],  # extra column, ignored
-        })
+        self.df = pd.DataFrame(
+            {
+                "ref_name": ["chr1", "chr1"],
+                "ref_pos": [1000, 2000],
+                "original_seq": ["ACGTACG", "ACG"],
+                "methyl_seq": ["2210122", "210"],
+                "ctype": ["Adipocytes", "UnknownType"],
+                "dmr_label": [0, 1],  # extra column, ignored
+            }
+        )
 
     def test_renames_and_derives_columns(self):
         out = adapt_recovered_reads(self.df, LABELS)
