@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 import pandas as pd
+from tqdm import tqdm
 
 from syto.data.atlases.uxm_atlases import UXMMethylationAtlas
 from syto.data.dataset_build.buckets import build_region_index
@@ -69,9 +70,11 @@ class DatasetBuildPipeline:
 
         if n_workers > 1:
             with ProcessPoolExecutor(max_workers=n_workers) as ex:
-                stats = list(ex.map(_work, csvs))
+                stats = list(tqdm(
+                    ex.map(_work, csvs), total=len(csvs), desc="Staging files"
+                ))
         else:
-            stats = [_work(p) for p in csvs]
+            stats = [_work(p) for p in tqdm(csvs, desc="Staging files")]
 
         self.logger.info("Staged %d files", len(stats))
         return {"files": len(stats), "stats": stats}
@@ -94,7 +97,7 @@ class DatasetBuildPipeline:
             int(p.name.split("=")[1]) for p in self.staged_dir.glob("region_bucket=*")
         )
         written = []
-        for b in buckets:
+        for b in tqdm(buckets, desc="Finalizing buckets"):
             written.append(finalize_bucket(
                 str(self.staged_dir), b, str(self.final_dir), plan,
                 num_classes=num_classes,
