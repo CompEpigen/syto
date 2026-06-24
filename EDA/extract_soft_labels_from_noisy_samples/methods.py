@@ -333,18 +333,139 @@ def naive_sl_with_pooling_using_extended_data(
 
 def generalized_naive_sl_without_pooling(
     counts_sig_per_sample: Dict[int, Dict[int, np.ndarray]],
-    ctype_prop_per_sample: np.ndarray,
-    reestimate_ctype_prop_per_sample: bool = False,
+    ctype_proba_per_sample: np.ndarray,
+    reestimate_ctype_proba_per_sample: bool = False,
+    max_num_iterations: int = 100,
+    delta_tol: float = 1e-4,
+    verbose=False,
 ):
     """
     Compute P(sig | ctype) for all sigs in counts_sig_per_sample,
     using the generalization of the naive soft labels without pooling to
     noisy samples that leverages EM.
 
-    counts_sig_per_sample has the structure {start: {read_length: np.ndarray of shape (n_samples, 2**read_length)}}
-    ctype_prop_per_sample has the structure np.ndarray of shape (n_samples, n_ctypes)
+    Each signature lives in its own region (start, read_length) and signatures
+    are not pooled across regions, so theta = P(sig | ctype) is estimated and
+    normalized independently per region. The latent cell type c_i of each read
+    is marginalized via EM: the E-step computes the posterior
+    gamma_i(c) = P(c | s_i, b_i) proportional to p_{b_i, c} * theta_{c, s_i},
+    and the M-step renormalizes the expected per-ctype/signature counts.
+
+    The cell type proportions per sample (p_{b,c}) are taken as an oracle and
+    kept fixed, unless reestimate_ctype_proba_per_sample is True, in which case
+    they are re-estimated jointly across all regions at each M-step.
+
+    Args:
+        counts_sig_per_sample: has the structure
+            {start: {read_length: np.ndarray of shape (n_samples, 2**read_length)}}
+        ctype_proba_per_sample: np.ndarray of shape (n_samples, n_ctypes), i.e. p_{b,c}.
+        reestimate_ctype_proba_per_sample: whether to reestimate p_{b,c} at each
+            iteration (M-step). If False, the oracle ctype_proba_per_sample is kept fixed.
+        max_num_iterations: maximum number of EM iterations.
+        delta_tol: convergence threshold on the maximum change in theta.
+
+    Returns:
+        Dict[int, Dict[int, np.ndarray]] with shape (n_ctypes, 2**read_length)
+        per (start, read_length), corresponding to P(signature | ctype).
     """
-    # TODO
+    eps = 1e-10
+    n_samples, n_ctypes = ctype_proba_per_sample.shape
+    ctype_proba_per_sample = ctype_proba_per_sample.copy()
+
+    # Initialize theta = P(sig | ctype) uniformly within each region.
+    theta = {}
+    for start, read_lengths in counts_sig_per_sample.items():
+        theta[start] = {}
+        for read_length in read_lengths:
+            n_signatures = 2**read_length
+            theta[start][read_length] = np.full(
+                (n_ctypes, n_signatures), 1.0 / n_signatures
+            )
+
+    for iteration in range(max_num_iterations):
+        # E-step: expected complete-data counts.
+        expected_n_bc = np.zeros((n_samples, n_ctypes), dtype=float)  # \tilde{n}_{b,c}
+        expected_n_cs = {
+            start: {
+                read_length: np.zeros((n_ctypes, 2**read_length), dtype=float)
+                for read_length in read_lengths
+            }
+            for start, read_lengths in counts_sig_per_sample.items()
+        }  # \tilde{n}_{c,s} per region
+
+        log_p = np.log(
+            np.clip(ctype_proba_per_sample, eps, 1.0)
+        )  # (n_samples, n_ctypes)
+
+        for start, read_lengths in counts_sig_per_sample.items():
+            for read_length, counts_per_sample in read_lengths.items():
+                log_theta = np.log(
+                    np.clip(theta[start][read_length], eps, None)
+                )  # (n_ctypes, n_signatures)
+
+                # gamma_{b,s,c} proportional to p_{b,c} * theta_{c,s}.
+                log_num = (
+                    log_p[:, None, :] + log_theta.T[None, :, :]
+                )  # (n_samples, n_signatures, n_ctypes)
+                log_num = log_num - np.max(log_num, axis=2, keepdims=True)
+                num = np.exp(log_num)
+                gamma = num / np.clip(num.sum(axis=2, keepdims=True), eps, None)
+
+                weighted_gamma = (
+                    counts_per_sample[:, :, None] * gamma
+                )  # (n_samples, n_signatures, n_ctypes)
+
+                # Expected sample/ctype counts: \tilde{n}_{b,c}.
+                expected_n_bc += weighted_gamma.sum(axis=1)  # (n_samples, n_ctypes)
+
+                # Expected ctype/signature counts: \tilde{n}_{c,s}.
+                expected_n_cs[start][read_length] += weighted_gamma.sum(
+                    axis=0
+                ).T  # (n_ctypes, n_signatures)
+
+        # M-step for p (optional).
+        if reestimate_ctype_proba_per_sample:
+            row_sums = expected_n_bc.sum(axis=1, keepdims=True)
+            new_ctype_proba_per_sample = np.divide(
+                expected_n_bc,
+                np.clip(row_sums, eps, None),
+            )
+            zero_rows = row_sums[:, 0] <= eps
+            if np.any(zero_rows):
+                new_ctype_proba_per_sample[zero_rows] = ctype_proba_per_sample[
+                    zero_rows
+                ]
+            ctype_proba_per_sample = new_ctype_proba_per_sample
+
+        # M-step for theta (per region) and convergence check.
+        delta = 0.0
+        for start, read_lengths in counts_sig_per_sample.items():
+            for read_length in read_lengths:
+                n_cs = expected_n_cs[start][read_length]
+                row_sums = n_cs.sum(axis=1, keepdims=True)
+                new_theta = np.divide(n_cs, np.clip(row_sums, eps, None))
+                no_mass_mask = row_sums[:, 0] <= eps
+                if np.any(no_mass_mask):
+                    new_theta[no_mass_mask] = theta[start][read_length][no_mass_mask]
+                delta = max(
+                    delta, np.max(np.abs(new_theta - theta[start][read_length]))
+                )
+                theta[start][read_length] = new_theta
+
+        if delta < delta_tol:
+            if verbose:
+                print(
+                    f"Converged after {iteration + 1} iterations with delta={delta:.2e}."
+                )
+            break
+    if iteration == max_num_iterations - 1 and verbose:
+        print(
+            f"Reached max_num_iterations={max_num_iterations} with delta={delta:.2e}."
+        )
+
+    if reestimate_ctype_proba_per_sample:
+        return theta, ctype_proba_per_sample
+    return theta
 
 
 def sl_with_simple_archetypes(
@@ -353,6 +474,7 @@ def sl_with_simple_archetypes(
     reestimate_ctype_proba_per_sample: bool = False,
     max_num_iterations: int = 100,
     delta_tol: float = 1e-4,
+    verbose=False,
 ):
     """
     Compute P(sig | ctype) for all sigs in counts_sig_per_sample,
@@ -387,20 +509,58 @@ def sl_with_simple_archetypes(
     )  # exclusive
     n_CpG_positions = end_CpG_index - start_CpG_index
 
-    # Initialize archetypes (mu) and sample-specific ctype proportions (p).
+    # Initialize ctype proba per read and sample-specific ctype proportions (p).
     archetypes = np.random.rand(n_ctypes, n_CpG_positions)
     archetypes = np.clip(archetypes, eps, 1 - eps)
     ctype_proba_per_sample = ctype_proba_per_sample.copy()
 
     ctype_proba_per_read = {
         start: {
-            read_length: np.zeros((n_samples, 2**read_length, n_ctypes), dtype=float)
+            read_length: np.broadcast_to(
+                ctype_proba_per_sample[:, np.newaxis, :],
+                (n_samples, 2**read_length, n_ctypes),
+            )
             for read_length in read_lengths
         }
         for start, read_lengths in counts_sig_per_sample.items()
     }
 
-    for _ in range(max_num_iterations):
+    # Pseudo-M step to estimate archetypes using the ctype_proba_per_read to construct expected counts.
+    pseudo_expected_o1 = np.zeros((n_ctypes, n_CpG_positions), dtype=float)
+    pseudo_expected_o0 = np.zeros((n_ctypes, n_CpG_positions), dtype=float)
+    for start, read_lengths in counts_sig_per_sample.items():
+        for read_length, counts_per_sample in read_lengths.items():
+            n_signatures = 2**read_length
+            sig_patterns = np.array(
+                [
+                    get_sig_from_idx(sig_idx, read_length)
+                    for sig_idx in range(n_signatures)
+                ],
+                dtype=float,
+            )  # (n_signatures, read_length)
+
+            start_offset = start - start_CpG_index
+            for local_k in range(read_length):
+                global_k = start_offset + local_k
+                s_k = sig_patterns[:, local_k]  # (n_signatures,)
+                pseudo_expected_o1[:, global_k] += s_k @ ctype_proba_per_read[start][
+                    read_length
+                ].sum(
+                    axis=0
+                )  # (n_ctypes,)
+                pseudo_expected_o0[:, global_k] += (1.0 - s_k) @ ctype_proba_per_read[
+                    start
+                ][read_length].sum(
+                    axis=0
+                )  # (n_ctypes,)
+
+    # Initialize archetypes using the pseudo-M step.
+    archetypes = np.divide(
+        pseudo_expected_o1,
+        np.clip(pseudo_expected_o1 + pseudo_expected_o0, eps, None),
+    )
+
+    for iteration in range(max_num_iterations):
         # E-step expected counts.
         expected_n_bc = np.zeros((n_samples, n_ctypes), dtype=float)
         expected_o1 = np.zeros((n_ctypes, n_CpG_positions), dtype=float)
@@ -486,7 +646,15 @@ def sl_with_simple_archetypes(
         delta = np.max(np.abs(new_archetypes - archetypes))
         archetypes = new_archetypes
         if delta < delta_tol:
+            if verbose:
+                print(
+                    f"Converged after {iteration + 1} iterations with delta={delta:.2e}."
+                )
             break
+        if iteration == max_num_iterations - 1 and verbose:
+            print(
+                f"Reached max_num_iterations={max_num_iterations} with delta={delta:.2e}."
+            )
 
     # Build final P(signature | ctype) from converged archetypes.
     proba_sig_given_ctype = {}
@@ -514,6 +682,8 @@ def sl_with_simple_archetypes(
             phi = phi / np.clip(phi.sum(axis=0, keepdims=True), eps, None)
             proba_sig_given_ctype[start][read_length] = phi.T
 
+    if reestimate_ctype_proba_per_sample:
+        return proba_sig_given_ctype, ctype_proba_per_sample
     return proba_sig_given_ctype
 
 
@@ -724,4 +894,6 @@ def sl_with_generalized_archetypes(
             proba = proba / np.clip(proba.sum(axis=0, keepdims=True), eps, None)
             proba_sig_given_ctype[start][read_length] = proba.T
 
+    if reestimate_ctype_proba_per_sample:
+        return proba_sig_given_ctype, ctype_proba_per_sample
     return proba_sig_given_ctype
