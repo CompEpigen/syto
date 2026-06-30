@@ -329,10 +329,14 @@ class ArchetypeLabeler(AbstractLabeler):
         ctype_covered = covered.any(axis=1)  # (C,)
         if not ctype_covered.all():
             uncovered_ctypes = np.where(~ctype_covered)[0].tolist()
-            raise ValueError(
+            Warning(
                 f"Cell type(s) {uncovered_ctypes} are completely uncovered "
-                f"(0 reads) in region {region!r}."
+                f"(0 reads) in region {region!r}. The number of fully methylated reads and coverage are artificially set to 1"
             )
+        
+            o1[uncovered_ctypes, :] = 1
+            coverage[uncovered_ctypes, :] =1
+            covered = coverage > 0
 
         # maximum-likelihood estimate where covered, NaN elsewhere
         mu = np.full((num_classes, n_positions), np.nan)
