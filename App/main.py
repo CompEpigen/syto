@@ -76,6 +76,16 @@ def validate_config(config: Dict[str, Any], task: str) -> None:
             "output_dir",
             "labels_dict_path",
         ],
+        "build_dataset": [
+            "input_dir",
+            "output_dir",
+            "atlas_path",
+            "reference_genome",
+            "labels_dict_path",
+            "n_buckets",
+            "signature",
+            "labelers",
+        ],
     }
 
     if task not in required_fields:
@@ -93,6 +103,7 @@ def validate_config(config: Dict[str, Any], task: str) -> None:
         "fit_calibration",
         "confidence_intervals",
         "deconvolute_pseudobulk",
+        "build_dataset",
     ):
         if task in ("classifier_fit", "pretrain"):
             model = config["model"]["architecture"].lower()
