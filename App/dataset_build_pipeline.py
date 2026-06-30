@@ -8,6 +8,7 @@ Two phases:
 import json
 import logging
 from concurrent.futures import ProcessPoolExecutor
+from functools import partial
 from pathlib import Path
 from typing import Any, Dict
 
@@ -21,6 +22,40 @@ from syto.data.dataset_build.stage import stage_file
 from syto.data.dataset_build.splits import plan_splits
 from syto.data.dataset_build.finalize import finalize_bucket
 from syto.data.labelers.archetype_labeler import ArchetypeLabeler
+
+
+def _stage_worker(
+    path,
+    *,
+    reference_genome,
+    atlas_path,
+    region_index,
+    labels_dict,
+    staged_dir,
+    counts_dir,
+    sep,
+    cell_type_match_dict,
+):
+    """Module-level staging worker (picklable for ProcessPoolExecutor).
+
+    The atlas is reconstructed inside each worker process rather than pickled
+    and shipped across the process boundary.
+    """
+    atlas = UXMMethylationAtlas(
+        atlas_name="build",
+        reference_genome=reference_genome,
+        atlas_path=atlas_path,
+    )
+    return stage_file(
+        str(path),
+        atlas,
+        region_index,
+        labels_dict,
+        staged_dir,
+        counts_dir,
+        sep=sep,
+        cell_type_match_dict=cell_type_match_dict,
+    )
 
 
 class DatasetBuildPipeline:
@@ -65,25 +100,25 @@ class DatasetBuildPipeline:
         cell_match = self.config.get("cell_type_match_dict") or {}
         n_workers = int(self.config.get("n_workers", 1))
 
-        def _work(path):
-            return stage_file(
-                str(path),
-                self._atlas(),
-                region_index,
-                labels_dict,
-                str(self.staged_dir),
-                str(self.counts_dir),
-                sep=self.config.get("sep", "\t"),
-                cell_type_match_dict=cell_match,
-            )
+        work = partial(
+            _stage_worker,
+            reference_genome=self.config["reference_genome"],
+            atlas_path=self.config["atlas_path"],
+            region_index=region_index,
+            labels_dict=labels_dict,
+            staged_dir=str(self.staged_dir),
+            counts_dir=str(self.counts_dir),
+            sep=self.config.get("sep", "\t"),
+            cell_type_match_dict=cell_match,
+        )
 
         if n_workers > 1:
             with ProcessPoolExecutor(max_workers=n_workers) as ex:
                 stats = list(
-                    tqdm(ex.map(_work, csvs), total=len(csvs), desc="Staging files")
+                    tqdm(ex.map(work, csvs), total=len(csvs), desc="Staging files")
                 )
         else:
-            stats = [_work(p) for p in tqdm(csvs, desc="Staging files")]
+            stats = [work(p) for p in tqdm(csvs, desc="Staging files")]
 
         self.logger.info("Staged %d files", len(stats))
         return {"files": len(stats), "stats": stats}
