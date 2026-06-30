@@ -71,7 +71,11 @@ class AbstractAtlas(ABC):
         n_records = len(df)
 
         if n_records == 0 or len(atlas) == 0:
-            return df.iloc[0:0].copy()
+            empty = df.iloc[0:0].copy()
+            empty["name"] = pd.Series(dtype=str)
+            empty["region_start"] = pd.Series(dtype=int)
+            empty["region_end"] = pd.Series(dtype=int)
+            return empty
 
         # Build per-chromosome start pointer into the sorted reads DataFrame
         chrom_start_idx: Dict[str, int] = {}
