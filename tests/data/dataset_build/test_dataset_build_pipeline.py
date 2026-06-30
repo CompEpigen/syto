@@ -57,9 +57,21 @@ class TestDatasetBuildPipeline(unittest.TestCase):
                 "labels_dict_path": str(d / "labels.json"),
                 "n_buckets": 2,
                 "n_workers": 1,
-                "min_reads": 1,
-                "max_distance": 0.7,
                 "seed": 42,
+                "signature": {
+                    "start_column": "read_start",
+                    "methylation_pattern_column": "methylation_ids",
+                },
+                "labelers": {
+                    "soft_label": {
+                        "type": "data_driven_soft",
+                        "distance_name": "jaccard",
+                        "perform_pooling": True,
+                        "min_reads": 1,
+                        "max_distance": 0.7,
+                    },
+                    "label": {"type": "hard_with_background"},
+                },
             }
             summary = DatasetBuildPipeline(cfg, logging.getLogger("t")).run()
             finals = list((d / "out" / "final").rglob("*.parquet"))
@@ -67,4 +79,5 @@ class TestDatasetBuildPipeline(unittest.TestCase):
             out = pd.concat([pd.read_parquet(p) for p in finals], ignore_index=True)
             for col in ["soft_label", "label", "split", "name", "region_bucket"]:
                 self.assertIn(col, out.columns)
+            self.assertNotIn("signature", out.columns)
             self.assertTrue(set(out["split"]).issubset({"train", "valid", "test"}))

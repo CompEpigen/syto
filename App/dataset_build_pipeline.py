@@ -11,6 +11,7 @@ from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from typing import Any, Dict
 
+import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
@@ -19,6 +20,7 @@ from syto.data.dataset_build.buckets import build_region_index
 from syto.data.dataset_build.stage import stage_file
 from syto.data.dataset_build.splits import plan_splits
 from syto.data.dataset_build.finalize import finalize_bucket
+from syto.data.labelers.archetype_labeler import ArchetypeLabeler
 
 
 class DatasetBuildPipeline:
@@ -100,6 +102,9 @@ class DatasetBuildPipeline:
             test_ratio=self.config.get("test_ratio", 0.15),
             seed=self.config.get("seed", 42),
         )
+        labelers_config = self.config["labelers"]
+        signature_config = self.config["signature"]
+        global_prior = self._compute_global_prior(counts, num_classes, labelers_config)
         buckets = sorted(
             int(p.name.split("=")[1]) for p in self.staged_dir.glob("region_bucket=*")
         )
@@ -112,9 +117,30 @@ class DatasetBuildPipeline:
                     str(self.final_dir),
                     plan,
                     num_classes=num_classes,
-                    max_distance=self.config.get("max_distance", 0.5),
-                    min_reads=self.config.get("min_reads", 30),
+                    labelers_config=labelers_config,
+                    signature_config=signature_config,
+                    global_prior=global_prior,
                 )
             )
         self.logger.info("Finalized %d buckets", len(written))
         return {"buckets": len(written), "paths": written}
+
+    def _compute_global_prior(self, counts, num_classes, labelers_config):
+        """Dataset-wide inverse-frequency prior, only if an archetype needs it.
+
+        Computed from the per-(file, original_label) counts sidecar so no reads
+        are loaded. Returns None when no archetype labeler requests
+        'inv_global_freq'.
+        """
+        needs_global = any(
+            entry.get("type") == "archetype"
+            and entry.get("ctype_prior_type") == "inv_global_freq"
+            for entry in labelers_config.values()
+        )
+        if not needs_global:
+            return None
+        global_counts = np.zeros(num_classes)
+        summed = counts.groupby("original_label")["n_reads"].sum()
+        for label, n_reads in summed.items():
+            global_counts[int(label)] = n_reads
+        return ArchetypeLabeler._normalize_inverse_prior(global_counts, num_classes)

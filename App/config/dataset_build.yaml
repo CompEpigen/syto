@@ -11,7 +11,19 @@ train_ratio: 0.7
 valid_ratio: 0.15
 test_ratio: 0.15
 seed: 42
-min_reads: 30
-max_distance: 0.5
 cell_type_match_dict:
   Ovary-Ep: Ovary+Endom-Ep       # atlas target name -> labels_dict name
+
+signature:
+  start_column: read_start
+  methylation_pattern_column: methylation_ids
+
+labelers:                        # key = destination column for the produced label
+  soft_label:
+    type: data_driven_soft
+    distance_name: jaccard
+    perform_pooling: true
+    max_distance: 0.5
+    min_reads: 30
+  label:
+    type: hard_with_background
