@@ -25,12 +25,18 @@ class ScriptedEngine(WizardEngine):
 def _raw_with_real_paths(tmpdir):
     """Answer set whose path-validated fields point at real (empty) files."""
     labels = "App/labels_dict.json"
-    ckpt = os.path.join(tmpdir, "weight.pt"); open(ckpt, "w").close()
-    mask = os.path.join(tmpdir, "mask.npz"); open(mask, "w").close()
-    atlas = os.path.join(tmpdir, "atlas.tsv"); open(atlas, "w").close()
-    bam = os.path.join(tmpdir, "x.bam"); open(bam, "w").close()
-    ref = os.path.join(tmpdir, "hg38.fa.gz"); open(ref, "w").close()
-    pb = os.path.join(tmpdir, "pb.h5"); open(pb, "w").close()
+    ckpt = os.path.join(tmpdir, "weight.pt")
+    open(ckpt, "w").close()
+    mask = os.path.join(tmpdir, "mask.npz")
+    open(mask, "w").close()
+    atlas = os.path.join(tmpdir, "atlas.tsv")
+    open(atlas, "w").close()
+    bam = os.path.join(tmpdir, "x.bam")
+    open(bam, "w").close()
+    ref = os.path.join(tmpdir, "hg38.fa.gz")
+    open(ref, "w").close()
+    pb = os.path.join(tmpdir, "pb.h5")
+    open(pb, "w").close()
     raw = {
         "run_syto": True,
         "classifier.classifier_type": "dismir",

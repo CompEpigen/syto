@@ -35,7 +35,10 @@ class TestWizardEngine(unittest.TestCase):
         specs = [
             FieldSpec(key="type", label="T", kind="text"),
             FieldSpec(
-                key="flavor", label="F", kind="text", default="NA",
+                key="flavor",
+                label="F",
+                kind="text",
+                default="NA",
                 when=lambda ans: ans.get("type") == "dismir",
             ),
         ]
@@ -72,9 +75,7 @@ class TestWizardEngine(unittest.TestCase):
             def _ask(self, spec):
                 return next(attempts)
 
-        spec = FieldSpec(
-            key="n", label="N", kind="int", validate=v.positive_int
-        )
+        spec = FieldSpec(key="n", label="N", kind="int", validate=v.positive_int)
         eng = RepromptEngine()
         answers = eng.run([spec])
         self.assertEqual(answers["n"], 5)
@@ -106,8 +107,12 @@ class TestWizardEngine(unittest.TestCase):
             raise AssertionError("handler should not run when `when` is False")
 
         spec = FieldSpec(
-            key="deconv", label="Deconv", kind="list_section", default=[],
-            handler=handler, when=lambda ans: ans.get("run") is True,
+            key="deconv",
+            label="Deconv",
+            kind="list_section",
+            default=[],
+            handler=handler,
+            when=lambda ans: ans.get("run") is True,
         )
         gate = FieldSpec(key="run", label="Run?", kind="bool")
         eng = StubEngine({"run": False})

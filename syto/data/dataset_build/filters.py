@@ -51,7 +51,5 @@ def staged_counts(
         return pd.DataFrame(columns=["file", "original_label", "n_reads"])
     allrows = pd.concat(frames, ignore_index=True)
     return (
-        allrows.groupby(["file", "original_label"])
-        .size()
-        .reset_index(name="n_reads")
+        allrows.groupby(["file", "original_label"]).size().reset_index(name="n_reads")
     )

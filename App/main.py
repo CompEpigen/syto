@@ -266,11 +266,8 @@ Examples:
             "fit_calibration",
             "confidence_intervals",
             "deconvolute_pseudobulk",
-<<<<<<< HEAD
             "build_dataset",
-=======
             "create_config",
->>>>>>> feat/create-config-wizard
         ],
         required=True,
         help="Task to perform",

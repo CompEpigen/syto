@@ -87,13 +87,9 @@ class WizardEngine:
                 spec.label, choices=spec.choices, default=spec.default
             ).ask()
         if spec.kind == "bool":
-            return questionary.confirm(
-                spec.label, default=bool(spec.default)
-            ).ask()
+            return questionary.confirm(spec.label, default=bool(spec.default)).ask()
         if spec.kind == "path":
-            return questionary.path(
-                spec.label, default=str(spec.default or "")
-            ).ask()
+            return questionary.path(spec.label, default=str(spec.default or "")).ask()
         # text, int, float -> free text entry (coerced afterwards)
         return questionary.text(
             spec.label, default="" if spec.default is None else str(spec.default)

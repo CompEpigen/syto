@@ -21,7 +21,9 @@ class TestFieldSpec(unittest.TestCase):
 
     def test_when_predicate_is_callable(self):
         fs = FieldSpec(
-            key="x", label="X", kind="text",
+            key="x",
+            label="X",
+            kind="text",
             when=lambda answers: answers.get("y") == "z",
         )
         self.assertTrue(fs.when({"y": "z"}))

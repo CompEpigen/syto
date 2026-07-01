@@ -41,7 +41,9 @@ class TestClassifierFitSchema(unittest.TestCase):
         w = self.by_key["model.num_grg_labels"].when
         self.assertTrue(w(self._arch("dismir")))
         self.assertTrue(w(self._arch("methylbert")))
-        self.assertFalse(w(self._arch("epigenbert2")))  # epigenbert2 has no num_grg_labels
+        self.assertFalse(
+            w(self._arch("epigenbert2"))
+        )  # epigenbert2 has no num_grg_labels
 
     def test_grg_label_column_in_model_for_dismir_only(self):
         w = self.by_key["model.grg_label_column"].when
@@ -100,14 +102,16 @@ class TestClassifierFitBuildConfig(unittest.TestCase):
 
     def test_cancer_detector_minimal_model(self):
         ans = self._shared("cancer_detector")
-        ans.update({
-            "training.col_n_meth_cpgs": "M",
-            "training.col_n_unmeth_cpgs": "U",
-            "training.col_label": "label",
-            "training.col_marker_label": "dmr_ctype_label",
-            "training.eps_beta_fit": 0.01,
-            "training.class_prior_type": "train_freq",
-        })
+        ans.update(
+            {
+                "training.col_n_meth_cpgs": "M",
+                "training.col_n_unmeth_cpgs": "U",
+                "training.col_label": "label",
+                "training.col_marker_label": "dmr_ctype_label",
+                "training.eps_beta_fit": 0.01,
+                "training.class_prior_type": "train_freq",
+            }
+        )
         cfg = self.wiz.build_config(ans)
         self.assertEqual(cfg["model"], {"architecture": "cancer_detector"})
         self.assertEqual(cfg["training"]["class_prior_type"], "train_freq")
@@ -116,22 +120,24 @@ class TestClassifierFitBuildConfig(unittest.TestCase):
 
     def test_dismir_model_and_training(self):
         ans = self._shared("dismir")
-        ans.update({
-            "model.flavor": "lstm",
-            "model.num_labels": 39,
-            "model.classifier_head_implementation": "grg_attention_based",
-            "model.num_grg_labels": 39,
-            "model.grg_label_column": "dmr_ctype_label",
-            "model.soft_labels": True,
-            "training.epochs": 100,
-            "training.batch_size": 128,
-            "training.patience": 30,
-            "training.optimizer_type": "ADAM",
-            "training.lr": 0.001,
-            "training.weight_decay": 1.0e-6,
-            "training.variable_length": False,
-            "training.verbose": 1,
-        })
+        ans.update(
+            {
+                "model.flavor": "lstm",
+                "model.num_labels": 39,
+                "model.classifier_head_implementation": "grg_attention_based",
+                "model.num_grg_labels": 39,
+                "model.grg_label_column": "dmr_ctype_label",
+                "model.soft_labels": True,
+                "training.epochs": 100,
+                "training.batch_size": 128,
+                "training.patience": 30,
+                "training.optimizer_type": "ADAM",
+                "training.lr": 0.001,
+                "training.weight_decay": 1.0e-6,
+                "training.variable_length": False,
+                "training.verbose": 1,
+            }
+        )
         cfg = self.wiz.build_config(ans)
         self.assertEqual(cfg["model"]["flavor"], "lstm")
         self.assertEqual(cfg["model"]["grg_label_column"], "dmr_ctype_label")
@@ -141,14 +147,16 @@ class TestClassifierFitBuildConfig(unittest.TestCase):
 
     def test_lookup_nested_config(self):
         ans = self._shared("lookup")
-        ans.update({
-            "model.lookup_config.num_classes": 39,
-            "model.lookup_config.label_col": "original_label",
-            "model.lookup_config.label_mode": "soft",
-            "model.lookup_config.min_reads": 0,
-            "model.lookup_config.max_distance": 0,
-            "training.compute_train_metrics": True,
-        })
+        ans.update(
+            {
+                "model.lookup_config.num_classes": 39,
+                "model.lookup_config.label_col": "original_label",
+                "model.lookup_config.label_mode": "soft",
+                "model.lookup_config.min_reads": 0,
+                "model.lookup_config.max_distance": 0,
+                "training.compute_train_metrics": True,
+            }
+        )
         cfg = self.wiz.build_config(ans)
         self.assertEqual(cfg["model"]["lookup_config"]["label_mode"], "soft")
         self.assertEqual(cfg["model"]["lookup_config"]["min_reads"], 0)
@@ -157,44 +165,44 @@ class TestClassifierFitBuildConfig(unittest.TestCase):
 
     def test_methylbert_training_args_nested_and_grg_in_training(self):
         ans = self._shared("methylbert")
-        ans.update({
-            "model.foundation_model": "foundationalModels/methylbert_hg19_12l",
-            "model.num_labels": 40,
-            "model.num_grg_labels": 39,
-            "model.classifier_head_implementation": "grg_attention_based",
-            "model.soft_labels": False,
-            "training.grg_label_column": "dmr_ctype_label",
-            "training.training_args.learning_rate": 0.0004,
-            "training.training_args.per_device_train_batch_size": 512,
-            "training.training_args.num_train_epochs": 1,
-        })
+        ans.update(
+            {
+                "model.foundation_model": "foundationalModels/methylbert_hg19_12l",
+                "model.num_labels": 40,
+                "model.num_grg_labels": 39,
+                "model.classifier_head_implementation": "grg_attention_based",
+                "model.soft_labels": False,
+                "training.grg_label_column": "dmr_ctype_label",
+                "training.training_args.learning_rate": 0.0004,
+                "training.training_args.per_device_train_batch_size": 512,
+                "training.training_args.num_train_epochs": 1,
+            }
+        )
         cfg = self.wiz.build_config(ans)
         self.assertEqual(cfg["model"]["num_labels"], 40)
         self.assertNotIn("flavor", cfg["model"])
         self.assertNotIn("grg_label_column", cfg["model"])  # lives in training
         self.assertEqual(cfg["training"]["grg_label_column"], "dmr_ctype_label")
-        self.assertEqual(
-            cfg["training"]["training_args"]["learning_rate"], 0.0004
-        )
+        self.assertEqual(cfg["training"]["training_args"]["learning_rate"], 0.0004)
 
     def test_epigenbert2_no_num_grg_labels(self):
         ans = self._shared("epigenbert2")
-        ans.update({
-            "model.foundation_model": "foundationalModels/DNABERT-2-117M",
-            "model.num_labels": 39,
-            "model.use_cpg_methylation": True,
-            "model.use_m6a_methylation": False,
-            "model.classifier_head_implementation": "grg_attention_based",
-            "model.soft_labels": True,
-            "training.grg_label_column": "dmr_ctype_label",
-            "training.training_args.learning_rate": 0.00001,
-        })
+        ans.update(
+            {
+                "model.foundation_model": "foundationalModels/DNABERT-2-117M",
+                "model.num_labels": 39,
+                "model.use_cpg_methylation": True,
+                "model.use_m6a_methylation": False,
+                "model.classifier_head_implementation": "grg_attention_based",
+                "model.soft_labels": True,
+                "training.grg_label_column": "dmr_ctype_label",
+                "training.training_args.learning_rate": 0.00001,
+            }
+        )
         cfg = self.wiz.build_config(ans)
         self.assertNotIn("num_grg_labels", cfg["model"])
         self.assertTrue(cfg["model"]["use_cpg_methylation"])
-        self.assertEqual(
-            cfg["training"]["training_args"]["learning_rate"], 0.00001
-        )
+        self.assertEqual(cfg["training"]["training_args"]["learning_rate"], 0.00001)
 
 
 if __name__ == "__main__":

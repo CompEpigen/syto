@@ -63,9 +63,7 @@ class TestInferenceWizardSchema(unittest.TestCase):
         self.assertNotIn("atlas_path", self.by_key)  # no top-level atlas
 
     def test_syto_methods_list_section_gated(self):
-        section = next(
-            s for s in self.specs if s.key == "deconvolution.syto.methods"
-        )
+        section = next(s for s in self.specs if s.key == "deconvolution.syto.methods")
         self.assertEqual(section.kind, "list_section")
         self.assertTrue(section.when({"run_syto": True}))
         self.assertFalse(section.when({"run_syto": False}))
@@ -73,12 +71,17 @@ class TestInferenceWizardSchema(unittest.TestCase):
     def test_pseudobulk_only_for_prior_strategies(self):
         spec = self.by_key["pseudobulk_h5_path"]
         self.assertTrue(
-            spec.when({"fill_in_missing_labels": True,
-                       "missing_label_strategy": "prior_blending"})
+            spec.when(
+                {
+                    "fill_in_missing_labels": True,
+                    "missing_label_strategy": "prior_blending",
+                }
+            )
         )
         self.assertFalse(
-            spec.when({"fill_in_missing_labels": True,
-                       "missing_label_strategy": "zeroes"})
+            spec.when(
+                {"fill_in_missing_labels": True, "missing_label_strategy": "zeroes"}
+            )
         )
 
 
@@ -143,20 +146,28 @@ class TestInferenceBuildConfig(unittest.TestCase):
 
     def test_syto_atlas_nested_under_deconvolution(self):
         cfg = self.wiz.build_config(self._syto_answers())
-        self.assertEqual(
-            cfg["deconvolution"]["syto"]["atlas_path"], "/tmp/atlas.tsv"
-        )
+        self.assertEqual(cfg["deconvolution"]["syto"]["atlas_path"], "/tmp/atlas.tsv")
         self.assertEqual(cfg["deconvolution"]["syto"]["atlas_name"], "atlas")
         self.assertNotIn("atlas_path", cfg)  # not top-level
 
     def test_syto_methods_canonical_dispatch_names(self):
         ans = self._syto_answers()
         ans["deconvolution.syto.methods"] = [
-            {"name": "3Layer_MLP", "enabled": True, "use_callibration": True,
-             "checkpoint_path": "/tmp/mlp.pt", "calibrators_dir": "/tmp/cal"},
-            {"name": "ls", "flavor": "nnls", "enabled": True,
-             "use_callibration": True, "checkpoint_path": "/tmp/nnls.joblib",
-             "calibrators_dir": "/tmp/cal"},
+            {
+                "name": "3Layer_MLP",
+                "enabled": True,
+                "use_callibration": True,
+                "checkpoint_path": "/tmp/mlp.pt",
+                "calibrators_dir": "/tmp/cal",
+            },
+            {
+                "name": "ls",
+                "flavor": "nnls",
+                "enabled": True,
+                "use_callibration": True,
+                "checkpoint_path": "/tmp/nnls.joblib",
+                "calibrators_dir": "/tmp/cal",
+            },
         ]
         cfg = self.wiz.build_config(ans)
         methods = cfg["deconvolution"]["syto"]["methods"]
@@ -179,8 +190,12 @@ class TestInferenceBuildConfig(unittest.TestCase):
             "input.chromosomes": "all",
             "fill_in_missing_labels": False,
             "deconvolution.baselines": [
-                {"model": "uxm", "enabled": True, "atlas_path": "/tmp/atlas.tsv",
-                 "ignore_cells": ["Megakaryocytes"]}
+                {
+                    "model": "uxm",
+                    "enabled": True,
+                    "atlas_path": "/tmp/atlas.tsv",
+                    "ignore_cells": ["Megakaryocytes"],
+                }
             ],
             "output_dir": "/tmp/out",
             "output.save_predictions": True,

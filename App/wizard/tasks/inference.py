@@ -46,25 +46,41 @@ def _deconv_methods_section(engine, answers):
     methods = []
     for label in selected:
         ckpt = engine.ask_one(
-            FieldSpec(key=f"_{label}_ckpt", label=f"[{label}] checkpoint_path",
-                      kind="path", validate=v.path_exists),
+            FieldSpec(
+                key=f"_{label}_ckpt",
+                label=f"[{label}] checkpoint_path",
+                kind="path",
+                validate=v.path_exists,
+            ),
             answers,
         )
         cal_dir = engine.ask_one(
-            FieldSpec(key=f"_{label}_cal", label=f"[{label}] calibrators_dir",
-                      kind="path", validate=v.path_exists),
+            FieldSpec(
+                key=f"_{label}_cal",
+                label=f"[{label}] calibrators_dir",
+                kind="path",
+                validate=v.path_exists,
+            ),
             answers,
         )
         use_cal = engine.ask_one(
-            FieldSpec(key=f"_{label}_use", label=f"[{label}] use calibration?",
-                      kind="bool", default=True),
+            FieldSpec(
+                key=f"_{label}_use",
+                label=f"[{label}] use calibration?",
+                kind="bool",
+                default=True,
+            ),
             answers,
         )
         entry = dict(SYTO_METHOD_DISPATCH[label])  # name (+ flavor for ls)
-        entry.update({
-            "enabled": True, "use_callibration": use_cal,
-            "checkpoint_path": ckpt, "calibrators_dir": cal_dir,
-        })
+        entry.update(
+            {
+                "enabled": True,
+                "use_callibration": use_cal,
+                "checkpoint_path": ckpt,
+                "calibrators_dir": cal_dir,
+            }
+        )
         methods.append(entry)
     answers["deconvolution.syto.methods"] = methods
 
@@ -77,30 +93,47 @@ def _deconv_baselines_section(engine, answers):
     baselines = []
     for model in selected:
         atlas = engine.ask_one(
-            FieldSpec(key=f"_{model}_atlas", label=f"[{model}] atlas_path",
-                      kind="path", validate=v.path_exists),
+            FieldSpec(
+                key=f"_{model}_atlas",
+                label=f"[{model}] atlas_path",
+                kind="path",
+                validate=v.path_exists,
+            ),
             answers,
         )
         entry = {"model": model, "enabled": True, "atlas_path": atlas}
         if model == "uxm":
             ignore = engine.ask_one(
-                FieldSpec(key="_uxm_ignore",
-                          label="[uxm] ignore_cells (comma-separated)",
-                          kind="text", default="Megakaryocytes"),
+                FieldSpec(
+                    key="_uxm_ignore",
+                    label="[uxm] ignore_cells (comma-separated)",
+                    kind="text",
+                    default="Megakaryocytes",
+                ),
                 answers,
             )
             entry["ignore_cells"] = [c.strip() for c in ignore.split(",") if c.strip()]
         else:  # celfieish / celfie
             entry["reference_genome"] = engine.ask_one(
-                FieldSpec(key=f"_{model}_ref", label=f"[{model}] reference_genome",
-                          kind="select", choices=["hg38", "hg19"], default="hg38"),
+                FieldSpec(
+                    key=f"_{model}_ref",
+                    label=f"[{model}] reference_genome",
+                    kind="select",
+                    choices=["hg38", "hg19"],
+                    default="hg38",
+                ),
                 answers,
             )
             _ask_em_mode(engine, answers, model, entry)
             if model == "celfie":
                 entry["random_restarts"] = engine.ask_one(
-                    FieldSpec(key="_celfie_rr", label="[celfie] random_restarts",
-                              kind="int", default=1, validate=v.positive_int),
+                    FieldSpec(
+                        key="_celfie_rr",
+                        label="[celfie] random_restarts",
+                        kind="int",
+                        default=1,
+                        validate=v.positive_int,
+                    ),
                     answers,
                 )
         baselines.append(entry)
@@ -110,27 +143,45 @@ def _deconv_baselines_section(engine, answers):
 def _ask_em_mode(engine, answers, model, entry):
     """Ask whether a CelFiE(-ISH) baseline runs in convergence or checkpoint mode."""
     mode = engine.ask_one(
-        FieldSpec(key=f"_{model}_emmode", label=f"[{model}] EM mode",
-                  kind="select", choices=["convergence", "em_checkpoints"],
-                  default="convergence"),
+        FieldSpec(
+            key=f"_{model}_emmode",
+            label=f"[{model}] EM mode",
+            kind="select",
+            choices=["convergence", "em_checkpoints"],
+            default="convergence",
+        ),
         answers,
     )
     if mode == "convergence":
         entry["num_iterations"] = engine.ask_one(
-            FieldSpec(key=f"_{model}_iter", label=f"[{model}] num_iterations",
-                      kind="int", default=400, validate=v.positive_int),
+            FieldSpec(
+                key=f"_{model}_iter",
+                label=f"[{model}] num_iterations",
+                kind="int",
+                default=400,
+                validate=v.positive_int,
+            ),
             answers,
         )
         entry["convergence_criteria"] = engine.ask_one(
-            FieldSpec(key=f"_{model}_conv", label=f"[{model}] convergence_criteria",
-                      kind="float", default=0.001, validate=v.positive_float),
+            FieldSpec(
+                key=f"_{model}_conv",
+                label=f"[{model}] convergence_criteria",
+                kind="float",
+                default=0.001,
+                validate=v.positive_float,
+            ),
             answers,
         )
     else:
         checkpoints = engine.ask_one(
-            FieldSpec(key=f"_{model}_ckpts",
-                      label=f"[{model}] em_checkpoints (comma-separated iteration counts)",
-                      kind="text", default="10, 50", validate=v.non_empty),
+            FieldSpec(
+                key=f"_{model}_ckpts",
+                label=f"[{model}] em_checkpoints (comma-separated iteration counts)",
+                kind="text",
+                default="10, 50",
+                validate=v.non_empty,
+            ),
             answers,
         )
         entry["em_checkpoints"] = [
@@ -144,112 +195,273 @@ class InferenceWizard:
     def field_specs(self) -> list[FieldSpec]:
         return [
             # ── Syto classification gate (asked first) ──
-            FieldSpec(key="run_syto",
-                      label="Run syto classification-based deconvolution?",
-                      kind="bool", default=True,
-                      help="If no, the classifier and syto blocks are skipped; "
-                           "only baseline deconvolvers run."),
+            FieldSpec(
+                key="run_syto",
+                label="Run syto classification-based deconvolution?",
+                kind="bool",
+                default=True,
+                help="If no, the classifier and syto blocks are skipped; "
+                "only baseline deconvolvers run.",
+            ),
             # ── Classifier (only when syto is enabled) ──
-            FieldSpec(key="classifier.classifier_type", label="Classifier type",
-                      kind="select", choices=CLASSIFIER_TYPES, when=_run_syto),
-            FieldSpec(key="classifier.dismir_flavor", label="Dismir flavor",
-                      kind="select", choices=["lstm", "mingru"], default="lstm",
-                      when=lambda a: _run_syto(a) and _ctype(a) == "dismir"),
-            FieldSpec(key="classifier.foundation_model", label="Foundation model path",
-                      kind="path", validate=v.path_exists,
-                      when=lambda a: _run_syto(a) and _ctype(a) in TRANSFORMER_ARCHS),
-            FieldSpec(key="classifier.classifier_head_implementation",
-                      label="Classifier head", kind="select",
-                      choices=["grg_attention_based", "simple"],
-                      default="grg_attention_based",
-                      when=lambda a: _run_syto(a) and _ctype(a) in HEAD_LABEL_ARCHS),
-            FieldSpec(key="classifier.labeling_scheme",
-                      label="Classifier labeling scheme",
-                      kind="select", choices=LABELING_SCHEMES,
-                      default="Soft Labels",
-                      when=lambda a: _run_syto(a) and _ctype(a) in HEAD_LABEL_ARCHS),
-            FieldSpec(key="checkpoint_path", label="Checkpoint path",
-                      kind="path", validate=v.path_exists, when=_run_syto),
-            FieldSpec(key="features_mask_path", label="Features mask (.npz) path",
-                      kind="path", validate=v.path_exists, when=_run_syto),
+            FieldSpec(
+                key="classifier.classifier_type",
+                label="Classifier type",
+                kind="select",
+                choices=CLASSIFIER_TYPES,
+                when=_run_syto,
+            ),
+            FieldSpec(
+                key="classifier.dismir_flavor",
+                label="Dismir flavor",
+                kind="select",
+                choices=["lstm", "mingru"],
+                default="lstm",
+                when=lambda a: _run_syto(a) and _ctype(a) == "dismir",
+            ),
+            FieldSpec(
+                key="classifier.foundation_model",
+                label="Foundation model path",
+                kind="path",
+                validate=v.path_exists,
+                when=lambda a: _run_syto(a) and _ctype(a) in TRANSFORMER_ARCHS,
+            ),
+            FieldSpec(
+                key="classifier.classifier_head_implementation",
+                label="Classifier head",
+                kind="select",
+                choices=["grg_attention_based", "simple"],
+                default="grg_attention_based",
+                when=lambda a: _run_syto(a) and _ctype(a) in HEAD_LABEL_ARCHS,
+            ),
+            FieldSpec(
+                key="classifier.labeling_scheme",
+                label="Classifier labeling scheme",
+                kind="select",
+                choices=LABELING_SCHEMES,
+                default="Soft Labels",
+                when=lambda a: _run_syto(a) and _ctype(a) in HEAD_LABEL_ARCHS,
+            ),
+            FieldSpec(
+                key="checkpoint_path",
+                label="Checkpoint path",
+                kind="path",
+                validate=v.path_exists,
+                when=_run_syto,
+            ),
+            FieldSpec(
+                key="features_mask_path",
+                label="Features mask (.npz) path",
+                kind="path",
+                validate=v.path_exists,
+                when=_run_syto,
+            ),
             # ── Labels / shared (always) ──
-            FieldSpec(key="labels_dict_path", label="Labels dict JSON path",
-                      kind="path", default=DEFAULT_LABELS_DICT,
-                      validate=v.path_exists),
-            FieldSpec(key="num_labels", label="Number of labels",
-                      kind="int", default=39, validate=v.positive_int),
+            FieldSpec(
+                key="labels_dict_path",
+                label="Labels dict JSON path",
+                kind="path",
+                default=DEFAULT_LABELS_DICT,
+                validate=v.path_exists,
+            ),
+            FieldSpec(
+                key="num_labels",
+                label="Number of labels",
+                kind="int",
+                default=39,
+                validate=v.positive_int,
+            ),
             # ── Syto atlas (only when syto is enabled) ──
-            FieldSpec(key="deconvolution.syto.atlas_path", label="Syto atlas TSV path",
-                      kind="path", validate=v.path_exists, when=_run_syto),
-            FieldSpec(key="deconvolution.syto.atlas_name", label="Syto atlas name",
-                      kind="text", when=_run_syto),
+            FieldSpec(
+                key="deconvolution.syto.atlas_path",
+                label="Syto atlas TSV path",
+                kind="path",
+                validate=v.path_exists,
+                when=_run_syto,
+            ),
+            FieldSpec(
+                key="deconvolution.syto.atlas_name",
+                label="Syto atlas name",
+                kind="text",
+                when=_run_syto,
+            ),
             # ── Input (always) ──
-            FieldSpec(key="input.type", label="Input type", kind="select",
-                      choices=["bam", "parsed_reads", "predicted_reads"]),
-            FieldSpec(key="input.data_path", label="Input data path",
-                      kind="path", validate=v.path_exists),
-            FieldSpec(key="input.reference_path", label="Reference FASTA path",
-                      kind="path", validate=v.path_exists,
-                      when=lambda a: a.get("input.type") == "bam"),
-            FieldSpec(key="input.data_type", label="Data type",
-                      kind="select", choices=["wgbs", "ont"], default="wgbs",
-                      when=lambda a: a.get("input.type") == "bam"),
-            FieldSpec(key="input.chromosomes",
-                      label="Chromosomes ('all' or comma-separated)",
-                      kind="text", default="all"),
+            FieldSpec(
+                key="input.type",
+                label="Input type",
+                kind="select",
+                choices=["bam", "parsed_reads", "predicted_reads"],
+            ),
+            FieldSpec(
+                key="input.data_path",
+                label="Input data path",
+                kind="path",
+                validate=v.path_exists,
+            ),
+            FieldSpec(
+                key="input.reference_path",
+                label="Reference FASTA path",
+                kind="path",
+                validate=v.path_exists,
+                when=lambda a: a.get("input.type") == "bam",
+            ),
+            FieldSpec(
+                key="input.data_type",
+                label="Data type",
+                kind="select",
+                choices=["wgbs", "ont"],
+                default="wgbs",
+                when=lambda a: a.get("input.type") == "bam",
+            ),
+            FieldSpec(
+                key="input.chromosomes",
+                label="Chromosomes ('all' or comma-separated)",
+                kind="text",
+                default="all",
+            ),
             # ── Missing-label handling (always) ──
-            FieldSpec(key="fill_in_missing_labels",
-                      label="Fill in missing labels?", kind="bool", default=True),
-            FieldSpec(key="missing_label_strategy", label="Missing label strategy",
-                      kind="select",
-                      choices=["prior_blending", "zeroes", "prior_imputation"],
-                      default="prior_blending",
-                      when=lambda a: a.get("fill_in_missing_labels")),
-            FieldSpec(key="pseudobulk_h5_path", label="Pseudobulk HDF5 path",
-                      kind="path", validate=v.path_exists,
-                      when=lambda a: a.get("fill_in_missing_labels")
-                      and a.get("missing_label_strategy")
-                      in {"prior_blending", "prior_imputation"}),
+            FieldSpec(
+                key="fill_in_missing_labels",
+                label="Fill in missing labels?",
+                kind="bool",
+                default=True,
+            ),
+            FieldSpec(
+                key="missing_label_strategy",
+                label="Missing label strategy",
+                kind="select",
+                choices=["prior_blending", "zeroes", "prior_imputation"],
+                default="prior_blending",
+                when=lambda a: a.get("fill_in_missing_labels"),
+            ),
+            FieldSpec(
+                key="pseudobulk_h5_path",
+                label="Pseudobulk HDF5 path",
+                kind="path",
+                validate=v.path_exists,
+                when=lambda a: a.get("fill_in_missing_labels")
+                and a.get("missing_label_strategy")
+                in {"prior_blending", "prior_imputation"},
+            ),
             # ── Deconvolution (list-sections) ──
-            FieldSpec(key="deconvolution.syto.methods", label="Syto deconvolvers",
-                      kind="list_section", default=[],
-                      handler=_deconv_methods_section, when=_run_syto),
-            FieldSpec(key="deconvolution.baselines", label="Baseline deconvolvers",
-                      kind="list_section", default=[],
-                      handler=_deconv_baselines_section),
+            FieldSpec(
+                key="deconvolution.syto.methods",
+                label="Syto deconvolvers",
+                kind="list_section",
+                default=[],
+                handler=_deconv_methods_section,
+                when=_run_syto,
+            ),
+            FieldSpec(
+                key="deconvolution.baselines",
+                label="Baseline deconvolvers",
+                kind="list_section",
+                default=[],
+                handler=_deconv_baselines_section,
+            ),
             # ── Output (always) ──
-            FieldSpec(key="output_dir", label="Output directory",
-                      kind="text", validate=v.non_empty),
-            FieldSpec(key="output.save_processed_reads",
-                      label="Save processed reads?", kind="bool", default=False),
-            FieldSpec(key="output.save_predictions", label="Save predictions?",
-                      kind="bool", default=True),
-            FieldSpec(key="output.save_deconvolution", label="Save deconvolution?",
-                      kind="bool", default=True),
+            FieldSpec(
+                key="output_dir",
+                label="Output directory",
+                kind="text",
+                validate=v.non_empty,
+            ),
+            FieldSpec(
+                key="output.save_processed_reads",
+                label="Save processed reads?",
+                kind="bool",
+                default=False,
+            ),
+            FieldSpec(
+                key="output.save_predictions",
+                label="Save predictions?",
+                kind="bool",
+                default=True,
+            ),
+            FieldSpec(
+                key="output.save_deconvolution",
+                label="Save deconvolution?",
+                kind="bool",
+                default=True,
+            ),
             # ── Expert: BAM processing (only relevant for bam input) ──
-            FieldSpec(key="bam_processing.n_jobs", label="bam n_jobs",
-                      kind="int", default=2, tier="expert", validate=v.positive_int,
-                      when=_input_is_bam),
-            FieldSpec(key="bam_processing.min_mapq", label="bam min_mapq",
-                      kind="int", default=10, tier="expert", when=_input_is_bam),
-            FieldSpec(key="bam_processing.require_flags", label="bam require_flags",
-                      kind="int", default=3, tier="expert", when=_input_is_bam),
-            FieldSpec(key="bam_processing.exclude_flags", label="bam exclude_flags",
-                      kind="int", default=1796, tier="expert", when=_input_is_bam),
-            FieldSpec(key="bam_processing.min_cpgs", label="bam min_cpgs",
-                      kind="int", default=4, tier="expert", validate=v.positive_int,
-                      when=_input_is_bam),
-            FieldSpec(key="bam_processing.merge_pairs", label="bam merge_pairs",
-                      kind="bool", default=True, tier="expert", when=_input_is_bam),
-            FieldSpec(key="bam_processing.ont_methyl_tr", label="bam ont_methyl_tr",
-                      kind="int", default=180, tier="expert", when=_input_is_bam),
+            FieldSpec(
+                key="bam_processing.n_jobs",
+                label="bam n_jobs",
+                kind="int",
+                default=2,
+                tier="expert",
+                validate=v.positive_int,
+                when=_input_is_bam,
+            ),
+            FieldSpec(
+                key="bam_processing.min_mapq",
+                label="bam min_mapq",
+                kind="int",
+                default=10,
+                tier="expert",
+                when=_input_is_bam,
+            ),
+            FieldSpec(
+                key="bam_processing.require_flags",
+                label="bam require_flags",
+                kind="int",
+                default=3,
+                tier="expert",
+                when=_input_is_bam,
+            ),
+            FieldSpec(
+                key="bam_processing.exclude_flags",
+                label="bam exclude_flags",
+                kind="int",
+                default=1796,
+                tier="expert",
+                when=_input_is_bam,
+            ),
+            FieldSpec(
+                key="bam_processing.min_cpgs",
+                label="bam min_cpgs",
+                kind="int",
+                default=4,
+                tier="expert",
+                validate=v.positive_int,
+                when=_input_is_bam,
+            ),
+            FieldSpec(
+                key="bam_processing.merge_pairs",
+                label="bam merge_pairs",
+                kind="bool",
+                default=True,
+                tier="expert",
+                when=_input_is_bam,
+            ),
+            FieldSpec(
+                key="bam_processing.ont_methyl_tr",
+                label="bam ont_methyl_tr",
+                kind="int",
+                default=180,
+                tier="expert",
+                when=_input_is_bam,
+            ),
             # ── Expert: classifier prediction params (only when syto runs) ──
-            FieldSpec(key="max_sequence_length", label="max_sequence_length",
-                      kind="int", default=150, tier="expert", validate=v.positive_int,
-                      when=_run_syto),
-            FieldSpec(key="prediction_batch_size", label="prediction_batch_size",
-                      kind="int", default=2200, tier="expert",
-                      validate=v.positive_int, when=_run_syto),
+            FieldSpec(
+                key="max_sequence_length",
+                label="max_sequence_length",
+                kind="int",
+                default=150,
+                tier="expert",
+                validate=v.positive_int,
+                when=_run_syto,
+            ),
+            FieldSpec(
+                key="prediction_batch_size",
+                label="prediction_batch_size",
+                kind="int",
+                default=2200,
+                tier="expert",
+                validate=v.positive_int,
+                when=_run_syto,
+            ),
         ]
 
     def build_config(self, answers: dict) -> dict:
@@ -258,8 +470,11 @@ class InferenceWizard:
 
         # Keys assembled explicitly below rather than copied verbatim.
         skip_keys = {
-            "run_syto", "input.chromosomes", "classifier.labeling_scheme",
-            "deconvolution.syto.methods", "deconvolution.baselines",
+            "run_syto",
+            "input.chromosomes",
+            "classifier.labeling_scheme",
+            "deconvolution.syto.methods",
+            "deconvolution.baselines",
         }
 
         # The wizard engine omits fields that are not applicable to this config

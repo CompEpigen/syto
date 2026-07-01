@@ -16,16 +16,12 @@ class TestGeneratePseudobulkSchema(unittest.TestCase):
 
     def test_input_type_first(self):
         self.assertEqual(self.specs[0].key, "input_type")
-        self.assertEqual(
-            set(self.specs[0].choices), {"raw_splits", "pre_predicted"}
-        )
+        self.assertEqual(set(self.specs[0].choices), {"raw_splits", "pre_predicted"})
 
     def test_classifier_type_always_limited_choices(self):
         spec = self.by_key["classifier_type"]
         self.assertIsNone(spec.when)  # always asked (metadata)
-        self.assertEqual(
-            set(spec.choices), {"dismir", "methylbert", "cancer_detector"}
-        )
+        self.assertEqual(set(spec.choices), {"dismir", "methylbert", "cancer_detector"})
 
     def test_classifier_checkpoint_raw_splits_only(self):
         w = self.by_key["classifier_checkpoint"].when
@@ -45,9 +41,7 @@ class TestGeneratePseudobulkSchema(unittest.TestCase):
 
     def test_dismir_flavor_requires_raw_and_dismir(self):
         w = self.by_key["classifier_config.dismir_flavor"].when
-        self.assertTrue(
-            w({"input_type": "raw_splits", "classifier_type": "dismir"})
-        )
+        self.assertTrue(w({"input_type": "raw_splits", "classifier_type": "dismir"}))
         self.assertFalse(
             w({"input_type": "raw_splits", "classifier_type": "methylbert"})
         )
@@ -60,15 +54,11 @@ class TestGeneratePseudobulkSchema(unittest.TestCase):
         self.assertTrue(
             w({"input_type": "raw_splits", "classifier_type": "methylbert"})
         )
-        self.assertFalse(
-            w({"input_type": "raw_splits", "classifier_type": "dismir"})
-        )
+        self.assertFalse(w({"input_type": "raw_splits", "classifier_type": "dismir"}))
 
     def test_grg_fields_only_for_grg_archs(self):
         w = self.by_key["classifier_config.num_grg_labels"].when
-        self.assertTrue(
-            w({"input_type": "raw_splits", "classifier_type": "dismir"})
-        )
+        self.assertTrue(w({"input_type": "raw_splits", "classifier_type": "dismir"}))
         self.assertFalse(
             w({"input_type": "raw_splits", "classifier_type": "cancer_detector"})
         )
@@ -94,10 +84,14 @@ class TestGeneratePseudobulkBuildConfig(unittest.TestCase):
             "num_labels": 39,
             "labeling_scheme": "soft_labels",
             "split_information": {
-                "train": {"data_path": "/tmp/train.pkl",
-                          "target_proportions_path": "/tmp/tp_train.npz"},
-                "valid": {"data_path": "/tmp/valid.pkl",
-                          "target_proportions_path": "/tmp/tp_valid.npz"},
+                "train": {
+                    "data_path": "/tmp/train.pkl",
+                    "target_proportions_path": "/tmp/tp_train.npz",
+                },
+                "valid": {
+                    "data_path": "/tmp/valid.pkl",
+                    "target_proportions_path": "/tmp/tp_valid.npz",
+                },
             },
             "n_reads_to_sample": 475000,
             "class_label_column": "original_label",
@@ -132,20 +126,22 @@ class TestGeneratePseudobulkBuildConfig(unittest.TestCase):
 
     def test_raw_splits_includes_classifier_config_and_atlas(self):
         ans = self._common()
-        ans.update({
-            "input_type": "raw_splits",
-            "classifier_checkpoint": "/tmp/weight.pt",
-            "atlas_path": "/tmp/atlas.tsv",
-            "atlas_name": "atlas",
-            "classifier_config.seq_length": 150,
-            "classifier_config.soft_labels": True,
-            "classifier_config.num_labels": 39,
-            "classifier_config.batch_size": 2200,
-            "classifier_config.classifier_head_implementation": "grg_attention_based",
-            "classifier_config.num_grg_labels": 39,
-            "classifier_config.grg_label_column": "dmr_ctype_label",
-            "classifier_config.dismir_flavor": "lstm",
-        })
+        ans.update(
+            {
+                "input_type": "raw_splits",
+                "classifier_checkpoint": "/tmp/weight.pt",
+                "atlas_path": "/tmp/atlas.tsv",
+                "atlas_name": "atlas",
+                "classifier_config.seq_length": 150,
+                "classifier_config.soft_labels": True,
+                "classifier_config.num_labels": 39,
+                "classifier_config.batch_size": 2200,
+                "classifier_config.classifier_head_implementation": "grg_attention_based",
+                "classifier_config.num_grg_labels": 39,
+                "classifier_config.grg_label_column": "dmr_ctype_label",
+                "classifier_config.dismir_flavor": "lstm",
+            }
+        )
         cfg = self.wiz.build_config(ans)
         self.assertEqual(cfg["classifier_checkpoint"], "/tmp/weight.pt")
         self.assertEqual(cfg["atlas_name"], "atlas")

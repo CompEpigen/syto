@@ -101,37 +101,50 @@ class TestFinalizeAtlasSubset(unittest.TestCase):
             # reads overlapping the FIRST region only (ref_pos 1000)
             r1 = pd.DataFrame(
                 {
-                    "ref_name": ["chr1"] * 4, "ref_pos": [1000] * 4,
+                    "ref_name": ["chr1"] * 4,
+                    "ref_pos": [1000] * 4,
                     "original_seq": ["ACGTACGTAC"] * 4,
-                    "methyl_seq": ["0101010101"] * 4, "ctype": ["Adipocytes"] * 4,
+                    "methyl_seq": ["0101010101"] * 4,
+                    "ctype": ["Adipocytes"] * 4,
                 }
             )
             # reads overlapping the SECOND region (ref_pos 2000) -> filtered out
             r2 = pd.DataFrame(
                 {
-                    "ref_name": ["chr1"] * 4, "ref_pos": [2000] * 4,
+                    "ref_name": ["chr1"] * 4,
+                    "ref_pos": [2000] * 4,
                     "original_seq": ["ACGTACGTAC"] * 4,
-                    "methyl_seq": ["0101010101"] * 4, "ctype": ["Gallbladder"] * 4,
+                    "methyl_seq": ["0101010101"] * 4,
+                    "ctype": ["Gallbladder"] * 4,
                 }
             )
             for s in ["s1", "s2", "s3"]:
                 pd.concat([r1, r2]).to_csv(inp / f"{s}.csv", sep="\t", index=False)
 
             base = {
-                "input_dir": str(inp), "output_dir": str(d / "out"),
-                "atlas_path": str(d / "atlas.tsv"), "reference_genome": "hg38",
-                "labels_dict_path": str(d / "labels.json"), "n_buckets": 2,
-                "n_workers": 1, "seed": 42,
+                "input_dir": str(inp),
+                "output_dir": str(d / "out"),
+                "atlas_path": str(d / "atlas.tsv"),
+                "reference_genome": "hg38",
+                "labels_dict_path": str(d / "labels.json"),
+                "n_buckets": 2,
+                "n_workers": 1,
+                "seed": 42,
                 "signature": {
                     "start_column": "read_start",
                     "methylation_pattern_column": "methylation_ids",
                 },
                 "labelers": {"label": {"type": "hard_with_background"}},
             }
-            DatasetBuildPipeline({**base, "phase": "stage"}, logging.getLogger("t")).run()
             DatasetBuildPipeline(
-                {**base, "phase": "finalize",
-                 "finalize_atlas_path": str(d / "atlas_sub.tsv")},
+                {**base, "phase": "stage"}, logging.getLogger("t")
+            ).run()
+            DatasetBuildPipeline(
+                {
+                    **base,
+                    "phase": "finalize",
+                    "finalize_atlas_path": str(d / "atlas_sub.tsv"),
+                },
                 logging.getLogger("t"),
             ).run()
 
@@ -152,9 +165,11 @@ class TestStagedSourceDir(unittest.TestCase):
             inp.mkdir()
             reads = pd.DataFrame(
                 {
-                    "ref_name": ["chr1"] * 6, "ref_pos": [1000] * 6,
+                    "ref_name": ["chr1"] * 6,
+                    "ref_pos": [1000] * 6,
                     "original_seq": ["ACGTACGTAC"] * 6,
-                    "methyl_seq": ["0101010101"] * 6, "ctype": ["Adipocytes"] * 6,
+                    "methyl_seq": ["0101010101"] * 6,
+                    "ctype": ["Adipocytes"] * 6,
                 }
             )
             for s in ["s1", "s2", "s3"]:
@@ -162,9 +177,12 @@ class TestStagedSourceDir(unittest.TestCase):
 
             base = {
                 "input_dir": str(inp),
-                "atlas_path": str(d / "atlas.tsv"), "reference_genome": "hg38",
-                "labels_dict_path": str(d / "labels.json"), "n_buckets": 2,
-                "n_workers": 1, "seed": 42,
+                "atlas_path": str(d / "atlas.tsv"),
+                "reference_genome": "hg38",
+                "labels_dict_path": str(d / "labels.json"),
+                "n_buckets": 2,
+                "n_workers": 1,
+                "seed": 42,
                 "signature": {
                     "start_column": "read_start",
                     "methylation_pattern_column": "methylation_ids",
@@ -179,7 +197,9 @@ class TestStagedSourceDir(unittest.TestCase):
             # Finalize into a different dir B, reading staged data from A.
             DatasetBuildPipeline(
                 {
-                    **base, "phase": "finalize", "output_dir": str(d / "B"),
+                    **base,
+                    "phase": "finalize",
+                    "output_dir": str(d / "B"),
                     "staged_source_dir": str(d / "A"),
                 },
                 logging.getLogger("t"),

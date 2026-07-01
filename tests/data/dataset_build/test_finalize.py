@@ -38,13 +38,25 @@ class TestLabelAndSplit(unittest.TestCase):
         rows = []
         for _ in range(40):
             rows.append(
-                {"name": "chr1:1-9", "read_start": 100, "methylation_ids": "01",
-                 "original_label": 0, "dmr_ctype_label": 0, "file": "f0"}
+                {
+                    "name": "chr1:1-9",
+                    "read_start": 100,
+                    "methylation_ids": "01",
+                    "original_label": 0,
+                    "dmr_ctype_label": 0,
+                    "file": "f0",
+                }
             )
         for _ in range(40):
             rows.append(
-                {"name": "chr1:1-9", "read_start": 100, "methylation_ids": "01",
-                 "original_label": 1, "dmr_ctype_label": 0, "file": "f1"}
+                {
+                    "name": "chr1:1-9",
+                    "read_start": 100,
+                    "methylation_ids": "01",
+                    "original_label": 1,
+                    "dmr_ctype_label": 0,
+                    "file": "f1",
+                }
             )
         self.df = pd.DataFrame(rows)
         self.plan = {
@@ -79,16 +91,31 @@ class TestFitSplits(unittest.TestCase):
         rows = []
         for _ in range(30):
             rows.append(
-                {"name": "chr1:1-9", "read_start": 100, "methylation_ids": "00",
-                 "original_label": 0, "dmr_ctype_label": 0, "file": "f0"}
+                {
+                    "name": "chr1:1-9",
+                    "read_start": 100,
+                    "methylation_ids": "00",
+                    "original_label": 0,
+                    "dmr_ctype_label": 0,
+                    "file": "f0",
+                }
             )
         for _ in range(30):
             rows.append(
-                {"name": "chr1:1-9", "read_start": 100, "methylation_ids": "11",
-                 "original_label": 1, "dmr_ctype_label": 0, "file": "f1"}
+                {
+                    "name": "chr1:1-9",
+                    "read_start": 100,
+                    "methylation_ids": "11",
+                    "original_label": 1,
+                    "dmr_ctype_label": 0,
+                    "file": "f1",
+                }
             )
         df = pd.DataFrame(rows)
-        plan = {"file_level": {(0, "f0"): "train", (1, "f1"): "valid"}, "read_level": {}}
+        plan = {
+            "file_level": {(0, "f0"): "train", (1, "f1"): "valid"},
+            "read_level": {},
+        }
         labelers = {
             "soft_label": {
                 "type": "data_driven_soft",
@@ -99,8 +126,12 @@ class TestFitSplits(unittest.TestCase):
             }
         }
         out = label_and_split(
-            df, plan, labelers_config=labelers, context=_context(),
-            fit_splits=["train"], fallback="uniform",
+            df,
+            plan,
+            labelers_config=labelers,
+            context=_context(),
+            fit_splits=["train"],
+            fallback="uniform",
         )
         valid_rows = out[out["split"] == "valid"]
         # sigV never appears in train -> uniform fallback over 3 classes
@@ -127,7 +158,10 @@ class TestFinalizeBucketFilter(unittest.TestCase):
             df.to_parquet(staged / "s.parquet", index=False)
             plan = {"file_level": {(0, "f0"): "train"}, "read_level": {}}
             out_path = finalize_bucket(
-                str(d / "staged"), 0, str(d / "final"), plan,
+                str(d / "staged"),
+                0,
+                str(d / "final"),
+                plan,
                 num_classes=NUM_CLASSES,
                 labelers_config={"label": {"type": "hard_with_background"}},
                 signature_config={
@@ -150,14 +184,20 @@ class TestFinalizeBucketFilter(unittest.TestCase):
             staged.mkdir(parents=True)
             pd.DataFrame(
                 {
-                    "name": ["drop"], "read_start": [100],
-                    "methylation_ids": ["0101"], "original_label": [0],
-                    "dmr_ctype_label": [0], "file": ["f0"],
+                    "name": ["drop"],
+                    "read_start": [100],
+                    "methylation_ids": ["0101"],
+                    "original_label": [0],
+                    "dmr_ctype_label": [0],
+                    "file": ["f0"],
                 }
             ).to_parquet(staged / "s.parquet", index=False)
             plan = {"file_level": {(0, "f0"): "train"}, "read_level": {}}
             out = finalize_bucket(
-                str(d / "staged"), 0, str(d / "final"), plan,
+                str(d / "staged"),
+                0,
+                str(d / "final"),
+                plan,
                 num_classes=NUM_CLASSES,
                 labelers_config={"label": {"type": "hard_with_background"}},
                 signature_config={

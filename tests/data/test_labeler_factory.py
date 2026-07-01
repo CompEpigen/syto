@@ -25,13 +25,23 @@ def _reads_df():
     rows = []
     for _ in range(4):
         rows.append(
-            {"name": "r1", "read_start": 100, "methylation_ids": "01",
-             "original_label": 0, "dmr_ctype_label": 0}
+            {
+                "name": "r1",
+                "read_start": 100,
+                "methylation_ids": "01",
+                "original_label": 0,
+                "dmr_ctype_label": 0,
+            }
         )
     for _ in range(4):
         rows.append(
-            {"name": "r1", "read_start": 100, "methylation_ids": "11",
-             "original_label": 1, "dmr_ctype_label": 0}
+            {
+                "name": "r1",
+                "read_start": 100,
+                "methylation_ids": "11",
+                "original_label": 1,
+                "dmr_ctype_label": 0,
+            }
         )
     return pd.DataFrame(rows)
 

@@ -361,9 +361,9 @@ class ArchetypeLabeler(AbstractLabeler):
                 f"Cell type(s) {uncovered_ctypes} are completely uncovered "
                 f"(0 reads) in region {region!r}. The number of fully methylated reads and coverage are artificially set to 1"
             )
-        
+
             o1[uncovered_ctypes, :] = 1
-            coverage[uncovered_ctypes, :] =1
+            coverage[uncovered_ctypes, :] = 1
             covered = coverage > 0
 
         # maximum-likelihood estimate where covered, NaN elsewhere
