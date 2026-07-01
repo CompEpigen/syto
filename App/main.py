@@ -44,11 +44,12 @@ def validate_config(config: Dict[str, Any], task: str) -> None:
     required_fields = {
         "classifier_fit": ["model", "data_path", "max_sequence_length"],
         "pretrain": ["model", "data_path"],  # Add pretrain requirements
+        # The classifier/checkpoint and the syto atlas are only required when
+        # syto classification-based deconvolution is enabled (deconvolution.syto).
+        # A config may run baseline deconvolvers only, or supply pre-classified
+        # reads, in which case those fields are absent.
         "inference": [
-            "classifier",
-            "checkpoint_path",
             "labels_dict_path",
-            "atlas_path",
             "input",
         ],
         "generate_pseudobulk": [
@@ -107,9 +108,13 @@ def validate_config(config: Dict[str, Any], task: str) -> None:
     ):
         if task in ("classifier_fit", "pretrain"):
             model = config["model"]["architecture"].lower()
-        else:
+        elif "classifier" in config:
             model = config["classifier"]["classifier_type"].lower()
-        if model not in [
+        else:
+            # Inference without a classifier (baseline-only or pre-classified
+            # reads): no architecture to validate.
+            model = None
+        if model is not None and model not in [
             "methylbert",
             "dismir",
             "cancer_detector",
@@ -261,13 +266,20 @@ Examples:
             "fit_calibration",
             "confidence_intervals",
             "deconvolute_pseudobulk",
+<<<<<<< HEAD
             "build_dataset",
+=======
+            "create_config",
+>>>>>>> feat/create-config-wizard
         ],
         required=True,
         help="Task to perform",
     )
     parser.add_argument(
-        "--config", type=str, required=True, help="Path to configuration file (YAML)"
+        "--config",
+        type=str,
+        required=False,
+        help="Path to configuration file (YAML). Not used by create_config.",
     )
 
     # Optional overrides
@@ -324,6 +336,16 @@ Examples:
     # Setup logging
     logger = setup_logging(args.verbose, args.log_file)
     logger.info("Starting MethylDL application - Task: %s", args.task)
+
+    # The config-creation wizard is interactive and takes no --config file.
+    if args.task == "create_config":
+        from wizard import run_wizard
+
+        run_wizard()
+        return 0
+
+    if not args.config:
+        parser.error("--config is required for this task")
 
     try:
         # Load configuration
