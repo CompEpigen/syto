@@ -71,6 +71,8 @@ class ArchetypeLabeler(AbstractLabeler):
         predefined_prior: Optional[Sequence[float]] = None,
         keep_likelihoods: bool = True,
         precomputed_signature_column: Optional[str] = None,
+        fit_mask=None,
+        fallback_label=None,
     ) -> pd.DataFrame:
         """
         Compute the archetype-based soft labels for the given dataframe of reads.
@@ -136,39 +138,65 @@ class ArchetypeLabeler(AbstractLabeler):
             ), f"Column '{precomputed_signature_column}' not found in the input DataFrame."
             reads_df["signature"] = reads_df[precomputed_signature_column]
 
-        ## Aggregate the counts of classes by (region, signature)
+        ## Estimate archetypes/prior from the fit subset; score all reads.
+        fit_df = reads_df if fit_mask is None else reads_df[np.asarray(fit_mask)]
+
+        ## Aggregate the counts of classes by (region, signature) over the fit subset
         count_columns = ["raw_counts_" + str(c) for c in range(num_classes)]
-        class_counts = (
-            reads_df.groupby(["name", "signature", "original_label"])
+        fit_counts = (
+            fit_df.groupby(["name", "signature", "original_label"])
             .size()
             .unstack(fill_value=0)
         )  # df indexed by (name, signature) with columns original_label
-        class_counts.reset_index(inplace=True)
+        fit_counts.reset_index(inplace=True)
         # add columns with 0 counts for classes that never appear
         for c in range(num_classes):
-            if c not in class_counts.columns:
-                class_counts[c] = 0
-        class_counts.rename(
+            if c not in fit_counts.columns:
+                fit_counts[c] = 0
+        fit_counts.rename(
             columns={c: "raw_counts_" + str(c) for c in range(num_classes)},
             inplace=True,
         )
-        class_counts = class_counts[["name", "signature"] + count_columns]
+        fit_counts = fit_counts[["name", "signature"] + count_columns]
 
-        ## Build the (region-independent) prior over ctypes
+        ## Build the (region-independent) prior over ctypes from the fit subset
         base_prior = self._compute_base_prior(
-            reads_df,
+            fit_df,
             num_classes=num_classes,
             ctype_prior_type=ctype_prior_type,
             predefined_prior=predefined_prior,
         )
 
-        ## Compute archetypes, likelihoods and posteriors region by region
+        fit_groups = {name: g for name, g in fit_counts.groupby("name")}
+        fallback = (
+            np.asarray(fallback_label, dtype=float)
+            if fallback_label is not None
+            else np.full(num_classes, 1.0 / num_classes)
+        )
+
+        ## Compute archetypes and score every read's signature, region by region
+        full_pairs = reads_df[["name", "signature"]].drop_duplicates()
         records = []
-        grouped = class_counts.groupby("name")
-        for region, group in tqdm(
-            grouped, desc="Computing archetype soft labels per region"
+        for region, region_pairs in tqdm(
+            full_pairs.groupby("name"),
+            desc="Computing archetype soft labels per region",
         ):
-            group = group.reset_index(drop=True)
+            sigs_to_score = region_pairs["signature"].tolist()
+
+            # region with no fit reads: everything falls back
+            if region not in fit_groups:
+                for sig in sigs_to_score:
+                    records.append(
+                        {
+                            "name": region,
+                            "signature": sig,
+                            "soft_label": fallback.tolist(),
+                            "likelihoods": [float("nan")] * num_classes,
+                        }
+                    )
+                continue
+
+            group = fit_groups[region].reset_index(drop=True)
             count_matrix = group[count_columns].values.astype(float)  # (n_sigs, C)
 
             # estimate the per-ctype archetype methylation probabilities mu[c, k]
@@ -186,7 +214,7 @@ class ArchetypeLabeler(AbstractLabeler):
             else:
                 prior = base_prior
 
-            for sig in group["signature"].values:
+            for sig in sigs_to_score:
                 log_phi = self._signature_log_likelihood(sig, mu, pos_to_idx)
                 likelihoods = np.exp(log_phi)
                 soft_label = self._bayes_posterior(log_phi, prior)
@@ -207,7 +235,7 @@ class ArchetypeLabeler(AbstractLabeler):
             keep_cols.append("likelihoods")
         result_df = result_df[keep_cols]
 
-        reads_df = reads_df.merge(result_df, on=["name", "signature"])
+        reads_df = reads_df.merge(result_df, on=["name", "signature"], how="left")
         return reads_df
 
     def _compute_base_prior(
@@ -359,13 +387,18 @@ class ArchetypeLabeler(AbstractLabeler):
         Compute the per-ctype log-likelihood log P(sig | c) of a signature.
 
         log phi[c] = sum_{k in dom(s)} s_k log(mu[c, k]) + (1 - s_k) log(1 - mu[c, k])
+
+        Positions absent from the fitted model (``pos_to_idx``) are dropped, so a
+        signature seen only outside the fit subset is still scored on its covered
+        CpGs.
         """
         num_classes = mu.shape[0]
-        if len(signature) == 0:
+        pairs = [(pos, state) for pos, state in signature if pos in pos_to_idx]
+        if not pairs:
             return np.zeros(num_classes)
 
-        indices = [pos_to_idx[pos] for pos, _ in signature]
-        states = np.array([state for _, state in signature], dtype=float)  # (L,)
+        indices = [pos_to_idx[pos] for pos, _ in pairs]
+        states = np.array([state for _, state in pairs], dtype=float)  # (L,)
         mu_sub = mu[:, indices]  # (num_classes, L)
         log_terms = states * np.log(mu_sub) + (1.0 - states) * np.log(1.0 - mu_sub)
         return log_terms.sum(axis=1)
