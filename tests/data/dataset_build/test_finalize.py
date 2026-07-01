@@ -1,11 +1,14 @@
 import unittest
+import tempfile
+from pathlib import Path
+
 import pandas as pd
 
 from syto.data.omics_signatures_handlers.binary_cpg_signature import (
     BinaryCpGSignatureHandler,
 )
 from syto.data.labelers.labeler_factory import LabelerContext
-from syto.data.dataset_build.finalize import label_and_split
+from syto.data.dataset_build.finalize import label_and_split, finalize_bucket
 
 NUM_CLASSES = 3
 
@@ -103,3 +106,65 @@ class TestFitSplits(unittest.TestCase):
         # sigV never appears in train -> uniform fallback over 3 classes
         for lab in valid_rows["soft_label"]:
             self.assertAlmostEqual(max(lab), 1.0 / NUM_CLASSES, places=6)
+
+
+class TestFinalizeBucketFilter(unittest.TestCase):
+    def test_filters_by_region_and_pattern_length(self):
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            staged = d / "staged" / "region_bucket=0"
+            staged.mkdir(parents=True)
+            df = pd.DataFrame(
+                {
+                    "name": ["keep", "drop_region", "keep"],
+                    "read_start": [100, 100, 100],
+                    "methylation_ids": ["0101", "0101", "0"],
+                    "original_label": [0, 0, 0],
+                    "dmr_ctype_label": [0, 0, 0],
+                    "file": ["f0", "f0", "f0"],
+                }
+            )
+            df.to_parquet(staged / "s.parquet", index=False)
+            plan = {"file_level": {(0, "f0"): "train"}, "read_level": {}}
+            out_path = finalize_bucket(
+                str(d / "staged"), 0, str(d / "final"), plan,
+                num_classes=NUM_CLASSES,
+                labelers_config={"label": {"type": "hard_with_background"}},
+                signature_config={
+                    "start_column": "read_start",
+                    "methylation_pattern_column": "methylation_ids",
+                },
+                region_names={"keep"},
+                min_pattern_length=2,
+                pattern_column="methylation_ids",
+            )
+            res = pd.read_parquet(out_path)
+            # only the first row survives (region "keep" AND length 4 >= 2)
+            self.assertEqual(len(res), 1)
+            self.assertEqual(res.iloc[0]["name"], "keep")
+
+    def test_empty_bucket_returns_none(self):
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            staged = d / "staged" / "region_bucket=0"
+            staged.mkdir(parents=True)
+            pd.DataFrame(
+                {
+                    "name": ["drop"], "read_start": [100],
+                    "methylation_ids": ["0101"], "original_label": [0],
+                    "dmr_ctype_label": [0], "file": ["f0"],
+                }
+            ).to_parquet(staged / "s.parquet", index=False)
+            plan = {"file_level": {(0, "f0"): "train"}, "read_level": {}}
+            out = finalize_bucket(
+                str(d / "staged"), 0, str(d / "final"), plan,
+                num_classes=NUM_CLASSES,
+                labelers_config={"label": {"type": "hard_with_background"}},
+                signature_config={
+                    "start_column": "read_start",
+                    "methylation_pattern_column": "methylation_ids",
+                },
+                region_names={"keep"},
+                pattern_column="methylation_ids",
+            )
+            self.assertIsNone(out)

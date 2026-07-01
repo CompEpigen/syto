@@ -9,6 +9,10 @@ from syto.data.omics_signatures_handlers.binary_cpg_signature import (
 )
 from syto.data.labelers.labeler_factory import LabelerContext, apply_labelers
 from syto.data.dataset_build.splits import apply_splits
+from syto.data.dataset_build.filters import (
+    filter_by_atlas_regions,
+    filter_by_pattern_length,
+)
 
 
 def label_and_split(
@@ -36,11 +40,27 @@ def finalize_bucket(
     labelers_config,
     signature_config,
     global_prior=None,
+    region_names=None,
+    min_pattern_length=None,
+    pattern_column="pattern",
+    fit_splits=None,
+    fallback="uniform",
 ):
-    """Gather one bucket's staged shards, label+split, sort, and compact."""
+    """Gather one bucket's staged shards, filter, label+split, sort, and compact.
+
+    Returns the written path, or ``None`` when the bucket is empty after filtering.
+    """
     bucket_dir = Path(staged_dir) / f"region_bucket={bucket}"
     shards = sorted(bucket_dir.glob("*.parquet"))
     df = pd.concat([pd.read_parquet(p) for p in shards], ignore_index=True)
+
+    if region_names is not None:
+        df = filter_by_atlas_regions(df, region_names)
+    if min_pattern_length:
+        df = filter_by_pattern_length(df, pattern_column, min_pattern_length)
+    if df.empty:
+        return None
+    df = df.reset_index(drop=True)
 
     handler = BinaryCpGSignatureHandler(
         start_column=signature_config["start_column"],
@@ -53,7 +73,12 @@ def finalize_bucket(
     )
 
     df = label_and_split(
-        df, split_plan, labelers_config=labelers_config, context=context
+        df,
+        split_plan,
+        labelers_config=labelers_config,
+        context=context,
+        fit_splits=fit_splits,
+        fallback=fallback,
     )
     # "signature" is a tuple-of-tuples the soft/archetype labelers add for
     # grouping; pyarrow cannot serialize it, so drop before writing.
