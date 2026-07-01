@@ -9,6 +9,7 @@ from syto.data.dataset_build.filters import (
     filter_by_pattern_length,
     filter_by_atlas_regions,
     load_region_names,
+    staged_counts,
 )
 
 
@@ -41,3 +42,33 @@ class TestLoadRegionNames(unittest.TestCase):
                 p, sep="\t", index=False
             )
             self.assertEqual(load_region_names(str(p)), {"r1", "r2"})
+
+
+class TestStagedCounts(unittest.TestCase):
+    def _write_bucket(self, staged_dir, bucket, df):
+        d = Path(staged_dir) / f"region_bucket={bucket}"
+        d.mkdir(parents=True, exist_ok=True)
+        df.to_parquet(d / "s.parquet", index=False)
+
+    def test_recomputes_counts_after_filters(self):
+        with tempfile.TemporaryDirectory() as d:
+            self._write_bucket(
+                d,
+                0,
+                pd.DataFrame(
+                    {
+                        "file": ["f0", "f0", "f0"],
+                        "original_label": [0, 0, 1],
+                        "name": ["r1", "r2", "r1"],
+                        "pat": ["0101", "01", "0101"],
+                    }
+                ),
+            )
+            out = staged_counts(
+                d,
+                region_names={"r1"},
+                min_pattern_length=3,
+                pattern_column="pat",
+            )
+            got = {(r.file, r.original_label): r.n_reads for r in out.itertuples()}
+            self.assertEqual(got, {("f0", 0): 1, ("f0", 1): 1})
