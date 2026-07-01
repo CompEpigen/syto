@@ -187,7 +187,12 @@ def build_labeler(
 
 
 def apply_labelers(
-    df: pd.DataFrame, labelers_config: dict, context: LabelerContext
+    df: pd.DataFrame,
+    labelers_config: dict,
+    context: LabelerContext,
+    *,
+    fit_splits=None,
+    fallback: str = "uniform",
 ) -> pd.DataFrame:
     """Run every configured labeler, writing each output to its config key.
 
@@ -195,6 +200,13 @@ def apply_labelers(
     immediately after it runs, then to the destination key at the end, so two
     labelers sharing a native output column (e.g. two soft labelers both
     producing ``soft_label``) never collide.
+
+    When ``fit_splits`` is a list of split names, signature-consuming labelers
+    (soft/archetype) estimate their model on reads whose ``split`` is in that list
+    and assign labels to all reads, avoiding validation/test leakage. Reads whose
+    ``(name, signature)`` is unseen in the fit subset receive ``fallback``: a
+    uniform soft label, or ``context.global_prior`` when ``fallback`` is
+    ``"global_prior"``. Hard labelers are per-read and ignore ``fit_splits``.
     """
     if not labelers_config:
         raise ValueError("'labelers' config is empty; at least one entry is required.")
@@ -220,12 +232,24 @@ def apply_labelers(
             context.signature_handler.extract_signature, axis=1
         )
 
+    # Fit mask + fallback vector for leak-free signature labelling.
+    fit_mask = None
+    if fit_splits is not None:
+        fit_mask = df["split"].isin(fit_splits).to_numpy()
+    if fallback == "global_prior" and context.global_prior is not None:
+        fallback_vec = np.asarray(context.global_prior, dtype=float)
+    else:
+        fallback_vec = np.full(context.num_classes, 1.0 / context.num_classes)
+
     temp_renames: dict[str, str] = {}
     for i, (dest_column, entry) in enumerate(labelers_config.items()):
         params = {k: v for k, v in entry.items() if k != "type"}
         labeler, compute_kwargs, native_col = build_labeler(
             entry["type"], params, context
         )
+        if entry["type"] in SIGNATURE_LABELER_TYPES:
+            compute_kwargs["fit_mask"] = fit_mask
+            compute_kwargs["fallback_label"] = fallback_vec
         df = labeler.compute_labels(df, **compute_kwargs)
         temp = f"__labeler_output_{i}"
         df = df.rename(columns={native_col: temp})

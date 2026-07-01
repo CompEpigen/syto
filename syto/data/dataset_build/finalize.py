@@ -11,10 +11,18 @@ from syto.data.labelers.labeler_factory import LabelerContext, apply_labelers
 from syto.data.dataset_build.splits import apply_splits
 
 
-def label_and_split(df, split_plan, *, labelers_config, context):
-    """Apply all configured labelers, then stamp the split column."""
-    df = apply_labelers(df, labelers_config, context)
+def label_and_split(
+    df, split_plan, *, labelers_config, context, fit_splits=None, fallback="uniform"
+):
+    """Stamp the split column first, then apply all configured labelers.
+
+    Splitting first lets signature labelers fit on ``fit_splits`` only, avoiding
+    validation/test information leaking into their own targets.
+    """
     df = apply_splits(df, split_plan)
+    df = apply_labelers(
+        df, labelers_config, context, fit_splits=fit_splits, fallback=fallback
+    )
     return df
 
 
