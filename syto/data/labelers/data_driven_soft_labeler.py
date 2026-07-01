@@ -36,6 +36,8 @@ class DataDrivenSoftLabeler(AbstractLabeler):
         keep_intermediate_values=True,
         precomputed_signature_column=None,
         add_superset_counts: bool = False,
+        fit_mask=None,
+        fallback_label=None,
     ):
         """
         Compute the data driven soft labels for the given dataframe of reads.
@@ -90,9 +92,12 @@ class DataDrivenSoftLabeler(AbstractLabeler):
             ), f"Column '{precomputed_signature_column}' not found in the input DataFrame."
             reads_df["signature"] = reads_df[precomputed_signature_column]
 
+        ## Estimate all counts / pooling from the fit subset only.
+        fit_df = reads_df if fit_mask is None else reads_df[np.asarray(fit_mask)]
+
         ## Aggregate the counts of classes by signatures
         class_counts = (
-            reads_df.groupby(["name", "signature", "original_label"])
+            fit_df.groupby(["name", "signature", "original_label"])
             .size()
             .unstack(fill_value=0)
         )  # df with index (name, signature) and columns original_label with counts as values
@@ -167,7 +172,20 @@ class DataDrivenSoftLabeler(AbstractLabeler):
         ## merge the soft labels back to the original reads dataframe
         if not keep_intermediate_values:
             class_counts = class_counts[["name", "signature", "soft_label"]]
-        reads_df = reads_df.merge(class_counts, on=["name", "signature"])
+        reads_df = reads_df.merge(class_counts, on=["name", "signature"], how="left")
+
+        ## Fallback for reads whose (name, signature) was absent from the fit subset.
+        missing = reads_df["soft_label"].isna()
+        if missing.any():
+            fb = (
+                np.asarray(fallback_label, dtype=float)
+                if fallback_label is not None
+                else np.full(num_classes, 1.0 / num_classes)
+            )
+            reads_df.loc[missing, "soft_label"] = pd.Series(
+                [fb.tolist()] * int(missing.sum()),
+                index=reads_df.index[missing],
+            )
 
         return reads_df
 

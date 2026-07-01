@@ -381,5 +381,29 @@ class TestComputeLabelsRegionScopedPooling(unittest.TestCase):
         self.assertEqual(chr1_sig_a["weighted_counts_2"], 0)
 
 
+class TestFitMaskAndFallback(unittest.TestCase):
+    def test_val_only_signature_gets_fallback(self):
+        labeler = _make_labeler()
+        sig_train = ((100, 0), (101, 1))
+        sig_val = ((300, 1),)  # never appears in the fit subset
+        rows = [{"name": "R", "sig": sig_train, "original_label": 0} for _ in range(10)]
+        rows += [{"name": "R", "sig": sig_val, "original_label": 1}]
+        df = pd.DataFrame(rows)
+        fit_mask = np.array([True] * 10 + [False])  # last row excluded from fitting
+        fallback = np.full(NUM_CLASSES, 1.0 / NUM_CLASSES)
+        res = labeler.compute_labels(
+            df,
+            num_classes=NUM_CLASSES,
+            perform_pooling=False,
+            precomputed_signature_column="sig",
+            keep_intermediate_values=False,
+            fit_mask=fit_mask,
+            fallback_label=fallback,
+        )
+        self.assertEqual(len(res), len(df))
+        val_row = res[res["sig"] == sig_val].iloc[0]
+        np.testing.assert_allclose(val_row["soft_label"], fallback)
+
+
 if __name__ == "__main__":
     unittest.main()
