@@ -66,8 +66,12 @@ class DatasetBuildPipeline:
         self.config = config
         self.logger = logger
         self.output_dir = Path(config["output_dir"])
-        self.staged_dir = self.output_dir / "staged"
-        self.counts_dir = self.output_dir / "counts"
+        # Where staged shards + counts live. Defaults to output_dir so single-dir
+        # runs are unchanged; set it to a previous run's dir to finalize existing
+        # staged data into a fresh output_dir (e.g. stage on U250, finalize on U25).
+        staged_root = Path(config.get("staged_source_dir", self.output_dir))
+        self.staged_dir = staged_root / "staged"
+        self.counts_dir = staged_root / "counts"
         self.final_dir = self.output_dir / "final"
         self.n_buckets = int(config["n_buckets"])
 
