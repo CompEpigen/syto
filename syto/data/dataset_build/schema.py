@@ -11,7 +11,7 @@ RECOVERED_READS_REQUIRED = {
 }
 
 
-def adapt_recovered_reads(df: pd.DataFrame, labels_dict: dict) -> pd.DataFrame:
+def adapt_recovered_reads(df: pd.DataFrame, labels_dict: dict, cell_type_match_dict:dict=None) -> pd.DataFrame:
     """Map a recovered-reads CSV frame to the syto read schema.
 
     Output columns: chromosome, read_start, read_end (0-based inclusive),
@@ -31,6 +31,10 @@ def adapt_recovered_reads(df: pd.DataFrame, labels_dict: dict) -> pd.DataFrame:
             "methylation_ids": df["methyl_seq"].to_numpy(),
         }
     )
+
+    if cell_type_match_dict is not None:
+        df["ctype"] = df["ctype"].apply(lambda x : cell_type_match_dict[x] if x in cell_type_match_dict.keys() else x)
+
     out["read_end"] = out["read_start"] + df["original_seq"].str.len().to_numpy() - 1
     out["original_label"] = df["ctype"].map(ctype_to_label)
     out = out[out["original_label"].notna()].copy()

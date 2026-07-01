@@ -12,7 +12,7 @@ def stage_dataframe(
     df, atlas, region_index, labels_dict, sample_id, *, cell_type_match_dict=None
 ):
     """Adapt, overlap+trim, label, and bucket one sample's reads."""
-    adapted = adapt_recovered_reads(df, labels_dict)
+    adapted = adapt_recovered_reads(df, labels_dict,cell_type_match_dict)
     adapted = adapted.sort_values(["chromosome", "read_start", "read_end"]).reset_index(
         drop=True
     )
