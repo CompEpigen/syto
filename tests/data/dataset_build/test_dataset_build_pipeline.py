@@ -81,3 +81,60 @@ class TestDatasetBuildPipeline(unittest.TestCase):
                 self.assertIn(col, out.columns)
             self.assertNotIn("signature", out.columns)
             self.assertTrue(set(out["split"]).issubset({"train", "valid", "test"}))
+
+
+class TestFinalizeAtlasSubset(unittest.TestCase):
+    def test_finalize_atlas_filters_regions(self):
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            _write_atlas(d / "atlas.tsv")  # regions chr1:1001-1010, chr1:2001-2010
+            # subset atlas keeps only the first region
+            sub = pd.read_csv(d / "atlas.tsv", sep="\t")
+            sub[sub["name"] == "chr1:1001-1010"].to_csv(
+                d / "atlas_sub.tsv", sep="\t", index=False
+            )
+            (d / "labels.json").write_text(
+                json.dumps({"0": "Adipocytes", "1": "Gallbladder"})
+            )
+            inp = d / "in"
+            inp.mkdir()
+            # reads overlapping the FIRST region only (ref_pos 1000)
+            r1 = pd.DataFrame(
+                {
+                    "ref_name": ["chr1"] * 4, "ref_pos": [1000] * 4,
+                    "original_seq": ["ACGTACGTAC"] * 4,
+                    "methyl_seq": ["0101010101"] * 4, "ctype": ["Adipocytes"] * 4,
+                }
+            )
+            # reads overlapping the SECOND region (ref_pos 2000) -> filtered out
+            r2 = pd.DataFrame(
+                {
+                    "ref_name": ["chr1"] * 4, "ref_pos": [2000] * 4,
+                    "original_seq": ["ACGTACGTAC"] * 4,
+                    "methyl_seq": ["0101010101"] * 4, "ctype": ["Gallbladder"] * 4,
+                }
+            )
+            for s in ["s1", "s2", "s3"]:
+                pd.concat([r1, r2]).to_csv(inp / f"{s}.csv", sep="\t", index=False)
+
+            base = {
+                "input_dir": str(inp), "output_dir": str(d / "out"),
+                "atlas_path": str(d / "atlas.tsv"), "reference_genome": "hg38",
+                "labels_dict_path": str(d / "labels.json"), "n_buckets": 2,
+                "n_workers": 1, "seed": 42,
+                "signature": {
+                    "start_column": "read_start",
+                    "methylation_pattern_column": "methylation_ids",
+                },
+                "labelers": {"label": {"type": "hard_with_background"}},
+            }
+            DatasetBuildPipeline({**base, "phase": "stage"}, logging.getLogger("t")).run()
+            DatasetBuildPipeline(
+                {**base, "phase": "finalize",
+                 "finalize_atlas_path": str(d / "atlas_sub.tsv")},
+                logging.getLogger("t"),
+            ).run()
+
+            finals = list((d / "out" / "final").rglob("*.parquet"))
+            out = pd.concat([pd.read_parquet(p) for p in finals], ignore_index=True)
+            self.assertEqual(set(out["name"]), {"chr1:1001-1010"})

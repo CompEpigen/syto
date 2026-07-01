@@ -21,6 +21,7 @@ from syto.data.dataset_build.buckets import build_region_index
 from syto.data.dataset_build.stage import stage_file
 from syto.data.dataset_build.splits import plan_splits
 from syto.data.dataset_build.finalize import finalize_bucket
+from syto.data.dataset_build.filters import staged_counts, load_region_names
 from syto.data.labelers.archetype_labeler import ArchetypeLabeler
 
 
@@ -126,10 +127,33 @@ class DatasetBuildPipeline:
     def _run_finalize(self) -> Dict[str, Any]:
         labels_dict = self._labels_dict()
         num_classes = len(labels_dict)
-        counts = pd.concat(
-            [pd.read_parquet(p) for p in sorted(self.counts_dir.glob("*.parquet"))],
-            ignore_index=True,
+        labelers_config = self.config["labelers"]
+        signature_config = self.config["signature"]
+        pattern_column = signature_config["methylation_pattern_column"]
+
+        finalize_atlas_path = self.config.get("finalize_atlas_path")
+        min_pattern_length = self.config.get("min_pattern_length")
+        fit_splits = self.config.get("fit_splits")
+        fallback = self.config.get("label_fallback", "uniform")
+
+        region_names = (
+            load_region_names(finalize_atlas_path) if finalize_atlas_path else None
         )
+        filtering_active = region_names is not None or bool(min_pattern_length)
+
+        if filtering_active:
+            counts = staged_counts(
+                str(self.staged_dir),
+                region_names=region_names,
+                min_pattern_length=min_pattern_length,
+                pattern_column=pattern_column,
+            )
+        else:
+            counts = pd.concat(
+                [pd.read_parquet(p) for p in sorted(self.counts_dir.glob("*.parquet"))],
+                ignore_index=True,
+            )
+
         plan = plan_splits(
             counts,
             train_ratio=self.config.get("train_ratio", 0.7),
@@ -137,26 +161,29 @@ class DatasetBuildPipeline:
             test_ratio=self.config.get("test_ratio", 0.15),
             seed=self.config.get("seed", 42),
         )
-        labelers_config = self.config["labelers"]
-        signature_config = self.config["signature"]
         global_prior = self._compute_global_prior(counts, num_classes, labelers_config)
         buckets = sorted(
             int(p.name.split("=")[1]) for p in self.staged_dir.glob("region_bucket=*")
         )
         written = []
         for b in tqdm(buckets, desc="Finalizing buckets"):
-            written.append(
-                finalize_bucket(
-                    str(self.staged_dir),
-                    b,
-                    str(self.final_dir),
-                    plan,
-                    num_classes=num_classes,
-                    labelers_config=labelers_config,
-                    signature_config=signature_config,
-                    global_prior=global_prior,
-                )
+            path = finalize_bucket(
+                str(self.staged_dir),
+                b,
+                str(self.final_dir),
+                plan,
+                num_classes=num_classes,
+                labelers_config=labelers_config,
+                signature_config=signature_config,
+                global_prior=global_prior,
+                region_names=region_names,
+                min_pattern_length=min_pattern_length,
+                pattern_column=pattern_column,
+                fit_splits=fit_splits,
+                fallback=fallback,
             )
+            if path is not None:
+                written.append(path)
         self.logger.info("Finalized %d buckets", len(written))
         return {"buckets": len(written), "paths": written}
 
