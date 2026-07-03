@@ -12,7 +12,8 @@
 #   <data_path>/<dataset>/region_bucket=*/part-*.parquet
 # with a `split` column (train/valid/test). Set `label_column:` to the training
 # label column (neural archs). Optional: `data_format: auto|legacy|columnar`,
-# `split_column: split`.
+# `split_column: split`, `min_pattern_length: N` (drop reads with < N marked CpGs;
+# applies to both layouts).
 
 # Model Configuration
 model:

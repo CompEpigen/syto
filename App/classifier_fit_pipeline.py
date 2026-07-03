@@ -24,6 +24,7 @@ from syto.classification.fit_data import (
     load_legacy_split,
     load_columnar_split,
     apply_label_rename,
+    apply_pattern_length_filter,
 )
 
 
@@ -54,6 +55,7 @@ class ClassifierFittingPipeline:
         self.data_format = config.get("data_format", "auto")
         self.split_column = config.get("split_column", "split")
         self.label_column = config.get("label_column")
+        self.min_pattern_length = config.get("min_pattern_length")
 
         datasets = config.get("datasets", ["all"])
         if isinstance(datasets, str):
@@ -195,6 +197,9 @@ class ClassifierFittingPipeline:
                 raise FileNotFoundError(
                     f"No rows for split {split!r} in {dataset_path}"
                 )
+
+        if self.min_pattern_length:
+            df = apply_pattern_length_filter(df, self.min_pattern_length)
 
         if self.label_column:
             df = apply_label_rename(

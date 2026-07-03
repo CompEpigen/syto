@@ -9,6 +9,7 @@ from syto.classification.fit_data import (
     resolve_fit_columns,
     load_legacy_split,
     apply_label_rename,
+    apply_pattern_length_filter,
     load_columnar_split,
 )
 
@@ -104,6 +105,33 @@ class TestApplyLabelRename(unittest.TestCase):
         df = pd.DataFrame({"x": [1]})
         with self.assertRaises(ValueError):
             apply_label_rename(df, "soft_label_pooled", soft_labels=True)
+
+
+class TestApplyPatternLengthFilter(unittest.TestCase):
+    def _df(self):
+        # marked-CpG counts: 4, 2, 1
+        return pd.DataFrame(
+            {"methylation_ids": ["0101", "10", "1"], "label": [0, 1, 2]}
+        )
+
+    def test_drops_short_patterns(self):
+        out = apply_pattern_length_filter(self._df(), 2)
+        self.assertEqual(list(out["methylation_ids"]), ["0101", "10"])
+
+    def test_noop_when_none_or_one(self):
+        for min_len in (None, 0, 1):
+            out = apply_pattern_length_filter(self._df(), min_len)
+            self.assertEqual(len(out), 3)
+
+    def test_resolves_pattern_alias(self):
+        df = pd.DataFrame({"pattern": ["0101", "1"]})
+        out = apply_pattern_length_filter(df, 2)
+        self.assertEqual(list(out["pattern"]), ["0101"])
+
+    def test_missing_pattern_column_raises(self):
+        df = pd.DataFrame({"M": [1], "U": [2]})
+        with self.assertRaises(ValueError):
+            apply_pattern_length_filter(df, 4)
 
 
 class TestLoadColumnarSplit(unittest.TestCase):

@@ -78,3 +78,52 @@ class TestClassifierFitPipelineColumnar(unittest.TestCase):
         self.assertEqual(len(clf.train_df), 2)
         # valid split loaded too.
         self.assertEqual(len(clf.val_df), 2)
+
+
+class TestClassifierFitPipelinePatternFilter(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.data_dir = Path(self.tmp.name) / "ds"
+        part = self.data_dir / "region_bucket=0"
+        part.mkdir(parents=True)
+        # marked-CpG counts within the train split: 4, 2, 1
+        pd.DataFrame(
+            {
+                "input_ids": ["A", "B", "C", "D"],
+                "methylation_ids": ["0101", "10", "1", "0011"],
+                "dmr_ctype_label": [0, 0, 0, 0],
+                "soft_label_pooled": [[0.2, 0.8]] * 4,
+                "split": ["train", "train", "train", "valid"],
+                "region_bucket": [0, 0, 0, 0],
+            }
+        ).to_parquet(part / "part-0.parquet")
+
+        self._orig_factory = pipeline_mod.read_classifier_factory
+        pipeline_mod.read_classifier_factory = lambda **kw: _StubClassifier()
+
+    def tearDown(self):
+        pipeline_mod.read_classifier_factory = self._orig_factory
+        self.tmp.cleanup()
+
+    def _config(self):
+        return {
+            "model": {"architecture": "dismir", "soft_labels": True,
+                      "grg_label_column": "dmr_ctype_label"},
+            "training": {},
+            "output": {"output_dir": str(Path(self.tmp.name) / "out")},
+            "mlflow": {"enabled": False},
+            "data_path": str(self.data_dir),
+            "datasets": "all",
+            "label_column": "soft_label_pooled",
+            "min_pattern_length": 2,
+        }
+
+    def test_min_pattern_length_drops_short_reads(self):
+        pipe = ClassifierFittingPipeline(self._config(), logging.getLogger("t"))
+        pipe.run()
+        clf = _StubClassifier.last
+        # train had counts 4, 2, 1 -> drops the length-1 read, keeps two.
+        self.assertEqual(len(clf.train_df), 2)
+        self.assertEqual(set(clf.train_df["methylation_ids"]), {"0101", "10"})
+        # valid read has count 4 -> retained.
+        self.assertEqual(len(clf.val_df), 1)

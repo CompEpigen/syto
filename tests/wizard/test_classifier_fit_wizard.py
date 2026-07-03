@@ -101,6 +101,13 @@ class TestClassifierFitSchema(unittest.TestCase):
         spec = self.by_key["split_column"]
         self.assertEqual(spec.default, "split")
 
+    def test_min_pattern_length_default_one(self):
+        spec = self.by_key["min_pattern_length"]
+        self.assertEqual(spec.default, 1)
+        self.assertEqual(spec.kind, "int")
+        # 1 (no filtering) is a valid value
+        self.assertIsNone(spec.validate(1))
+
 
 class TestClassifierFitBuildConfig(unittest.TestCase):
     def setUp(self):

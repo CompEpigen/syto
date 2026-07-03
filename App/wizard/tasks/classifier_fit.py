@@ -185,6 +185,14 @@ class ClassifierFitWizard:
                 tier="expert",
             ),
             FieldSpec(
+                key="min_pattern_length",
+                label="Min marked CpGs per read (1 = no filtering)",
+                kind="int",
+                default=1,
+                validate=v.positive_int,
+                tier="expert",
+            ),
+            FieldSpec(
                 key="max_sequence_length",
                 label="max_sequence_length",
                 kind="int",

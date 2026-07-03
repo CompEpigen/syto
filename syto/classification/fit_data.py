@@ -97,6 +97,29 @@ def apply_label_rename(df, label_column, soft_labels):
     return df.rename(columns={label_column: canonical})
 
 
+def apply_pattern_length_filter(df, min_pattern_length, *, pattern_column="methylation_ids"):
+    """Drop reads whose methylation pattern has fewer than ``min_pattern_length`` marked CpGs.
+
+    No-op when ``min_pattern_length`` is falsy or ``<= 1``. The pattern column is
+    alias-resolved (e.g. ``methylation_ids`` matches ``pattern``); if the data
+    carries no such column while filtering is requested, this raises so a
+    misconfiguration is loud rather than silently training on unfiltered reads.
+    """
+    if not min_pattern_length or min_pattern_length <= 1:
+        return df
+
+    from syto.data.dataset_build.filters import filter_by_pattern_length
+
+    col = resolve_column(list(df.columns), pattern_column)
+    if col is None:
+        raise ValueError(
+            f"min_pattern_length={min_pattern_length} is set but no methylation "
+            f"pattern column ({pattern_column!r} or an alias) was found in the "
+            f"data; available columns: {list(df.columns)}"
+        )
+    return filter_by_pattern_length(df, col, min_pattern_length)
+
+
 def load_columnar_split(dataset_dir, split, *, declared_columns, split_column="split"):
     """Read one split from a columnar (split-as-column) parquet dataset.
 
