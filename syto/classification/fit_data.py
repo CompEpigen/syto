@@ -117,7 +117,10 @@ def apply_pattern_length_filter(df, min_pattern_length, *, pattern_column="methy
             f"pattern column ({pattern_column!r} or an alias) was found in the "
             f"data; available columns: {list(df.columns)}"
         )
-    return filter_by_pattern_length(df, col, min_pattern_length)
+    # Reset the index: dropping rows leaves a gappy index, but downstream
+    # classifiers index the per-read Series positionally (``series[i]``), which
+    # is label-based and only correct on a contiguous 0..n-1 index.
+    return filter_by_pattern_length(df, col, min_pattern_length).reset_index(drop=True)
 
 
 def load_columnar_split(dataset_dir, split, *, declared_columns, split_column="split"):

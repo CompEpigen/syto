@@ -133,6 +133,17 @@ class TestApplyPatternLengthFilter(unittest.TestCase):
         with self.assertRaises(ValueError):
             apply_pattern_length_filter(df, 4)
 
+    def test_index_is_reset_after_dropping(self):
+        # Dropping the first row must not leave a gappy index: downstream
+        # classifiers index the methylation Series positionally (series[i]).
+        df = pd.DataFrame(
+            {"methylation_ids": ["1", "0101", "0011"], "label": [0, 1, 2]}
+        )
+        out = apply_pattern_length_filter(df, 2)
+        self.assertEqual(list(out.index), list(range(len(out))))
+        # first surviving read is reachable at positional index 0
+        self.assertEqual(out["methylation_ids"][0], "0101")
+
 
 class TestLoadColumnarSplit(unittest.TestCase):
     def setUp(self):
