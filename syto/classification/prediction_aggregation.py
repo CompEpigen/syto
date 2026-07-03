@@ -398,6 +398,7 @@ def aggregate_predictions_by_grg(
 
     return result
 
+
 def aggregate_by_grg_from_np_arrays(
     read_ids: np.ndarray,
     gr_group_idx_array: np.ndarray,

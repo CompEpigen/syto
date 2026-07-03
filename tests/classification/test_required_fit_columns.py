@@ -24,8 +24,12 @@ class TestRequiredFitColumns(unittest.TestCase):
             soft_labels=True,
         )
         cols = clf.required_fit_columns(
-            {"model": {"classifier_head_implementation": "grg_attention_based",
-                       "grg_label_column": "dmr_ctype_label"}}
+            {
+                "model": {
+                    "classifier_head_implementation": "grg_attention_based",
+                    "grg_label_column": "dmr_ctype_label",
+                }
+            }
         )
         self.assertEqual(cols, ["input_ids", "methylation_ids", "dmr_ctype_label"])
 
@@ -42,7 +46,13 @@ class TestRequiredFitColumns(unittest.TestCase):
     def test_cancer_detector(self):
         clf = _make("cancer_detector")
         cols = clf.required_fit_columns(
-            {"training": {"col_n_meth_cpgs": "M", "col_n_unmeth_cpgs": "U",
-                          "col_label": "label", "col_marker_label": "dmr_ctype_label"}}
+            {
+                "training": {
+                    "col_n_meth_cpgs": "M",
+                    "col_n_unmeth_cpgs": "U",
+                    "col_label": "label",
+                    "col_marker_label": "dmr_ctype_label",
+                }
+            }
         )
         self.assertEqual(cols, ["M", "U", "label", "dmr_ctype_label"])

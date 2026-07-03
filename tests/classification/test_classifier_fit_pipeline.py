@@ -54,8 +54,11 @@ class TestClassifierFitPipelineColumnar(unittest.TestCase):
 
     def _config(self):
         return {
-            "model": {"architecture": "dismir", "soft_labels": True,
-                      "grg_label_column": "dmr_ctype_label"},
+            "model": {
+                "architecture": "dismir",
+                "soft_labels": True,
+                "grg_label_column": "dmr_ctype_label",
+            },
             "training": {},
             "output": {"output_dir": str(Path(self.tmp.name) / "out")},
             "mlflow": {"enabled": False},
@@ -107,8 +110,11 @@ class TestClassifierFitPipelinePatternFilter(unittest.TestCase):
 
     def _config(self):
         return {
-            "model": {"architecture": "dismir", "soft_labels": True,
-                      "grg_label_column": "dmr_ctype_label"},
+            "model": {
+                "architecture": "dismir",
+                "soft_labels": True,
+                "grg_label_column": "dmr_ctype_label",
+            },
             "training": {},
             "output": {"output_dir": str(Path(self.tmp.name) / "out")},
             "mlflow": {"enabled": False},
