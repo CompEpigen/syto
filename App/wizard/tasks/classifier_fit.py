@@ -164,6 +164,27 @@ class ClassifierFitWizard:
                 validate=v.non_empty,
             ),
             FieldSpec(
+                key="label_column",
+                label="Training label column (columnar datasets)",
+                kind="text",
+                validate=v.non_empty,
+                when=_in(NEURAL_ARCHS),
+            ),
+            FieldSpec(
+                key="data_format",
+                label="Data format",
+                kind="select",
+                choices=["auto", "legacy", "columnar"],
+                default="auto",
+            ),
+            FieldSpec(
+                key="split_column",
+                label="Split column name (columnar datasets)",
+                kind="text",
+                default="split",
+                tier="expert",
+            ),
+            FieldSpec(
                 key="max_sequence_length",
                 label="max_sequence_length",
                 kind="int",

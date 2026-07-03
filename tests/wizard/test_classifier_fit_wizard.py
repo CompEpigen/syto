@@ -82,6 +82,25 @@ class TestClassifierFitSchema(unittest.TestCase):
             self.by_key["training.training_args.adam_beta1"].tier, "expert"
         )
 
+    def test_label_column_mandatory_for_neural(self):
+        spec = self.by_key["label_column"]
+        self.assertTrue(spec.when(self._arch("dismir")))
+        self.assertTrue(spec.when(self._arch("methylbert")))
+        self.assertTrue(spec.when(self._arch("epigenbert2")))
+        self.assertFalse(spec.when(self._arch("lookup")))
+        self.assertFalse(spec.when(self._arch("cancer_detector")))
+        # mandatory -> rejects blank
+        self.assertIsNotNone(spec.validate(""))
+
+    def test_data_format_choices(self):
+        spec = self.by_key["data_format"]
+        self.assertEqual(set(spec.choices), {"auto", "legacy", "columnar"})
+        self.assertEqual(spec.default, "auto")
+
+    def test_split_column_default(self):
+        spec = self.by_key["split_column"]
+        self.assertEqual(spec.default, "split")
+
 
 class TestClassifierFitBuildConfig(unittest.TestCase):
     def setUp(self):
