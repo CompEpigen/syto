@@ -382,21 +382,8 @@ def aggregate_predictions_by_grg(
         return pd.Series(result)
 
     weighted_avg = df.groupby(group_cols).apply(weighted_average, include_groups=False)
-
     # Combine results
     result = simple_avg.join(weighted_avg)
-
-    # Add additional metadata columns (take first value per group)
-    # metadata_cols = [
-    #     col
-    #     for col in df.columns
-    #     if col not in prediction_cols + group_cols + ["_weight", weight_col]
-    #     and col in ["ctype", "dmr_ctype", "label", "chromosome"]
-    # ]
-
-    # if metadata_cols:
-    #     metadata = df.groupby(group_cols)[metadata_cols].first()
-    #     result = result.join(metadata)
     result.reset_index(inplace=True)
 
     if fill_in_missing_labels:
@@ -410,65 +397,6 @@ def aggregate_predictions_by_grg(
         )
 
     return result
-
-
-def aggregate_predictions_by_grg_optimized(
-    df: pd.DataFrame,
-    group_cols: list[str],
-    weight_col: str = "total_marked_cpgs",
-):
-    """Optimized aggregation using vectorized operations."""
-
-    prediction_cols = [
-        col
-        for col in df.columns
-        if col.startswith("prediction_") and col[11:].isdigit()
-    ]
-    prediction_cols = sorted(prediction_cols, key=lambda x: int(x.split("_")[1]))
-    if "methylation_level" in df.columns:
-        prediction_cols.append("methylation_level")
-
-    df = df.copy()
-    if weight_col not in df.columns:
-        if "methylated_CpGs" in df.columns and "unmethylated_CpGs" in df.columns:
-            df[weight_col] = df["methylated_CpGs"] + df["unmethylated_CpGs"]
-        else:
-            raise ValueError(f"Weight column '{weight_col}' not found")
-
-    # Clip weights to avoid division by zero
-    # (the explicit conversion to float is necessary to avoid silent downcasting to int
-    # after clipping which would make the weights 0 again)
-    df["_weight"] = df[weight_col].astype(float).clip(lower=1e-10)
-    # Pre-compute weighted values for each prediction column
-    for col in prediction_cols:
-        df[f"_weighted_{col}"] = df[col] * df["_weight"]
-
-    # Build aggregation dictionary
-    agg_dict = {}
-    # Sum of weighted values and weights
-    for col in prediction_cols:
-        agg_dict[f"_weighted_{col}_sum"] = (f"_weighted_{col}", "sum")
-    agg_dict["_weight_sum"] = ("_weight", "sum")
-    agg_dict["n_reads"] = ("_weight", "count")
-    agg_dict["total_weight"] = (weight_col, "sum")
-
-    # Metadata columns - take first value
-    metadata_cols = [col for col in ["label", "chromosome"] if col in df.columns]
-    for col in metadata_cols:
-        agg_dict[col] = (col, "first")
-
-    # Perform aggregation
-    grouped = df.groupby(group_cols, sort=True)
-    result = grouped.agg(**agg_dict).reset_index()
-
-    # Compute weighted averages from sums
-    for col in prediction_cols:
-        result[f"{col}_wavg"] = result[f"_weighted_{col}_sum"] / result["_weight_sum"]
-        result.drop(columns=[f"_weighted_{col}_sum"], inplace=True)
-
-    result.drop(columns=["_weight_sum"], inplace=True)
-    return result
-
 
 def aggregate_by_grg_from_np_arrays(
     read_ids: np.ndarray,
