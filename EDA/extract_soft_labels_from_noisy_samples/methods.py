@@ -722,6 +722,7 @@ def sl_with_simple_archetypes_with_multiple_regions(
     max_num_iterations: int = 100,
     delta_tol: float = 1e-4,
     return_num_iterations: bool = False,
+    return_archetypes: bool = False,
     verbose=False,
 ):
     """
@@ -751,6 +752,13 @@ def sl_with_simple_archetypes_with_multiple_regions(
             (over all regions) and in p_{b,c}.
         return_num_iterations: if True, additionally return the number of EM
             iterations performed.
+        return_archetypes: if True, additionally return a dict with the raw
+            converged archetypes per region. The dict has the structure
+            ``{"archetypes": {region: np.ndarray of shape (n_ctypes, n_CpG)},
+            "start_CpG_index": {region: int}}``, where ``start_CpG_index`` gives
+            the absolute CpG index of the first column of each region's archetype
+            matrix (so archetype column k corresponds to CpG
+            ``start_CpG_index[region] + k``).
 
     Returns:
         {region: {start: {read_length: np.ndarray of shape
@@ -956,6 +964,12 @@ def sl_with_simple_archetypes_with_multiple_regions(
         result = (proba_sig_given_ctype, ctype_proba_per_sample)
     else:
         result = (proba_sig_given_ctype,)
+    if return_archetypes:
+        archetypes_info = {
+            "archetypes": archetypes,
+            "start_CpG_index": start_CpG_index,
+        }
+        result = result + (archetypes_info,)
     if return_num_iterations:
         result = result + (num_iterations,)
     if len(result) == 1:
