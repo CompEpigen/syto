@@ -95,3 +95,35 @@ def apply_label_rename(df, label_column, soft_labels):
             f"available columns: {list(df.columns)}"
         )
     return df.rename(columns={label_column: canonical})
+
+
+def load_columnar_split(dataset_dir, split, *, declared_columns, split_column="split"):
+    """Read one split from a columnar (split-as-column) parquet dataset.
+
+    Projects to only the resolved ``declared_columns`` and pushes the
+    ``split_column == split`` filter down into the scan, so neither unused label
+    columns nor other splits are materialised. ``partitioning=None`` makes the
+    reader ignore ``region_bucket=*`` directory names (the value is also present
+    as a real column in each part file), avoiding an ambiguous-field clash.
+    """
+    import pyarrow.dataset as pads  # local import keeps module import cheap
+
+    dataset = pads.dataset(str(dataset_dir), format="parquet", partitioning=None)
+    available = dataset.schema.names
+    if split_column not in available:
+        raise ValueError(
+            f"split column {split_column!r} not found in columnar dataset "
+            f"{dataset_dir}; available columns: {available}"
+        )
+
+    columns = resolve_fit_columns(declared_columns, available)
+    read_columns = columns + ([split_column] if split_column not in columns else [])
+
+    table = dataset.to_table(
+        columns=read_columns,
+        filter=pads.field(split_column) == split,
+    )
+    df = table.to_pandas()
+    if split_column not in columns:
+        df = df.drop(columns=[split_column])
+    return df

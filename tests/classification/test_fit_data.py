@@ -9,6 +9,7 @@ from syto.classification.fit_data import (
     resolve_fit_columns,
     load_legacy_split,
     apply_label_rename,
+    load_columnar_split,
 )
 
 
@@ -103,3 +104,56 @@ class TestApplyLabelRename(unittest.TestCase):
         df = pd.DataFrame({"x": [1]})
         with self.assertRaises(ValueError):
             apply_label_rename(df, "soft_label_pooled", soft_labels=True)
+
+
+class TestLoadColumnarSplit(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+        # Two region_bucket partitions, each with train + valid rows and two
+        # label columns (only one of which we will request).
+        for bucket in (0, 1):
+            part = self.dir / f"region_bucket={bucket}"
+            part.mkdir()
+            pd.DataFrame(
+                {
+                    "input_ids": [f"seqA{bucket}", f"seqB{bucket}"],
+                    "methylation_ids": ["0101", "1100"],
+                    "dmr_ctype_label": [bucket, bucket],
+                    "soft_label_pooled": [[0.2, 0.8], [0.7, 0.3]],
+                    "soft_label_other": [[0.9, 0.1], [0.4, 0.6]],
+                    "split": ["train", "valid"],
+                    "region_bucket": [bucket, bucket],
+                }
+            ).to_parquet(part / "part-0.parquet")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_projection_and_split_filter(self):
+        df = load_columnar_split(
+            self.dir,
+            "train",
+            declared_columns=[
+                "input_ids",
+                "methylation_ids",
+                "dmr_ctype_label",
+                "soft_label_pooled",
+            ],
+        )
+        # Only requested columns (split dropped, soft_label_other pruned).
+        self.assertEqual(
+            set(df.columns),
+            {"input_ids", "methylation_ids", "dmr_ctype_label", "soft_label_pooled"},
+        )
+        # Only train rows: one per bucket.
+        self.assertEqual(len(df), 2)
+        self.assertTrue(all(s.startswith("seqA") for s in df["input_ids"]))
+
+    def test_empty_when_split_absent(self):
+        df = load_columnar_split(
+            self.dir,
+            "test",
+            declared_columns=["input_ids", "methylation_ids"],
+        )
+        self.assertTrue(df.empty)
