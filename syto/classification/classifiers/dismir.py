@@ -1517,6 +1517,14 @@ class Dismir(AbstractReadClassifier):
 
         return result
 
+    def required_fit_columns(self, config: dict) -> list[str]:
+        model = config.get("model", {}) or {}
+        cols = ["input_ids", "methylation_ids"]
+        head = model.get("classifier_head_implementation", "grg_attention_based")
+        if head == "grg_attention_based":
+            cols.append(model.get("grg_label_column", "dmr_ctype_label"))
+        return cols
+
     @mlflow_tracked_fit
     def fit_classificaton(
         self,

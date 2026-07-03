@@ -660,6 +660,15 @@ class CancerDetectorClassifier(AbstractReadClassifier):
             result[col] = probabilities[:, i]
         return result
 
+    def required_fit_columns(self, config: dict) -> list[str]:
+        t = config.get("training", {}) or {}
+        return [
+            t.get("col_n_meth_cpgs", "M"),
+            t.get("col_n_unmeth_cpgs", "U"),
+            t.get("col_label", "original_label"),
+            t.get("col_marker_label", "dmr_ctype_label"),
+        ]
+
     @mlflow_tracked_fit
     def fit_classificaton(
         self,

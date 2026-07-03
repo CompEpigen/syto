@@ -582,6 +582,10 @@ class LookupClassifier(AbstractReadClassifier):
         """Predict method for compatibility with AbstractReadClassifier interface."""
         return self.predict(split_df)
 
+    def required_fit_columns(self, config: dict) -> list[str]:
+        # self.config is a LabelConfig with the ground-truth-class column name.
+        return ["name", "trimmed_start", "methylation_ids", self.config.label_col]
+
     @mlflow_tracked_fit
     def fit_classificaton(
         self,

@@ -52,6 +52,18 @@ class AbstractReadClassifier(ABC):
             self (the fitted classifier instance).
         """
 
+    def required_fit_columns(self, config: dict) -> list[str]:
+        """Feature/auxiliary columns this classifier reads at fit time.
+
+        Excludes the training label column, which the fitting pipeline supplies
+        separately from its ``label_column`` config. ``config`` is the full
+        parsed fit config (``model``, ``training``, ...). Concrete classifiers
+        override this; the base raises so gaps are loud.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not declare required_fit_columns"
+        )
+
     @abstractmethod
     def save(self, path: Union[str, Path]) -> None:
         """Persist the fitted classifier to disk."""
