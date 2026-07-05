@@ -130,8 +130,6 @@ class TestClassifierFitBuildConfig(unittest.TestCase):
         ans = self._shared("cancer_detector")
         ans.update(
             {
-                "training.col_n_meth_cpgs": "M",
-                "training.col_n_unmeth_cpgs": "U",
                 "training.col_label": "label",
                 "training.col_marker_label": "dmr_ctype_label",
                 "training.eps_beta_fit": 0.01,

@@ -235,20 +235,6 @@ class ClassifierFitWizard:
             ),
             # ── Training: cancer_detector ──
             FieldSpec(
-                key="training.col_n_meth_cpgs",
-                label="col_n_meth_cpgs",
-                kind="text",
-                default="M",
-                when=_is("cancer_detector"),
-            ),
-            FieldSpec(
-                key="training.col_n_unmeth_cpgs",
-                label="col_n_unmeth_cpgs",
-                kind="text",
-                default="U",
-                when=_is("cancer_detector"),
-            ),
-            FieldSpec(
                 key="training.col_label",
                 label="col_label",
                 kind="text",

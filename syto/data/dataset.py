@@ -32,6 +32,48 @@ def resolve_column(columns, canonical_name):
     return None
 
 
+def add_meth_unmeth_counts(
+    df: pd.DataFrame,
+    methylation_column: str = None,
+    col_n_meth: str = "M",
+    col_n_unmeth: str = "U",
+    inplace: bool = False,
+) -> pd.DataFrame:
+    """Add per-read methylated / unmethylated CpG counts from the methylation pattern.
+
+    Each read's methylation pattern encodes CpG states as characters, where
+    ``"1"`` marks a methylated CpG and ``"0"`` an unmethylated one. This adds the
+    counts of each as ``col_n_meth`` and ``col_n_unmeth`` columns.
+
+    Args:
+        df: Read-level DataFrame containing a methylation pattern column.
+        methylation_column: Name of the pattern column. When ``None`` it is
+            resolved from the ``methylation_ids`` aliases via :func:`resolve_column`.
+        col_n_meth: Name of the methylated-count column to add.
+        col_n_unmeth: Name of the unmethylated-count column to add.
+        inplace: If ``True``, mutate ``df`` directly instead of a copy.
+
+    Returns:
+        The DataFrame with the two count columns added.
+
+    Raises:
+        ValueError: If no methylation pattern column can be resolved.
+    """
+    if methylation_column is None:
+        methylation_column = resolve_column(df.columns, "methylation_ids")
+    if methylation_column is None or methylation_column not in df.columns:
+        raise ValueError(
+            "Could not resolve a methylation pattern column; "
+            f"tried {methylation_column!r} among {list(df.columns)}"
+        )
+    if not inplace:
+        df = df.copy()
+    patterns = df[methylation_column]
+    df[col_n_meth] = patterns.str.count("1")
+    df[col_n_unmeth] = patterns.str.count("0")
+    return df
+
+
 def generate_example_data(
     sequence_length: int = 150,
     include_cpg_methylation: bool = False,

@@ -48,11 +48,9 @@ class TestRequiredFitColumns(unittest.TestCase):
         cols = clf.required_fit_columns(
             {
                 "training": {
-                    "col_n_meth_cpgs": "M",
-                    "col_n_unmeth_cpgs": "U",
                     "col_label": "label",
                     "col_marker_label": "dmr_ctype_label",
                 }
             }
         )
-        self.assertEqual(cols, ["M", "U", "label", "dmr_ctype_label"])
+        self.assertEqual(cols, ["methylation_ids", "label", "dmr_ctype_label"])
