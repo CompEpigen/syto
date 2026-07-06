@@ -64,6 +64,19 @@ class AbstractReadClassifier(ABC):
             f"{type(self).__name__} does not declare required_fit_columns"
         )
 
+    def mlflow_fit_params(self) -> dict:
+        """Architecture-relevant hyperparameters to record on an MLflow run.
+
+        Mirrors :meth:`required_fit_columns`: each classifier surfaces only the
+        init/hyperparameters meaningful to *its* architecture, so runs are not
+        polluted with the defaults other architectures ignore (e.g.
+        ``dismir_flavor`` on a non-Dismir run). The fitting pipeline logs these
+        under a ``model.*`` namespace. The base returns an empty dict;
+        classifiers whose fit-time hyperparameters already flow through the
+        ``training`` config need not override it.
+        """
+        return {}
+
     @abstractmethod
     def save(self, path: Union[str, Path]) -> None:
         """Persist the fitted classifier to disk."""

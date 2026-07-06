@@ -20,9 +20,13 @@ class _StubClassifier:
     def required_fit_columns(self, config):
         return ["input_ids", "methylation_ids", "dmr_ctype_label"]
 
+    def mlflow_fit_params(self):
+        return {"flavour": "lstm"}
+
     def fit_classificaton(self, train_df, val_df=None, output_dir=None, **kwargs):
         self.train_df = train_df
         self.val_df = val_df
+        self.fit_kwargs = kwargs
         return self
 
 
@@ -81,6 +85,19 @@ class TestClassifierFitPipelineColumnar(unittest.TestCase):
         self.assertEqual(len(clf.train_df), 2)
         # valid split loaded too.
         self.assertEqual(len(clf.val_df), 2)
+
+    def test_mlflow_extra_params_carry_pipeline_and_model_metadata(self):
+        pipe = ClassifierFittingPipeline(self._config(), logging.getLogger("t"))
+        pipe.run()
+        clf = _StubClassifier.last
+        extra = clf.fit_kwargs["mlflow_extra_params"]
+        # Pipeline-level knobs that are not part of training_cfg.
+        self.assertEqual(extra["label_column"], "soft_label_pooled")
+        self.assertEqual(extra["split_column"], "split")
+        self.assertIsNone(extra["min_pattern_length"])
+        self.assertIsNone(extra["max_sequence_length"])
+        # Architecture-relevant params, namespaced under "model".
+        self.assertEqual(extra["model"], {"flavour": "lstm"})
 
 
 class TestClassifierFitPipelinePatternFilter(unittest.TestCase):

@@ -125,12 +125,14 @@ class ClassifierFittingPipeline:
             val_df = None
 
         self.logger.info("Fitting classifier...")
+
         classifier.fit_classificaton(
             train_df=train_df,
             val_df=val_df,
             output_dir=out_dir,
-            mlflow_run_name=f"{self.model_arch}_{dataset_name}",
+            mlflow_run_name=f"{self.model_arch}_{dataset_name}_{self.label_column}",
             mlflow_tags={"architecture": self.model_arch, "dataset": dataset_name},
+            mlflow_extra_params=self._mlflow_extra_params(classifier),
             track_with_mlflow=self.mlflow_cfg.get("enabled", True),
             **self.training_cfg,
         )
@@ -180,6 +182,24 @@ class ClassifierFittingPipeline:
             # MethylBert cwce/focal-loss tuning fields, forwarded as-is. Unused
             # by other architectures and ignored by their load()/__init__.
             **model_cfg.get("methylbert_config", {}),
+        }
+
+    def _mlflow_extra_params(self, classifier) -> Dict[str, Any]:
+        """Run metadata to log as MLflow params beyond the training kwargs.
+
+        Covers the pipeline-level knobs that shape the fit but are not part of
+        ``training_cfg`` (label/split selection, read filtering, sequence
+        length), plus each architecture's own relevant init params exposed via
+        ``classifier.mlflow_fit_params`` under a ``model.*`` namespace. Nested
+        dicts are flattened by the ``mlflow_tracked_fit`` decorator.
+        """
+        return {
+            "data_format": self.data_format,
+            "split_column": self.split_column,
+            "label_column": self.label_column,
+            "min_pattern_length": self.min_pattern_length,
+            "max_sequence_length": self.config.get("max_sequence_length"),
+            "model": classifier.mlflow_fit_params(),
         }
 
     def _load_split(self, dataset_path, split, fmt, declared_columns):

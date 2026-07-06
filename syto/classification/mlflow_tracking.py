@@ -73,6 +73,11 @@ def mlflow_tracked_fit(fit_classificaton: Callable) -> Callable:
       ``fit_classificaton`` without any MLflow involvement (e.g. in unit tests).
     - ``mlflow_run_name`` (str): name for the MLflow run.
     - ``mlflow_tags`` (dict): extra tags to set on the run.
+    - ``mlflow_extra_params`` (dict): additional params to log, flattened like
+      the training kwargs. Log-only: consumed here and never forwarded to the
+      wrapped ``fit_classificaton``. Used by the caller to record run metadata
+      that is not a fit hyperparameter (dataset/split/label config, and each
+      architecture's relevant init params via ``mlflow_fit_params``).
 
     The tracking URI and experiment are expected to already be configured
     (e.g. via ``mlflow.set_tracking_uri`` / ``mlflow.set_experiment``) before
@@ -88,6 +93,7 @@ def mlflow_tracked_fit(fit_classificaton: Callable) -> Callable:
 
         run_name = kwargs.pop("mlflow_run_name", None)
         tags = kwargs.pop("mlflow_tags", None) or {}
+        extra_params = kwargs.pop("mlflow_extra_params", None) or {}
 
         with mlflow.start_run(
             run_name=run_name, tags=tags, nested=mlflow.active_run() is not None
@@ -102,6 +108,7 @@ def mlflow_tracked_fit(fit_classificaton: Callable) -> Callable:
                 params["output_dir"] = str(output_dir)
             for key, value in kwargs.items():
                 _flatten_for_mlflow(key, value, params)
+            _flatten_for_mlflow("", extra_params, params)
             mlflow.log_params(params)
 
             try:
