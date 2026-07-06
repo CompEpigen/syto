@@ -1,0 +1,54 @@
+# ══════════════════════════════════════════════════════════════════════════════
+# Pseudobulk generation from a COLUMNAR raw-splits dataset
+# ══════════════════════════════════════════════════════════════════════════════
+# The shared dataset directory holds a partitioned parquet dataset
+# (region_bucket=*/part-*.parquet) with the split in a `split` column, i.e. the
+# same layout the classifier-fit pipeline consumes. Reads are prepared and
+# classifier-predicted (stages 2-3) before generation.
+
+input_type: raw_splits
+
+# Shared columnar (or legacy-dir) dataset directory for all splits.
+data_path: /path/to/columnar_dataset_dir
+data_format: auto        # auto | legacy | columnar
+split_column: split
+
+# Optional: drop reads with fewer than N marked CpGs (match training-data prep).
+# min_pattern_length: 4
+
+atlas_path: /path/to/Atlas.U25.l4.hg38.full.tsv
+atlas_name: U25.l4.hg38
+
+# Which splits to load + each split's target-proportions file. For raw_splits the
+# read data comes from `data_path`; only target_proportions_path is per-split.
+split_information:
+  train:
+    target_proportions_path: /path/to/target_proportions_train.npz
+  valid:
+    target_proportions_path: /path/to/target_proportions_valid.npz
+
+classifier_type: dismir
+classifier_checkpoint: /path/to/weight.pt
+classifier_config:
+  seq_length: 150
+  soft_labels: true
+  num_labels: 39
+  batch_size: 2200
+  classifier_head_implementation: grg_attention_based
+  num_grg_labels: 39
+  grg_label_column: dmr_ctype_label
+  dismir_flavor: lstm
+
+labels_dict_path: App/labels_dict.json
+num_labels: 39
+labeling_scheme: soft_labels
+
+n_reads_to_sample: 475000
+class_label_column: original_label
+grg_label_column: dmr_ctype_label
+grg_sampling_method: uniform_multinomial
+substitution_method: uniform_number
+
+n_workers: 5
+batch_size: 100
+output_dir: tmp/
