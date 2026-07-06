@@ -196,3 +196,25 @@ class TestLoadColumnarSplit(unittest.TestCase):
             declared_columns=["input_ids", "methylation_ids"],
         )
         self.assertTrue(df.empty)
+
+
+class TestColumnarSchemaNames(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+        part = self.dir / "region_bucket=0"
+        part.mkdir()
+        pd.DataFrame(
+            {"input_ids": ["a"], "methylation_ids": ["01"], "split": ["train"]}
+        ).to_parquet(part / "part-0.parquet")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_returns_all_column_names(self):
+        from syto.classification.fit_data import columnar_schema_names
+
+        names = columnar_schema_names(self.dir)
+        self.assertIn("input_ids", names)
+        self.assertIn("methylation_ids", names)
+        self.assertIn("split", names)

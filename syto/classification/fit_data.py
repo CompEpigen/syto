@@ -155,3 +155,15 @@ def load_columnar_split(dataset_dir, split, *, declared_columns, split_column="s
     if split_column not in columns:
         df = df.drop(columns=[split_column])
     return df
+
+
+def columnar_schema_names(dataset_dir):
+    """Return the column names of a columnar parquet dataset (schema peek only).
+
+    Uses ``partitioning=None`` so ``region_bucket=*`` directory names are not
+    surfaced as extra fields (the value is also a real column in each part).
+    """
+    import pyarrow.dataset as pads  # local import keeps module import cheap
+
+    dataset = pads.dataset(str(dataset_dir), format="parquet", partitioning=None)
+    return list(dataset.schema.names)
