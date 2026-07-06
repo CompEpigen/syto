@@ -1,4 +1,6 @@
+import tempfile
 import unittest
+from pathlib import Path
 
 import pandas as pd
 
@@ -7,6 +9,7 @@ from syto.data.pseudobulk_input import (
     OPTIONAL_COLUMNS,
     build_declared_columns,
     ensure_ncpgs,
+    load_raw_splits,
 )
 
 
@@ -70,3 +73,97 @@ class TestEnsureNcpgs(unittest.TestCase):
         df = pd.DataFrame({"x": [1]})
         with self.assertRaises(ValueError):
             ensure_ncpgs(df)
+
+
+class TestLoadRawSplitsColumnar(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+        part = self.dir / "region_bucket=0"
+        part.mkdir()
+        # Two splits, an extra label column to prune, and NO NCPGS column.
+        pd.DataFrame(
+            {
+                "input_ids": ["seqT", "seqV"],
+                "methylation_ids": ["0101", "1"],
+                "dmr_ctype_label": [3, 3],
+                "original_label": [3, 5],
+                "chr": ["chr1", "chr1"],
+                "read_start": [100, 200],
+                "read_end": [150, 250],
+                "soft_label_other": [[0.1, 0.9], [0.5, 0.5]],
+                "split": ["train", "valid"],
+                "region_bucket": [0, 0],
+            }
+        ).to_parquet(part / "part-0.parquet")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_projects_filters_and_derives_ncpgs(self):
+        splits = load_raw_splits(
+            self.dir,
+            ["train", "valid"],
+            classifier_required_columns=[
+                "input_ids",
+                "methylation_ids",
+                "dmr_ctype_label",
+            ],
+        )
+        self.assertEqual(set(splits), {"train", "valid"})
+        train = splits["train"]
+        # Only the train row.
+        self.assertEqual(len(train), 1)
+        self.assertEqual(train["input_ids"].iloc[0], "seqT")
+        # Unrequested label column pruned; region_bucket/split not present.
+        self.assertNotIn("soft_label_other", train.columns)
+        self.assertNotIn("split", train.columns)
+        # NCPGS derived from the methylation pattern length.
+        self.assertEqual(train["NCPGS"].iloc[0], 4)
+        self.assertEqual(splits["valid"]["NCPGS"].iloc[0], 1)
+
+    def test_min_pattern_length_filter(self):
+        splits = load_raw_splits(
+            self.dir,
+            ["valid"],
+            classifier_required_columns=["input_ids", "methylation_ids"],
+            min_pattern_length=2,
+        )
+        # valid row has a single-CpG pattern ("1") -> dropped.
+        self.assertEqual(len(splits["valid"]), 0)
+
+    def test_missing_required_column_raises(self):
+        bad = Path(self.tmp.name) / "bad"
+        (bad / "region_bucket=0").mkdir(parents=True)
+        pd.DataFrame({"methylation_ids": ["01"], "split": ["train"]}).to_parquet(
+            bad / "region_bucket=0" / "part-0.parquet"
+        )
+        with self.assertRaises(ValueError):
+            load_raw_splits(
+                bad, ["train"], classifier_required_columns=["methylation_ids"]
+            )
+
+
+class TestLoadRawSplitsLegacy(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+        pd.DataFrame(
+            {
+                "input_ids": ["a", "b"],
+                "methylation_ids": ["0101", "01"],
+                "original_label": [1, 2],
+            }
+        ).to_parquet(self.dir / "train.parquet")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_loads_whole_file_and_derives_ncpgs(self):
+        splits = load_raw_splits(
+            self.dir, ["train"], classifier_required_columns=["input_ids"]
+        )
+        train = splits["train"]
+        # Legacy layout: no projection, all source columns kept.
+        self.assertIn("original_label", train.columns)
+        self.assertEqual(list(train["NCPGS"]), [4, 2])
