@@ -18,11 +18,11 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import DataLoader, Sampler, Dataset
+from torch.utils.data import Dataset
 from transformers import BertPreTrainedModel, BertModel
 from transformers.trainer_callback import TrainerCallback
 from transformers.modeling_outputs import ModelOutput
-from transformers import AutoTokenizer, Trainer, BertConfig, TrainingArguments
+from transformers import AutoTokenizer, BertConfig, TrainingArguments
 
 
 from syto.classification.evaluation import (
