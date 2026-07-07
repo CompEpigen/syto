@@ -22,7 +22,7 @@
 # It must contain, per split:
 #   - outputs/{split}/pseudobulks/i_{idx}/{aggregated_features,target_proportions,...}
 #   - outputs/{split}/pure_profiles/{feature_matrices,uniform_prior,...}
-pseudobulk_h5_path: /mnt/data/syto_experiments/mlflow/198121009408531961/b69bdf5991494cc399e95c12f79dafe1/artifacts/pseudobulk_generation/pseudobulk.h5
+pseudobulk_h5_path: /mnt/data/syto_experiments/mlflow/198121009408531961/1f0aaa3947bb4732a945e76aed3a5864/artifacts/pseudobulk_generation/pseudobulk.h5
 
 # Splits to load from the HDF5 file. The first split is used as the reference
 # (train) split for least-squares deconvolvers; "valid" is used to compute the
@@ -115,4 +115,4 @@ deconvolvers:
 # OUTPUT
 # ══════════════════════════════════════════════════════════════════════════════
 # Directory where fitted models, feature masks, plots and the summary CSV are written.
-output_dir: /mnt/data/syto_experiments/mlflow/198121009408531961/b69bdf5991494cc399e95c12f79dafe1/artifacts/deconvolution
+output_dir: /mnt/data/syto_experiments/mlflow/198121009408531961/1f0aaa3947bb4732a945e76aed3a5864/artifacts/deconvolution

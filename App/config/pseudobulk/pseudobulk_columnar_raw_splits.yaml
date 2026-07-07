@@ -31,7 +31,7 @@ split_information:
     target_proportions_path: /data/dmytro/Experiments/target_proportions_test.npz
 
 classifier_type: dismir
-classifier_checkpoint: /mnt/data/syto_experiments/mlflow/198121009408531961/1f0aaa3947bb4732a945e76aed3a5864/artifacts/weight.pt
+classifier_checkpoint: /mnt/data/syto_experiments/mlflow/198121009408531961/b69bdf5991494cc399e95c12f79dafe1/artifacts/weight.pt
 classifier_config:
   seq_length: 160
   soft_labels: true
