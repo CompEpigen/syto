@@ -9,28 +9,31 @@
 input_type: raw_splits
 
 # Shared columnar (or legacy-dir) dataset directory for all splits.
-data_path: /path/to/columnar_dataset_dir
+data_path: /mnt/data/loyfer/parsed_dataset/U25.l4.hg38/labelers_on_train_no_pattern_len_filter/final
 data_format: auto        # auto | legacy | columnar
 split_column: split
 
 # Optional: drop reads with fewer than N marked CpGs (match training-data prep).
-# min_pattern_length: 4
+min_pattern_length: 4
 
-atlas_path: /path/to/Atlas.U25.l4.hg38.full.tsv
+atlas_path: ../UXM_deconv/supplemental/Atlas.U25.l4.hg38.full.tsv
 atlas_name: U25.l4.hg38
+
 
 # Which splits to load + each split's target-proportions file. For raw_splits the
 # read data comes from `data_path`; only target_proportions_path is per-split.
 split_information:
   train:
-    target_proportions_path: /path/to/target_proportions_train.npz
+    target_proportions_path: /data/dmytro/Experiments/target_proportions_train.npz
   valid:
-    target_proportions_path: /path/to/target_proportions_valid.npz
+    target_proportions_path: /data/dmytro/Experiments/target_proportions_valid.npz
+  test:
+    target_proportions_path: /data/dmytro/Experiments/target_proportions_test.npz
 
 classifier_type: dismir
-classifier_checkpoint: /path/to/weight.pt
+classifier_checkpoint: /mnt/data/syto_experiments/mlflow/198121009408531961/1f0aaa3947bb4732a945e76aed3a5864/artifacts/weight.pt
 classifier_config:
-  seq_length: 150
+  seq_length: 160
   soft_labels: true
   num_labels: 39
   batch_size: 2200
@@ -49,6 +52,6 @@ grg_label_column: dmr_ctype_label
 grg_sampling_method: uniform_multinomial
 substitution_method: uniform_number
 
-n_workers: 5
+n_workers: 10
 batch_size: 100
-output_dir: tmp/
+output_dir: /mnt/data/syto_experiments/mlflow/198121009408531961/b69bdf5991494cc399e95c12f79dafe1/artifacts/

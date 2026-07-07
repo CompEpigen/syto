@@ -20,7 +20,7 @@
 model:
   architecture: dismir
   flavor: lstm
-  num_labels: 39
+  num_labels: 40
   classifier_head_implementation: grg_attention_based
   num_grg_labels: 39
   grg_label_column: dmr_ctype_label
@@ -28,10 +28,10 @@ model:
 
 # Data Configuration
 data_path: /mnt/data/loyfer/parsed_dataset/U25.l4.hg38/
-max_sequence_length: 150
+max_sequence_length: 160
 prediction_batch_size: 128
 datasets: labelers_on_train_no_pattern_len_filter/final
-label_column: soft_label_superset_pooled
+label_column: hard_labels_background_and_smoothing
 min_pattern_length: 4
 
 # Output Configuration
@@ -40,14 +40,14 @@ output_dir: tmp/classifier_fit_test/dismir
 # MLflow Configuration
 mlflow:
   enabled: true
-  experiment_name: pseudobulk_soft_label_superset_pooled
-  tracking_uri: http://127.0.0.1:5000  # Leave as null for local tracking or specify remote URI
+  experiment_name: pseudobulk
+  tracking_uri: file:///mnt/data/syto_experiments/mlflow # Leave as null for local tracking or specify remote URI
 
 # Training Configuration (forwarded to Dismir.fit_split / Dismir.train as kwargs)
 training:
-  epochs: 2
-  batch_size: 512
-  patience: 30
+  epochs: 100
+  batch_size: 128
+  patience: 7
   optimizer_type: ADAM
   lr: 0.001
   weight_decay: 1.0e-6

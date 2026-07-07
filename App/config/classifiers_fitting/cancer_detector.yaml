@@ -6,7 +6,8 @@
 # Expected data layout (datasets: all -> files directly under data_path):
 #   <data_path>/train.{parquet,csv,txt}
 #   <data_path>/valid.{parquet,csv,txt}   (optional, used for validation metrics)
-# Required columns: M, U (methylated/unmethylated CpG counts), original_label,
+# Required columns: methylation_ids (per-read CpG methylation pattern; the
+# methylated/unmethylated CpG counts are derived from it), original_label,
 # dmr_ctype_label (marker / DMR id)
 #
 # Columnar layout (alternative, auto-detected): a partitioned parquet dataset
@@ -21,26 +22,25 @@ model:
   architecture: cancer_detector
 
 # Data Configuration
-data_path: /home/luna.kuleuven.be/u0169940/Data/Loyfer/
-max_sequence_length: 150
+data_path: /mnt/data/loyfer/parsed_dataset/U25.l4.hg38/
+max_sequence_length: 160
 prediction_batch_size: 16
-datasets: SoftLabelsTrainingData_205files_pooled_Jaccard_hg38_mincpg_4_minlen_10_no_data_leak_d041
+datasets: labelers_on_train_no_pattern_len_filter/final
+min_pattern_length: 4
+label_column: hard_label_with_background
 
 # Output Configuration
-output:
-  output_dir: tmp/classifier_fit_test/cancer_detector
+output_dir: tmp/classifier_fit_test/cancer_detector
 
 # MLflow Configuration
 mlflow:
   enabled: true
-  experiment_name: classifier_fit_test_cancer_detector
-  tracking_uri: null  # Leave as null for local tracking or specify remote URI
+  experiment_name: pseudobulk_cancer_detector
+  tracking_uri: file:///mnt/data/syto_experiments/mlflow  # Leave as null for local tracking or specify remote URI
 
 # Training Configuration (forwarded to CancerDetectorClassifier.fit_split -> fit)
 training:
-  col_n_meth_cpgs: M
-  col_n_unmeth_cpgs: U
-  col_label: label
+  col_label: original_label
   col_marker_label: dmr_ctype_label
   eps_beta_fit: 0.01
   class_prior_type: train_freq  # "uniform" or "train_freq"
