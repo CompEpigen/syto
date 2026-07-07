@@ -21,6 +21,11 @@ from torch.utils.data import Dataset
 import numpy as np
 import pandas as pd
 
+from syto.classification.hf_training import (
+    AuxLossLoggingTrainer,
+    BalancedTrainer,
+)
+
 from syto.classification.evaluation import (
     compute_metrics,
     preprocess_logits_for_prediction,
@@ -861,8 +866,10 @@ class EpigenDnabert2(AbstractReadClassifier):
             None,
             None,
         ),
+        signal_mask=None,
+        bg_ratio: float = 0.3,
     ):
-        trainer = transformers.Trainer(
+        common_kwargs = dict(
             model=self.model,
             args=args,
             data_collator=self.data_collator,
@@ -875,6 +882,16 @@ class EpigenDnabert2(AbstractReadClassifier):
             preprocess_logits_for_metrics=preprocess_logits_for_prediction,
             compute_metrics=compute_metrics,
         )
+
+        if signal_mask is None:
+            trainer = AuxLossLoggingTrainer(**common_kwargs)
+        else:
+            trainer = BalancedTrainer(
+                signal_mask=signal_mask,
+                bg_ratio=bg_ratio,
+                **common_kwargs,
+            )
+
         use_table_progress_callback(trainer)
         return trainer
 
@@ -967,6 +984,8 @@ class EpigenDnabert2(AbstractReadClassifier):
         callbacks: Optional[List[TrainerCallback]] = None,
         data_interface: str = "csv",
         resume_from_checkpoint: Optional[Union[bool, str]] = None,
+        signal_mask=None,
+        bg_ratio: float = 0.3,
     ):
 
         # Ensure that either data_path is provided or all datasets are provided
@@ -999,6 +1018,8 @@ class EpigenDnabert2(AbstractReadClassifier):
             eval_dataset=val_dataset,
             args=self.training_args,
             callbacks=callbacks,
+            signal_mask=signal_mask,
+            bg_ratio=bg_ratio,
         )
 
         print("All datasets are successfully initiated")
@@ -1089,6 +1110,8 @@ class EpigenDnabert2(AbstractReadClassifier):
             callbacks=kwargs.get("callbacks", None),
             data_interface="pandas",
             resume_from_checkpoint=kwargs.get("resume_from_checkpoint", None),
+            signal_mask=kwargs.get("signal_mask", None),
+            bg_ratio=kwargs.get("bg_ratio", 0.3),
         )
         self.history.append(extract_trainer_metrics(self.trainer))
 
