@@ -1,16 +1,10 @@
-import sys
 import unittest
 from unittest import mock
 
 import pandas as pd
 
-# mlflow is an optional/heavy dependency; the decorator imports it at module
-# top. Provide a stub so the module imports and calls are recordable.
-mlflow_stub = mock.MagicMock()
-mlflow_stub.active_run.return_value = None
-sys.modules.setdefault("mlflow", mlflow_stub)
-
-from syto.classification.mlflow_tracking import mlflow_tracked_fit  # noqa: E402
+import syto.classification.mlflow_tracking as mlflow_tracking
+from syto.classification.mlflow_tracking import mlflow_tracked_fit
 
 
 class _Classifier:
@@ -25,8 +19,13 @@ class _Classifier:
 
 class TestMlflowExtraParams(unittest.TestCase):
     def setUp(self):
-        mlflow_stub.reset_mock()
-        mlflow_stub.active_run.return_value = None
+        # mlflow is bound at import time in the module under test. Patch it there
+        # directly so the stub is used regardless of whether the real mlflow was
+        # already imported by another test (import order is not deterministic).
+        patcher = mock.patch.object(mlflow_tracking, "mlflow")
+        self.mlflow_stub = patcher.start()
+        self.addCleanup(patcher.stop)
+        self.mlflow_stub.active_run.return_value = None
 
     def test_extra_params_logged_flattened_and_not_forwarded(self):
         train_df = pd.DataFrame({"x": [1, 2, 3]})
@@ -43,7 +42,7 @@ class TestMlflowExtraParams(unittest.TestCase):
         # Log-only: the extra params never reach the wrapped fit.
         self.assertEqual(clf.forwarded_kwargs, {"epochs": 5})
 
-        logged = mlflow_stub.log_params.call_args[0][0]
+        logged = self.mlflow_stub.log_params.call_args[0][0]
         # Training kwargs and dataset sizes are still logged.
         self.assertEqual(logged["epochs"], 5)
         self.assertEqual(logged["train_rows"], 3)

@@ -107,7 +107,7 @@ class LookupClassifier(AbstractReadClassifier):
     def n_keys(self) -> int:
         """Number of unique (region, signature) keys in the lookup table."""
         return len(self._lookup)
-    
+
     def _resolve_signature_column(self, df: pd.DataFrame) -> None:
         """Point the signature handler at whichever methylation-pattern column
         this frame actually carries (``methylation_ids``, ``pattern``, …)."""
@@ -118,6 +118,7 @@ class LookupClassifier(AbstractReadClassifier):
                 f"{list(df.columns)}"
             )
         self.signature_handler.methylation_pattern_column = col
+
     # ------------------------------------------------------------------ fit
     def fit(
         self,

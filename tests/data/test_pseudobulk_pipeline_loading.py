@@ -36,7 +36,7 @@ class TestRawSplitsLoading(unittest.TestCase):
                 "methylation_ids": ["0101", "1"],
                 "dmr_ctype_label": [3, 3],
                 "original_label": [3, 5],
-                "chr": ["chr1", "chr1"],
+                "chromosome": ["chr1", "chr1"],
                 "read_start": [100, 200],
                 "read_end": [150, 250],
                 "soft_label_other": [[0.1, 0.9], [0.5, 0.5]],

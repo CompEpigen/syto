@@ -382,14 +382,19 @@ class TestEstimateRegionArchetypes(unittest.TestCase):
         self.assertAlmostEqual(mu.max(), 1 - eps, places=12)
         self.assertAlmostEqual(mu.min(), eps, places=12)
 
-    def test_completely_uncovered_ctype_raises(self):
-        """A ctype with no covered CpG in the region raises ValueError."""
+    def test_completely_uncovered_ctype_gets_pseudocoverage(self):
+        """A ctype with no covered CpG gets pseudocoverage and warns instead of raising."""
+        eps = 1e-3
+        labeler = _make_labeler(eps=eps)
         signatures = [((100, 1),)]
+        # ctype 0 has 3 reads at pos 100; ctype 1 has none -> completely uncovered
         count_matrix = np.array([[3, 0]], dtype=float)
-        with self.assertRaises(ValueError):
-            self.labeler._estimate_region_archetypes(
+        with self.assertWarns(UserWarning):
+            mu, pos_to_idx = labeler._estimate_region_archetypes(
                 signatures, count_matrix, num_classes=2, region="R"
             )
+        # the uncovered ctype is assigned a fully methylated (~1) archetype
+        self.assertAlmostEqual(mu[1, pos_to_idx[100]], 1 - eps, places=12)
 
 
 class TestComputeLabelsValidation(unittest.TestCase):
@@ -469,8 +474,8 @@ class TestComputeLabelsValidation(unittest.TestCase):
                 precomputed_signature_column="sig",
             )
 
-    def test_uncovered_ctype_in_region_raises(self):
-        """A region missing a whole ctype propagates the ValueError."""
+    def test_uncovered_ctype_in_region_warns(self):
+        """A region missing a whole ctype warns and completes instead of raising."""
         df = pd.DataFrame(
             {
                 "name": ["R1", "R1"],
@@ -479,7 +484,7 @@ class TestComputeLabelsValidation(unittest.TestCase):
             }
         )
         # num_classes=2 but only ctype 0 appears -> ctype 1 is completely uncovered
-        with self.assertRaises(ValueError):
+        with self.assertWarns(UserWarning):
             self.labeler.compute_labels(
                 df, num_classes=2, precomputed_signature_column="sig"
             )

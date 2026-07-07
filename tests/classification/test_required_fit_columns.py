@@ -40,7 +40,7 @@ class TestRequiredFitColumns(unittest.TestCase):
         )
         cols = clf.required_fit_columns({})
         self.assertEqual(
-            cols, ["name", "trimmed_start", "methylation_ids", "original_label"]
+            cols, ["name", "read_start", "methylation_ids", "original_label"]
         )
 
     def test_cancer_detector(self):

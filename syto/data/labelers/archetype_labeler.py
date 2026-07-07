@@ -1,3 +1,4 @@
+import warnings
 from typing import Literal, Optional, Sequence
 
 from tqdm import tqdm
@@ -331,9 +332,9 @@ class ArchetypeLabeler(AbstractLabeler):
             mu: (num_classes, n_positions) matrix of methylation probabilities
             pos_to_idx: mapping from CpG genomic position to its column index in mu
 
-        Raises:
-            ValueError: if a ctype has no covered CpG in the region
-                (i.e. it is completely uncovered).
+        A ctype with no covered CpG in the region is completely uncovered. Rather
+        than failing, it is given pseudocoverage (one fully methylated read at every
+        CpG), which makes its mu a uniform ~1 archetype, and a warning is emitted.
         """
         positions = sorted({pos for sig in signatures for pos, _ in sig})
         pos_to_idx = {pos: i for i, pos in enumerate(positions)}
@@ -353,11 +354,11 @@ class ArchetypeLabeler(AbstractLabeler):
         coverage = o1 + o0  # (C, K) total reads of ctype c covering CpG k
         covered = coverage > 0
 
-        # a ctype with no covered CpG in the region is completely uncovered: error out
+        # a ctype with no covered CpG in the region is completely uncovered: warning out
         ctype_covered = covered.any(axis=1)  # (C,)
         if not ctype_covered.all():
             uncovered_ctypes = np.where(~ctype_covered)[0].tolist()
-            Warning(
+            warnings.warn(
                 f"Cell type(s) {uncovered_ctypes} are completely uncovered "
                 f"(0 reads) in region {region!r}. The number of fully methylated reads and coverage are artificially set to 1"
             )
