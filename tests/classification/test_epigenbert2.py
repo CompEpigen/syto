@@ -309,7 +309,7 @@ class TestEpigenDnabert2TrainerBranches(unittest.TestCase):
         trainer_instance = MagicMock()
 
         with patch(
-            "syto.classification.classifiers.dnabert2.transformers.Trainer",
+            "syto.classification.classifiers.dnabert2.AuxLossLoggingTrainer",
             return_value=trainer_instance,
         ) as mocked_trainer:
             trainer = model._init_trainer(
@@ -345,7 +345,7 @@ class TestEpigenDnabert2TrainerBranches(unittest.TestCase):
         trainer_instance = MagicMock()
 
         with patch(
-            "syto.classification.classifiers.dnabert2.transformers.Trainer",
+            "syto.classification.classifiers.dnabert2.AuxLossLoggingTrainer",
             return_value=trainer_instance,
         ) as mocked_trainer:
             trainer = model._init_trainer(args=args)
@@ -361,6 +361,41 @@ class TestEpigenDnabert2TrainerBranches(unittest.TestCase):
         self.assertIs(
             trainer_kwargs["compute_metrics"], dnabert2_module.compute_metrics
         )
+
+    def test_init_trainer_uses_aux_loss_trainer_by_default(self):
+        model = self._build_stub_model(num_labels=2)
+        args = MagicMock(name="training_args")
+        trainer_instance = MagicMock()
+        with patch(
+            "syto.classification.classifiers.dnabert2.AuxLossLoggingTrainer",
+            return_value=trainer_instance,
+        ) as mocked_aux, patch(
+            "syto.classification.classifiers.dnabert2.BalancedTrainer",
+        ) as mocked_balanced:
+            trainer = model._init_trainer(args=args)
+        self.assertIs(trainer, trainer_instance)
+        mocked_aux.assert_called_once()
+        mocked_balanced.assert_not_called()
+
+    def test_init_trainer_uses_balanced_trainer_when_signal_mask_given(self):
+        import numpy as np
+
+        model = self._build_stub_model(num_labels=2)
+        args = MagicMock(name="training_args")
+        mask = np.array([True, False, True, False])
+        trainer_instance = MagicMock()
+        with patch(
+            "syto.classification.classifiers.dnabert2.BalancedTrainer",
+            return_value=trainer_instance,
+        ) as mocked_balanced, patch(
+            "syto.classification.classifiers.dnabert2.AuxLossLoggingTrainer",
+        ) as mocked_aux:
+            trainer = model._init_trainer(args=args, signal_mask=mask, bg_ratio=0.4)
+        self.assertIs(trainer, trainer_instance)
+        mocked_aux.assert_not_called()
+        kwargs = mocked_balanced.call_args.kwargs
+        self.assertIs(kwargs["signal_mask"], mask)
+        self.assertEqual(kwargs["bg_ratio"], 0.4)
 
     def test_predict_uses_explicit_batch_size_and_clears_cache_for_binary_model(self):
         """Test that explicit batch sizes override defaults and still clear caches."""
