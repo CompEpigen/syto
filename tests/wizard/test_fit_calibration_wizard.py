@@ -118,5 +118,72 @@ class TestDeconvolversSection(unittest.TestCase):
         self.assertEqual(answers["deconvolvers"], [{"name": "nnls"}])
 
 
+from App.wizard.tasks import TASK_REGISTRY
+from App.wizard.tasks.fit_calibration import FitCalibrationWizard
+
+
+class TestFitCalibrationSchema(unittest.TestCase):
+    def setUp(self):
+        self.specs = FitCalibrationWizard().field_specs()
+        self.keys = [s.key for s in self.specs]
+        self.by_key = {s.key: s for s in self.specs}
+
+    def test_registered(self):
+        self.assertIn("fit_calibration", TASK_REGISTRY)
+        self.assertIs(TASK_REGISTRY["fit_calibration"], FitCalibrationWizard)
+
+    def test_labels_dict_first(self):
+        self.assertEqual(self.keys[0], "labels_dict_path")
+
+    def test_pseudobulk_asked_before_splits(self):
+        self.assertLess(
+            self.keys.index("pseudobulk_h5_path"), self.keys.index("splits")
+        )
+
+    def test_deconvolvers_dir_before_deconvolvers(self):
+        self.assertLess(
+            self.keys.index("deconvolvers_dir"), self.keys.index("deconvolvers")
+        )
+
+    def test_num_input_labels_is_expert(self):
+        self.assertEqual(self.by_key["num_input_labels"].tier, "expert")
+
+    def test_sections_are_list_sections(self):
+        self.assertEqual(self.by_key["splits"].kind, "list_section")
+        self.assertEqual(self.by_key["deconvolvers"].kind, "list_section")
+
+
+class TestFitCalibrationBuildConfig(unittest.TestCase):
+    def setUp(self):
+        self.wiz = FitCalibrationWizard()
+
+    def test_nested_and_lists_passthrough(self):
+        answers = {
+            "labels_dict_path": "App/labels_dict.json",
+            "num_output_labels": 39,
+            "num_input_labels": 39,
+            "pseudobulk_h5_path": "/tmp/pb.h5",
+            "splits": ["train", "valid", "test"],
+            "features_mask_path": "/tmp/mask.npz",
+            "deconvolvers_dir": "/tmp/deconv/",
+            "deconvolvers": [
+                {"name": "swn", "params": {"device": "cuda"}},
+                {"name": "xgb"},
+            ],
+            "output_dir": "/tmp/out",
+        }
+        cfg = self.wiz.build_config(answers)
+        self.assertEqual(cfg["pseudobulk_h5_path"], "/tmp/pb.h5")
+        self.assertEqual(cfg["splits"], ["train", "valid", "test"])
+        self.assertEqual(cfg["deconvolvers"][0]["params"]["device"], "cuda")
+        self.assertNotIn("params", cfg["deconvolvers"][1])
+
+    def test_drops_blank_strings(self):
+        answers = {"output_dir": "", "labels_dict_path": "App/labels_dict.json"}
+        cfg = self.wiz.build_config(answers)
+        self.assertNotIn("output_dir", cfg)
+        self.assertIn("labels_dict_path", cfg)
+
+
 if __name__ == "__main__":
     unittest.main()

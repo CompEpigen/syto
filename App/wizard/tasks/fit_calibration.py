@@ -107,3 +107,83 @@ def _deconvolvers_section(engine, answers) -> None:
         "  i Per-deconvolver 'params' (device/n_workers) and the 'vector_scaling' "
         "CV grid use defaults — edit the generated YAML to override them."
     )
+
+
+class FitCalibrationWizard:
+    task_name = "fit_calibration"
+
+    def field_specs(self) -> list[FieldSpec]:
+        return [
+            FieldSpec(
+                key="labels_dict_path",
+                label="Labels dict JSON path",
+                kind="path",
+                default="App/labels_dict.json",
+                validate=v.path_exists,
+            ),
+            FieldSpec(
+                key="num_output_labels",
+                label="num_output_labels",
+                kind="int",
+                default=39,
+                validate=v.positive_int,
+            ),
+            FieldSpec(
+                key="num_input_labels",
+                label="num_input_labels",
+                kind="int",
+                default=39,
+                validate=v.positive_int,
+                tier="expert",
+            ),
+            FieldSpec(
+                key="pseudobulk_h5_path",
+                label="Pseudobulk HDF5 path",
+                kind="path",
+                validate=v.path_exists,
+            ),
+            FieldSpec(
+                key="splits",
+                label="Splits",
+                kind="list_section",
+                handler=_splits_section,
+            ),
+            FieldSpec(
+                key="features_mask_path",
+                label="Feature-selection mask (.npz) path",
+                kind="path",
+                validate=v.path_exists,
+            ),
+            FieldSpec(
+                key="deconvolvers_dir",
+                label="Deconvolvers directory",
+                kind="path",
+                validate=v.path_exists,
+            ),
+            FieldSpec(
+                key="deconvolvers",
+                label="Deconvolvers",
+                kind="list_section",
+                handler=_deconvolvers_section,
+            ),
+            FieldSpec(
+                key="output_dir",
+                label="Output directory",
+                kind="text",
+                validate=v.non_empty,
+            ),
+        ]
+
+    def build_config(self, answers: dict) -> dict:
+        """Assemble flat answers into the nested config, dropping None/blank."""
+        config: dict = {}
+        for key, value in answers.items():
+            if value is None:
+                continue
+            if isinstance(value, str) and value.strip() == "":
+                continue
+            _set_nested(config, key, value)
+        return config
+
+
+TASK_REGISTRY["fit_calibration"] = FitCalibrationWizard
