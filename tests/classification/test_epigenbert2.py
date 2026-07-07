@@ -198,6 +198,26 @@ class TestEpigenDnabert2FineTune(unittest.TestCase):
                 train_dataset=data_prepared,
             )
 
+    def test_fine_tune_forwards_signal_mask_and_bg_ratio(self):
+        import numpy as np
+
+        model = self._build_stub_model()  # mocks _init_trainer; save_model=False
+        trainer = MagicMock(name="trainer")
+        model._init_trainer.return_value = trainer
+        mask = np.array([True, False, True])
+
+        model.fine_tune(
+            train_dataset=object(),
+            val_dataset=object(),
+            test_dataset=object(),
+            signal_mask=mask,
+            bg_ratio=0.25,
+        )
+
+        kwargs = model._init_trainer.call_args.kwargs
+        self.assertIs(kwargs["signal_mask"], mask)
+        self.assertEqual(kwargs["bg_ratio"], 0.25)
+
     def test_fine_tune_default_attention(self):
         """Test with use_triton=False."""
         self._run_fine_tune_test(use_triton=False)
