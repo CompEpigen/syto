@@ -52,3 +52,32 @@ def _available_deconvolvers(deconvolvers_dir: str) -> list[str]:
         if os.path.exists(os.path.join(deconvolvers_dir, DECONVOLVER_FILES[name])):
             present.append(name)
     return present
+
+
+def _splits_section(engine, answers) -> None:
+    """Resolve calibration splits from the pseudobulk HDF5, enforcing ``valid``."""
+    available = _list_splits(answers.get("pseudobulk_h5_path", ""))
+    if not available:
+        print(
+            "  ! Could not read splits from the pseudobulk file; "
+            f"falling back to {DEFAULT_SPLITS}."
+        )
+        answers["splits"] = list(DEFAULT_SPLITS)
+        return
+
+    if "valid" not in available:
+        print(
+            "  ! The pseudobulk file has no 'valid' split, which calibration "
+            f"requires. Available: {available}. Fix the inputs before running."
+        )
+
+    while True:
+        selected = engine.ask_checkbox("Which splits to calibrate on?", available)
+        if "valid" in available and "valid" not in selected:
+            print(
+                "  ✗ The 'valid' split is required for calibration; "
+                "please include it."
+            )
+            continue
+        break
+    answers["splits"] = selected
