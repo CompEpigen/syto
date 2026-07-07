@@ -26,7 +26,7 @@ from syto.classification.fit_data import (
 REQUIRED_COLUMNS = [
     "original_label",
     "dmr_ctype_label",
-    "chr",
+    "chromosome",
     "read_start",
     "read_end",
     "methylation_ids",
