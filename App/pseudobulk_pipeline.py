@@ -106,9 +106,10 @@ class PseudoBulkPipeline:
 
         # ── Stage 2: Prepare reads ────────────────────────────────
         input_type = self.config["input_type"]
+        trim = self.config.get("trim_reads_to_grg_regions", False)
         if input_type == "raw_splits":
             self.logger.info("Stage 2: Preparing reads ...")
-            splits_data = self._prepare_reads(splits_data)
+            splits_data = self._prepare_reads(splits_data,trim)
         elif input_type == "pre_predicted":
             self.logger.info("Stage 2: Skipped (input already has predictions)")
         else:
@@ -159,7 +160,7 @@ class PseudoBulkPipeline:
     # ═══════════════════════════════════════════════════════════════
 
     def _prepare_reads(
-        self, splits_data: Dict[str, pd.DataFrame]
+        self, splits_data: Dict[str, pd.DataFrame], trim = False
     ) -> Dict[str, pd.DataFrame]:
         """Prepare reads for pseudobulk generation."""
         from syto.data.atlases.uxm_atlases import UXMMethylationAtlas
@@ -177,6 +178,7 @@ class PseudoBulkPipeline:
             splits_data,
             num_labels=self.num_labels,
             atlas=atlas,
+            trim=trim
         )
         sizes = ", ".join(f"{name}={len(df)}" for name, df in splits_data.items())
         self.logger.info(f"  After preparation: {sizes}")
