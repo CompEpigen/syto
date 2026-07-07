@@ -81,5 +81,42 @@ class TestSplitsSection(unittest.TestCase):
         self.assertEqual(len(eng.calls), 1)  # no reprompt when file has no 'valid'
 
 
+class TestDeconvolversSection(unittest.TestCase):
+    def test_default_params_attached_in_selection_order(self):
+        with mock.patch.object(
+            fc, "_available_deconvolvers",
+            return_value=["xgb", "swn", "mlp", "nnls", "psls"],
+        ):
+            eng = _StubEngine([["swn", "xgb", "psls"]])
+            answers = {"deconvolvers_dir": "d"}
+            fc._deconvolvers_section(eng, answers)
+        self.assertEqual(
+            answers["deconvolvers"],
+            [
+                {"name": "swn", "params": {"device": "cuda"}},
+                {"name": "xgb"},
+                {"name": "psls", "params": {"n_workers": 2}},
+            ],
+        )
+
+    def test_discovery_offers_only_present(self):
+        with mock.patch.object(fc, "_available_deconvolvers", return_value=["swn", "mlp"]):
+            eng = _StubEngine([["swn"]])
+            answers = {"deconvolvers_dir": "d"}
+            fc._deconvolvers_section(eng, answers)
+        self.assertEqual(eng.calls[0], ["swn", "mlp"])
+        self.assertEqual(
+            answers["deconvolvers"], [{"name": "swn", "params": {"device": "cuda"}}]
+        )
+
+    def test_fallback_to_all_known_when_none_found(self):
+        with mock.patch.object(fc, "_available_deconvolvers", return_value=[]):
+            eng = _StubEngine([["nnls"]])
+            answers = {"deconvolvers_dir": "d"}
+            fc._deconvolvers_section(eng, answers)
+        self.assertEqual(eng.calls[0], ["xgb", "swn", "mlp", "nnls", "psls"])
+        self.assertEqual(answers["deconvolvers"], [{"name": "nnls"}])
+
+
 if __name__ == "__main__":
     unittest.main()

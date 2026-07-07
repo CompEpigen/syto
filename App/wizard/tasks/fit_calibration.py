@@ -81,3 +81,29 @@ def _splits_section(engine, answers) -> None:
             continue
         break
     answers["splits"] = selected
+
+
+def _deconvolvers_section(engine, answers) -> None:
+    """Discover deconvolvers on disk, pick a subset, attach default params."""
+    available = _available_deconvolvers(answers.get("deconvolvers_dir", ""))
+    if not available:
+        available = list(DECONVOLVER_ORDER)
+        print(
+            "  ! No known deconvolver files found in the directory; "
+            f"offering all known types: {available}."
+        )
+
+    selected = engine.ask_checkbox("Which deconvolvers to calibrate?", available)
+    entries: list[dict] = []
+    for name in selected:
+        entry: dict = {"name": name}
+        params = DECONVOLVER_DEFAULT_PARAMS.get(name)
+        if params is not None:
+            entry["params"] = dict(params)
+        entries.append(entry)
+    answers["deconvolvers"] = entries
+
+    print(
+        "  i Per-deconvolver 'params' (device/n_workers) and the 'vector_scaling' "
+        "CV grid use defaults — edit the generated YAML to override them."
+    )
