@@ -723,6 +723,7 @@ def sl_with_simple_archetypes_with_multiple_regions(
     delta_tol: float = 1e-4,
     return_num_iterations: bool = False,
     return_archetypes: bool = False,
+    penalty_strength: float = 0.0,
     verbose=False,
 ):
     """
@@ -759,6 +760,8 @@ def sl_with_simple_archetypes_with_multiple_regions(
             the absolute CpG index of the first column of each region's archetype
             matrix (so archetype column k corresponds to CpG
             ``start_CpG_index[region] + k``).
+        penalty_strength: strength of the L2 penalty on the archetypes, which
+           encourages the archetypes to be close to 0 or 1.
 
     Returns:
         {region: {start: {read_length: np.ndarray of shape
@@ -916,10 +919,94 @@ def sl_with_simple_archetypes_with_multiple_regions(
         # M-step for the archetypes (per region) and convergence check.
         delta = ctype_proba_delta
         for region in regions:
-            new_archetypes = np.divide(
-                expected_o1[region],
-                np.clip(expected_o1[region] + expected_o0[region], eps, None),
-            )
+            expected_o = (
+                expected_o1[region] + expected_o0[region]
+            )  # (n_ctypes, n_CpG_positions)
+            if penalty_strength > 0.0:
+                # apply update rule following the penalty of the form mu(1-mu)
+                # on the methylation archetypes, which encourages the archetypes to be close to 0 or 1.
+                expected_d = (
+                    expected_o1[region] - expected_o0[region]
+                )  # (n_ctypes, n_CpG_positions)
+                mask_0d = expected_d == 0.0
+                mask_0o = expected_o == 0.0
+                # a balanced locus (expected_d == 0, which also covers the
+                # no-coverage case expected_o == 0 since |d| <= o) has no
+                # direction to push the archetype towards, so mu* = 0.5;
+                # this also avoids dividing by zero below.
+                active_mask = ~mask_0d & ~mask_0o
+
+                abs_d = np.abs(expected_d)
+                max_penalty_strength = np.zeros_like(
+                    expected_o, dtype=float
+                )  # (n_ctypes, n_CpG_positions)
+                # arccosh argument is o / |d| >= 1 in exact arithmetic;
+                # clip to 1 to absorb floating-point rounding that would
+                # otherwise push it just below 1 and yield NaN.
+                max_penalty_strength[active_mask] = 2 * expected_o[
+                    active_mask
+                ] + 6 * abs_d[active_mask] * np.cosh(
+                    np.arccosh(
+                        np.maximum(expected_o[active_mask] / abs_d[active_mask], 1.0)
+                    )
+                    / 3
+                )
+                eff_penalty_strength = np.minimum(
+                    penalty_strength, max_penalty_strength
+                )  # (n_ctypes, n_CpG_positions)
+                p_eff = np.zeros_like(expected_o, dtype=float)
+                q_eff = np.zeros_like(expected_o, dtype=float)
+                p_eff[active_mask] = (
+                    expected_o[active_mask] / (2 * eff_penalty_strength[active_mask])
+                    - 0.25
+                )
+                q_eff[active_mask] = -expected_d[active_mask] / (
+                    4 * eff_penalty_strength[active_mask]
+                )
+                mask_peff_equal_0 = active_mask & (p_eff == 0.0)
+                mask_peff_grt_0 = active_mask & (p_eff > 0.0)
+                mask_peff_less_0 = active_mask & (p_eff < 0.0)
+                new_archetypes = np.full_like(expected_o, 0.5, dtype=float)
+                new_archetypes[mask_peff_equal_0] = (
+                    np.cbrt(
+                        expected_d[mask_peff_equal_0] / expected_o[mask_peff_equal_0]
+                    )
+                    / 2
+                    + 0.5
+                )
+                new_archetypes[mask_peff_grt_0] = 0.5 - 2 * np.sqrt(
+                    p_eff[mask_peff_grt_0] / 3
+                ) * np.sinh(
+                    np.arcsinh(
+                        1.5
+                        * np.sqrt(3)
+                        * q_eff[mask_peff_grt_0]
+                        / np.sqrt(p_eff[mask_peff_grt_0] ** 3)
+                    )
+                    / 3
+                )
+                # arccosh argument is >= 1 precisely because lam_eff <= lam_max
+                # (Delta <= 0); clip to 1 to absorb floating-point rounding at
+                # the boundary lam_eff = lam_max, which would otherwise NaN.
+                new_archetypes[mask_peff_less_0] = 0.5 - np.sign(
+                    q_eff[mask_peff_less_0]
+                ) * 2 * np.sqrt(-p_eff[mask_peff_less_0] / 3) * np.cosh(
+                    np.arccosh(
+                        np.maximum(
+                            1.5
+                            * np.sqrt(3)
+                            * np.abs(q_eff[mask_peff_less_0])
+                            / np.sqrt(-p_eff[mask_peff_less_0] ** 3),
+                            1.0,
+                        )
+                    )
+                    / 3
+                )
+            else:
+                new_archetypes = np.divide(
+                    expected_o1[region],
+                    np.clip(expected_o, eps, None),
+                )
             no_coverage_mask = (expected_o1[region] + expected_o0[region]) <= eps
             new_archetypes[no_coverage_mask] = archetypes[region][no_coverage_mask]
             new_archetypes = np.clip(new_archetypes, eps, 1 - eps)
