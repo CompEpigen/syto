@@ -7,6 +7,13 @@
 #   <data_path>/train.{parquet,csv,txt}
 #   <data_path>/valid.{parquet,csv,txt}   (optional, used for validation metrics)
 # Required columns: name, trimmed_start, pattern, <label_col>
+#
+# Columnar layout (alternative, auto-detected): a partitioned parquet dataset
+#   <data_path>/<dataset>/region_bucket=*/part-*.parquet
+# with a `split` column (train/valid/test). Set `label_column:` to the training
+# label column (neural archs). Optional: `data_format: auto|legacy|columnar`,
+# `split_column: split`, `min_pattern_length: N` (drop reads with < N marked CpGs;
+# applies to both layouts).
 
 # Model Configuration
 model:
@@ -20,20 +27,21 @@ model:
     max_distance: 0
 
 # Data Configuration
-data_path: /home/luna.kuleuven.be/u0169940/Data/Loyfer/
-max_sequence_length: 150
+data_path: /mnt/data/loyfer/parsed_dataset/U25.l4.hg38/
+max_sequence_length: 160
 prediction_batch_size: 128
-datasets: SoftLabelsTrainingData_205files_pooled_Jaccard_hg38_mincpg_4_minlen_10_no_data_leak_d041
+datasets: labelers_on_train_no_pattern_len_filter/final
+label_column: soft_label_superset_pooled
+min_pattern_length: 4
 
 # Output Configuration
-output:
-  output_dir: tmp/classifier_fit_test/lookup
+output_dir: tmp/classifier_fit_test/lookup
 
 # MLflow Configuration
 mlflow:
   enabled: true
-  experiment_name: classifier_fit_test_lookup
-  tracking_uri: null  # Leave as null for local tracking or specify remote URI
+  experiment_name: pseudobulk
+  tracking_uri: file:///mnt/data/syto_experiments/mlflow # Leave as null for local tracking or specify remote URI
 
 # Training Configuration (forwarded to LookupClassifier.fit_split -> fit)
 training:

@@ -7,6 +7,13 @@
 #   <data_path>/train.{parquet,csv,txt}
 #   <data_path>/valid.{parquet,csv,txt}   (optional, used for validation metrics)
 # Required columns: seq, pattern, label, dmr_ctype_label (GRG/DMR id)
+#
+# Columnar layout (alternative, auto-detected): a partitioned parquet dataset
+#   <data_path>/<dataset>/region_bucket=*/part-*.parquet
+# with a `split` column (train/valid/test). Set `label_column:` to the training
+# label column (neural archs). Optional: `data_format: auto|legacy|columnar`,
+# `split_column: split`, `min_pattern_length: N` (drop reads with < N marked CpGs;
+# applies to both layouts).
 
 # Model Configuration
 model:

@@ -35,6 +35,8 @@ from syto.classification.classifiers.abstract_read_classifier import (
 )
 from syto.classification.mlflow_tracking import mlflow_tracked_fit
 
+from syto.data.dataset import resolve_column
+
 _module_logger = logging.getLogger(__name__)
 
 # ──────────────────────────────────────────────────────────────────────
@@ -90,7 +92,7 @@ class LookupClassifier(AbstractReadClassifier):
 
         # Handler used to extract binary CpG signatures and compute distances
         self.signature_handler = BinaryCpGSignatureHandler(
-            start_column="trimmed_start", methylation_pattern_column="pattern"
+            start_column="read_start", methylation_pattern_column="pattern"
         )
 
         # Populated by fit() --------------------------------------------------
@@ -106,6 +108,17 @@ class LookupClassifier(AbstractReadClassifier):
         """Number of unique (region, signature) keys in the lookup table."""
         return len(self._lookup)
 
+    def _resolve_signature_column(self, df: pd.DataFrame) -> None:
+        """Point the signature handler at whichever methylation-pattern column
+        this frame actually carries (``methylation_ids``, ``pattern``, …)."""
+        col = resolve_column(df.columns, "methylation_ids")
+        if col is None:
+            raise ValueError(
+                "Could not resolve a methylation pattern column among "
+                f"{list(df.columns)}"
+            )
+        self.signature_handler.methylation_pattern_column = col
+
     # ------------------------------------------------------------------ fit
     def fit(
         self,
@@ -120,7 +133,7 @@ class LookupClassifier(AbstractReadClassifier):
         ----------
         df : DataFrame
             Raw data frame containing at least the columns ``name``,
-            ``trimmed_start``, ``pattern``, and ``<label_col>``.
+            ``read_start``, ``pattern``, and ``<label_col>``.
             If you need to pool multiple splits, concatenate them
             before calling fit.
         val_data : DataFrame, optional
@@ -135,6 +148,7 @@ class LookupClassifier(AbstractReadClassifier):
         -------
         self
         """
+        self._resolve_signature_column(df)
         t_start = time.time()
         self._lookup = self._build_mapping(df)
 
@@ -229,12 +243,13 @@ class LookupClassifier(AbstractReadClassifier):
         """Predict soft labels for every row in *df*.
 
         The input frame must have the same schema used during fit (at minimum
-        ``name``, ``trimmed_start``, ``pattern``).
+        ``name``, ``read_start``, ``pattern``).
 
         Returns a copy of *df* with extra columns:
         ``prediction_0``, ``prediction_1``, …, ``prediction_{num_classes-1}``,
         and ``prediction_source`` (``"exact"`` or ``"1nn"``).
         """
+        self._resolve_signature_column(df)
         if not self._is_fitted:
             raise RuntimeError("Call .fit() before .predict().")
 
@@ -581,6 +596,13 @@ class LookupClassifier(AbstractReadClassifier):
     def predict_split(self, split_df: pd.DataFrame, **kwargs) -> pd.DataFrame:
         """Predict method for compatibility with AbstractReadClassifier interface."""
         return self.predict(split_df)
+
+    def required_fit_columns(self, config: dict) -> list[str]:
+        # self.config is a LabelConfig with the ground-truth-class column name.
+        return ["name", "read_start", "methylation_ids", self.config.label_col]
+
+    def mlflow_fit_params(self) -> dict:
+        return self.config.to_dict()
 
     @mlflow_tracked_fit
     def fit_classificaton(

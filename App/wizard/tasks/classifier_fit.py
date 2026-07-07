@@ -164,6 +164,35 @@ class ClassifierFitWizard:
                 validate=v.non_empty,
             ),
             FieldSpec(
+                key="label_column",
+                label="Training label column (columnar datasets)",
+                kind="text",
+                validate=v.non_empty,
+                when=_in(NEURAL_ARCHS),
+            ),
+            FieldSpec(
+                key="data_format",
+                label="Data format",
+                kind="select",
+                choices=["auto", "legacy", "columnar"],
+                default="auto",
+            ),
+            FieldSpec(
+                key="split_column",
+                label="Split column name (columnar datasets)",
+                kind="text",
+                default="split",
+                tier="expert",
+            ),
+            FieldSpec(
+                key="min_pattern_length",
+                label="Min marked CpGs per read (1 = no filtering)",
+                kind="int",
+                default=1,
+                validate=v.positive_int,
+                tier="expert",
+            ),
+            FieldSpec(
                 key="max_sequence_length",
                 label="max_sequence_length",
                 kind="int",
@@ -205,20 +234,6 @@ class ClassifierFitWizard:
                 when=lambda a: a.get("mlflow.enabled"),
             ),
             # ── Training: cancer_detector ──
-            FieldSpec(
-                key="training.col_n_meth_cpgs",
-                label="col_n_meth_cpgs",
-                kind="text",
-                default="M",
-                when=_is("cancer_detector"),
-            ),
-            FieldSpec(
-                key="training.col_n_unmeth_cpgs",
-                label="col_n_unmeth_cpgs",
-                kind="text",
-                default="U",
-                when=_is("cancer_detector"),
-            ),
             FieldSpec(
                 key="training.col_label",
                 label="col_label",

@@ -82,6 +82,32 @@ class TestClassifierFitSchema(unittest.TestCase):
             self.by_key["training.training_args.adam_beta1"].tier, "expert"
         )
 
+    def test_label_column_mandatory_for_neural(self):
+        spec = self.by_key["label_column"]
+        self.assertTrue(spec.when(self._arch("dismir")))
+        self.assertTrue(spec.when(self._arch("methylbert")))
+        self.assertTrue(spec.when(self._arch("epigenbert2")))
+        self.assertFalse(spec.when(self._arch("lookup")))
+        self.assertFalse(spec.when(self._arch("cancer_detector")))
+        # mandatory -> rejects blank
+        self.assertIsNotNone(spec.validate(""))
+
+    def test_data_format_choices(self):
+        spec = self.by_key["data_format"]
+        self.assertEqual(set(spec.choices), {"auto", "legacy", "columnar"})
+        self.assertEqual(spec.default, "auto")
+
+    def test_split_column_default(self):
+        spec = self.by_key["split_column"]
+        self.assertEqual(spec.default, "split")
+
+    def test_min_pattern_length_default_one(self):
+        spec = self.by_key["min_pattern_length"]
+        self.assertEqual(spec.default, 1)
+        self.assertEqual(spec.kind, "int")
+        # 1 (no filtering) is a valid value
+        self.assertIsNone(spec.validate(1))
+
 
 class TestClassifierFitBuildConfig(unittest.TestCase):
     def setUp(self):
@@ -104,8 +130,6 @@ class TestClassifierFitBuildConfig(unittest.TestCase):
         ans = self._shared("cancer_detector")
         ans.update(
             {
-                "training.col_n_meth_cpgs": "M",
-                "training.col_n_unmeth_cpgs": "U",
                 "training.col_label": "label",
                 "training.col_marker_label": "dmr_ctype_label",
                 "training.eps_beta_fit": 0.01,

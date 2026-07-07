@@ -8,38 +8,46 @@
 #   <data_path>/valid.{parquet,csv,txt}   (optional, used for validation metrics)
 # Required columns: input_ids (or seq), methylation_ids (or pattern), label,
 # dmr_ctype_label (GRG/DMR id used by the grg_attention_based classifier head)
+#
+# Columnar layout (alternative, auto-detected): a partitioned parquet dataset
+#   <data_path>/<dataset>/region_bucket=*/part-*.parquet
+# with a `split` column (train/valid/test). Set `label_column:` to the training
+# label column (neural archs). Optional: `data_format: auto|legacy|columnar`,
+# `split_column: split`, `min_pattern_length: N` (drop reads with < N marked CpGs;
+# applies to both layouts).
 
 # Model Configuration
 model:
   architecture: dismir
   flavor: lstm
-  num_labels: 39
+  num_labels: 40
   classifier_head_implementation: grg_attention_based
   num_grg_labels: 39
   grg_label_column: dmr_ctype_label
   soft_labels: true
 
 # Data Configuration
-data_path: /home/luna.kuleuven.be/u0169940/Data/Loyfer/
-max_sequence_length: 150
+data_path: /mnt/data/loyfer/parsed_dataset/U25.l4.hg38/
+max_sequence_length: 160
 prediction_batch_size: 128
-datasets: SoftLabelsForRRBSsplits_205files_pooled_Jaccard_hg38_mincpg_4_minlen_10_d041
+datasets: labelers_on_train_no_pattern_len_filter/final
+label_column: hard_labels_background_and_smoothing
+min_pattern_length: 4
 
 # Output Configuration
-output:
-  output_dir: tmp/classifier_fit_test/dismir
+output_dir: tmp/classifier_fit_test/dismir
 
 # MLflow Configuration
 mlflow:
   enabled: true
-  experiment_name: RRBS_Refactored
-  tracking_uri: null  # Leave as null for local tracking or specify remote URI
+  experiment_name: pseudobulk
+  tracking_uri: file:///mnt/data/syto_experiments/mlflow # Leave as null for local tracking or specify remote URI
 
 # Training Configuration (forwarded to Dismir.fit_split / Dismir.train as kwargs)
 training:
   epochs: 100
   batch_size: 128
-  patience: 30
+  patience: 7
   optimizer_type: ADAM
   lr: 0.001
   weight_decay: 1.0e-6

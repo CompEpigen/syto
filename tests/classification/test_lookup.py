@@ -69,7 +69,7 @@ def _make_sample_df():
         rows.append(
             {
                 "name": "R1",
-                "trimmed_start": 0,
+                "read_start": 0,
                 "pattern": "01",
                 "original_label": 0,
             }
@@ -78,7 +78,7 @@ def _make_sample_df():
         rows.append(
             {
                 "name": "R1",
-                "trimmed_start": 0,
+                "read_start": 0,
                 "pattern": "01",
                 "original_label": 1,
             }
@@ -88,7 +88,7 @@ def _make_sample_df():
         rows.append(
             {
                 "name": "R1",
-                "trimmed_start": 0,
+                "read_start": 0,
                 "pattern": "10",
                 "original_label": 0,
             }
@@ -97,7 +97,7 @@ def _make_sample_df():
         rows.append(
             {
                 "name": "R1",
-                "trimmed_start": 0,
+                "read_start": 0,
                 "pattern": "10",
                 "original_label": 2,
             }
@@ -116,7 +116,7 @@ def _make_balanced_df():
         rows.append(
             {
                 "name": "R1",
-                "trimmed_start": 0,
+                "read_start": 0,
                 "pattern": "01",
                 "original_label": 0,
             }
@@ -125,7 +125,7 @@ def _make_balanced_df():
         rows.append(
             {
                 "name": "R1",
-                "trimmed_start": 0,
+                "read_start": 0,
                 "pattern": "01",
                 "original_label": 1,
             }
@@ -144,7 +144,7 @@ def _make_multi_region_df():
         rows.append(
             {
                 "name": "R1",
-                "trimmed_start": 0,
+                "read_start": 0,
                 "pattern": "01",
                 "original_label": 0,
             }
@@ -153,7 +153,7 @@ def _make_multi_region_df():
         rows.append(
             {
                 "name": "R1",
-                "trimmed_start": 0,
+                "read_start": 0,
                 "pattern": "01",
                 "original_label": 1,
             }
@@ -162,7 +162,7 @@ def _make_multi_region_df():
         rows.append(
             {
                 "name": "R2",
-                "trimmed_start": 10,
+                "read_start": 10,
                 "pattern": "10",
                 "original_label": 0,
             }
@@ -171,7 +171,7 @@ def _make_multi_region_df():
         rows.append(
             {
                 "name": "R2",
-                "trimmed_start": 10,
+                "read_start": 10,
                 "pattern": "10",
                 "original_label": 2,
             }
@@ -336,7 +336,7 @@ class TestLookupClassifierSoftMode(unittest.TestCase):
         """predict() output should still contain all original columns."""
         self.clf.fit(self.df)
         result = self.clf.predict(self.df)
-        for col in ("name", "trimmed_start", "pattern", "original_label"):
+        for col in ("name", "read_start", "pattern", "original_label"):
             self.assertIn(col, result.columns)
 
     def test_predict_exact_match_source(self):
@@ -370,7 +370,7 @@ class TestLookupClassifierSoftMode(unittest.TestCase):
         # Pre-compute cpg_sig on a copy of the data
         df_with_sig = self.df.copy()
         signature_handler = BinaryCpGSignatureHandler(
-            start_column="trimmed_start", methylation_pattern_column="pattern"
+            start_column="read_start", methylation_pattern_column="pattern"
         )
         df_with_sig["cpg_sig"] = df_with_sig.apply(
             signature_handler.extract_signature, axis=1
@@ -525,7 +525,7 @@ class TestLookupClassifierFallback(unittest.TestCase):
             [
                 {
                     "name": "R1",
-                    "trimmed_start": 0,
+                    "read_start": 0,
                     "pattern": "00",
                 }
             ]
@@ -539,7 +539,7 @@ class TestLookupClassifierFallback(unittest.TestCase):
             [
                 {
                     "name": "R1",
-                    "trimmed_start": 0,
+                    "read_start": 0,
                     "pattern": "00",
                 }
             ]
@@ -555,7 +555,7 @@ class TestLookupClassifierFallback(unittest.TestCase):
             [
                 {
                     "name": "UNSEEN_REGION",
-                    "trimmed_start": 999,
+                    "read_start": 999,
                     "pattern": "01",
                 }
             ]
@@ -625,15 +625,11 @@ class TestLookupClassifierMultiRegion(unittest.TestCase):
         pred_cols = [f"prediction_{j}" for j in range(NUM_CLASSES)]
 
         # Obtain the exact-match label vector for R1's only known signature
-        r1_known_row = pd.DataFrame(
-            [{"name": "R1", "trimmed_start": 0, "pattern": "01"}]
-        )
+        r1_known_row = pd.DataFrame([{"name": "R1", "read_start": 0, "pattern": "01"}])
         r1_exact = self.clf.predict(r1_known_row)[pred_cols].values[0]
 
         # Obtain the exact-match label vector for R2's only known signature
-        r2_known_row = pd.DataFrame(
-            [{"name": "R2", "trimmed_start": 10, "pattern": "10"}]
-        )
+        r2_known_row = pd.DataFrame([{"name": "R2", "read_start": 10, "pattern": "10"}])
         r2_exact = self.clf.predict(r2_known_row)[pred_cols].values[0]
 
         # Predict for an unseen R1 signature — should fall back to R1's NN
@@ -641,7 +637,7 @@ class TestLookupClassifierMultiRegion(unittest.TestCase):
             [
                 {
                     "name": "R1",
-                    "trimmed_start": 0,
+                    "read_start": 0,
                     "pattern": "00",  # not in R1's lookup → fallback within R1
                 }
             ]

@@ -25,8 +25,14 @@ from syto.classification.classifiers.abstract_read_classifier import (
 )
 from syto.classification.evaluation import compute_metrics
 from syto.classification.mlflow_tracking import mlflow_tracked_fit
+from syto.data.dataset import add_meth_unmeth_counts
 
 _module_logger = logging.getLogger(__name__)
+
+# Internal column names for the methylated / unmethylated CpG counts that this
+# classifier derives from each read's methylation pattern.
+_COL_N_METH = "M"
+_COL_N_UNMETH = "U"
 
 
 def _fit_beta_worker(args):
@@ -151,8 +157,7 @@ class CancerDetectorClassifier(AbstractReadClassifier):
     def fit(
         self,
         train_data: pd.DataFrame,
-        col_n_meth_cpgs: str = "M",
-        col_n_unmeth_cpgs: str = "U",
+        col_methylation: str = None,
         col_label: str = "original_label",
         col_marker_label: str = "dmr_ctype_label",
         eps_beta_fit: float = 1e-2,
@@ -163,11 +168,15 @@ class CancerDetectorClassifier(AbstractReadClassifier):
         """Fit Beta distributions for every (marker, class) pair and compute
         class priors.
 
+        The methylated / unmethylated CpG counts are derived internally from
+        each read's methylation pattern (see
+        :func:`syto.data.dataset.add_meth_unmeth_counts`).
+
         Args:
             train_data: DataFrame where each row corresponds to a single read
                 overlapping a marker region.
-            col_n_meth_cpgs: Column name for the number of methylated CpGs.
-            col_n_unmeth_cpgs: Column name for the number of unmethylated CpGs.
+            col_methylation: Name of the methylation pattern column. When
+                ``None`` it is resolved from the ``methylation_ids`` aliases.
             col_label: Column name for the class / cell-type label.
             col_marker_label: Column name for the marker (DMR) label.
             eps_beta_fit: Epsilon for clipping methylation rates before MLE
@@ -181,18 +190,17 @@ class CancerDetectorClassifier(AbstractReadClassifier):
         """
         # argument checks
         assert (
-            col_n_meth_cpgs in train_data.columns
-        ), f"Column {col_n_meth_cpgs} not found in train_data"
-        assert (
-            col_n_unmeth_cpgs in train_data.columns
-        ), f"Column {col_n_unmeth_cpgs} not found in train_data"
-        assert (
             col_label in train_data.columns
         ), f"Column {col_label} not found in train_data"
         assert (
             col_marker_label in train_data.columns
         ), f"Column {col_marker_label} not found in train_data"
         assert class_prior_type in ["uniform", "train_freq"]
+
+        # derive methylated / unmethylated CpG counts from the methylation pattern
+        train_data = add_meth_unmeth_counts(
+            train_data, methylation_column=col_methylation
+        )
 
         t_start = time.time()
 
@@ -233,8 +241,8 @@ class CancerDetectorClassifier(AbstractReadClassifier):
                 (
                     self.marker_to_idx[marker_label],
                     self.class_to_idx[class_label],
-                    group[col_n_meth_cpgs].to_numpy(),
-                    group[col_n_unmeth_cpgs].to_numpy(),
+                    group[_COL_N_METH].to_numpy(),
+                    group[_COL_N_UNMETH].to_numpy(),
                     eps_beta_fit,
                 )
             )
@@ -270,8 +278,7 @@ class CancerDetectorClassifier(AbstractReadClassifier):
 
         train_proba = self.predict_proba(
             train_data,
-            col_n_meth_cpgs=col_n_meth_cpgs,
-            col_n_unmeth_cpgs=col_n_unmeth_cpgs,
+            col_methylation=col_methylation,
             col_marker_label=col_marker_label,
         )
         train_labels = train_data[col_label].to_numpy()
@@ -280,8 +287,7 @@ class CancerDetectorClassifier(AbstractReadClassifier):
         if val_data is not None:
             val_proba = self.predict_proba(
                 val_data,
-                col_n_meth_cpgs=col_n_meth_cpgs,
-                col_n_unmeth_cpgs=col_n_unmeth_cpgs,
+                col_methylation=col_methylation,
                 col_marker_label=col_marker_label,
             )
             val_labels = val_data[col_label].to_numpy()
@@ -441,18 +447,21 @@ class CancerDetectorClassifier(AbstractReadClassifier):
     def predict_proba(
         self,
         test_data: pd.DataFrame,
-        col_n_meth_cpgs: str = "M",
-        col_n_unmeth_cpgs: str = "U",
+        col_methylation: str = None,
         col_marker_label: str = "dmr_ctype_label",
         return_likelihoods: bool = False,
         verbose: bool = False,
     ) -> Union[np.ndarray, tuple[np.ndarray, np.ndarray]]:
         """Predict posterior class probabilities for reads in a test DataFrame.
 
+        The methylated / unmethylated CpG counts are derived internally from
+        each read's methylation pattern (see
+        :func:`syto.data.dataset.add_meth_unmeth_counts`).
+
         Args:
             test_data: DataFrame where each row is a read overlapping a marker.
-            col_n_meth_cpgs: Column name for the number of methylated CpGs.
-            col_n_unmeth_cpgs: Column name for the number of unmethylated CpGs.
+            col_methylation: Name of the methylation pattern column. When
+                ``None`` it is resolved from the ``methylation_ids`` aliases.
             col_marker_label: Column name for the marker (DMR) label.
             return_likelihoods: If ``True``, also return the raw likelihoods.
             verbose: If ``True``, display a progress bar during likelihood
@@ -463,8 +472,11 @@ class CancerDetectorClassifier(AbstractReadClassifier):
             (n_reads, n_classes) with posterior probabilities. Otherwise a
             tuple of (posterior_probabilities, likelihoods).
         """
-        n_meth_array = test_data[col_n_meth_cpgs].to_numpy()
-        n_unmeth_array = test_data[col_n_unmeth_cpgs].to_numpy()
+        test_data = add_meth_unmeth_counts(
+            test_data, methylation_column=col_methylation
+        )
+        n_meth_array = test_data[_COL_N_METH].to_numpy()
+        n_unmeth_array = test_data[_COL_N_UNMETH].to_numpy()
         marker_labels = test_data[col_marker_label].to_numpy()
         likelihoods = self.compute_likelihood_bulk(
             n_meth_array, n_unmeth_array, marker_labels, verbose=verbose
@@ -615,8 +627,6 @@ class CancerDetectorClassifier(AbstractReadClassifier):
         if not use_batches:
             probabilities = self.predict_proba(
                 test_data=split_df,
-                col_n_meth_cpgs="M",
-                col_n_unmeth_cpgs="U",
                 col_marker_label=grg_label_column,
                 return_likelihoods=False,
                 verbose=False,
@@ -635,8 +645,6 @@ class CancerDetectorClassifier(AbstractReadClassifier):
                 batch_df = split_df.iloc[start:end]
                 batch_probabilities = self.predict_proba(
                     test_data=batch_df,
-                    col_n_meth_cpgs="M",
-                    col_n_unmeth_cpgs="U",
                     col_marker_label=grg_label_column,
                     return_likelihoods=False,
                     verbose=False,
@@ -659,6 +667,14 @@ class CancerDetectorClassifier(AbstractReadClassifier):
         for i, col in enumerate(pred_cols):
             result[col] = probabilities[:, i]
         return result
+
+    def required_fit_columns(self, config: dict) -> list[str]:
+        t = config.get("training", {}) or {}
+        return [
+            "methylation_ids",
+            t.get("col_label", "original_label"),
+            t.get("col_marker_label", "dmr_ctype_label"),
+        ]
 
     @mlflow_tracked_fit
     def fit_classificaton(

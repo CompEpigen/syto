@@ -1020,6 +1020,20 @@ class EpigenDnabert2(AbstractReadClassifier):
             self.trainer.save_state()
             self.safe_save_model_for_hf_trainer(output_dir=training_args.output_dir)
 
+    def required_fit_columns(self, config: dict) -> list[str]:
+        training = config.get("training", {}) or {}
+        cols = ["input_ids", "methylation_ids"]
+        if self.num_grg_labels is not None:
+            cols.append(training.get("grg_label_column", "dmr_ctype_label"))
+        return cols
+
+    def mlflow_fit_params(self) -> dict:
+        return {
+            "num_labels": self.num_labels,
+            "num_grg_labels": self.num_grg_labels,
+            "soft_labels": self.soft_labels,
+        }
+
     @mlflow_tracked_fit
     def fit_classificaton(
         self,

@@ -1149,6 +1149,21 @@ class MethylBert(AbstractReadClassifier):
         result = pd.merge(split_df, pred_df, on="read_name")
         return result
 
+    def required_fit_columns(self, config: dict) -> list[str]:
+        training = config.get("training", {}) or {}
+        cols = ["input_ids", "methylation_ids"]
+        if self.num_grg_labels is not None:
+            cols.append(training.get("grg_label_column", "dmr_ctype_label"))
+        return cols
+
+    def mlflow_fit_params(self) -> dict:
+        return {
+            "num_labels": self.num_labels,
+            "num_grg_labels": self.num_grg_labels,
+            "classifier_implementation": self.classifier_implementation,
+            "soft_labels": self.soft_labels,
+        }
+
     @mlflow_tracked_fit
     def fit_classificaton(
         self,

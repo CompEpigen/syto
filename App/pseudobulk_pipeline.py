@@ -23,6 +23,7 @@ import numpy as np
 import pandas as pd
 
 from syto.data.read_preparation import prepare_splits_for_pseudobulk
+from syto.data.pseudobulk_input import load_raw_splits
 from syto.data.pseudobulk_generator import PseudobulkGenerator
 from syto.data.pseudobulk_hdf5_utils import (
     GenerationMetadata,
@@ -56,6 +57,10 @@ class PseudoBulkPipeline:
     def __init__(self, config: Dict[str, Any], logger: logging.Logger):
         self.config = config
         self.logger = logger
+
+        # Read-level classifier, built once on first use (predictions + the
+        # required-column projection for raw columnar splits).
+        self._classifier = None
 
         # Labels
         labels_dict_path = config["labels_dict_path"]
@@ -101,9 +106,10 @@ class PseudoBulkPipeline:
 
         # ── Stage 2: Prepare reads ────────────────────────────────
         input_type = self.config["input_type"]
+        trim = self.config.get("trim_reads_to_grg_regions", False)
         if input_type == "raw_splits":
             self.logger.info("Stage 2: Preparing reads ...")
-            splits_data = self._prepare_reads(splits_data)
+            splits_data = self._prepare_reads(splits_data, trim)
         elif input_type == "pre_predicted":
             self.logger.info("Stage 2: Skipped (input already has predictions)")
         else:
@@ -154,7 +160,7 @@ class PseudoBulkPipeline:
     # ═══════════════════════════════════════════════════════════════
 
     def _prepare_reads(
-        self, splits_data: Dict[str, pd.DataFrame]
+        self, splits_data: Dict[str, pd.DataFrame], trim=False
     ) -> Dict[str, pd.DataFrame]:
         """Prepare reads for pseudobulk generation."""
         from syto.data.atlases.uxm_atlases import UXMMethylationAtlas
@@ -169,9 +175,7 @@ class PseudoBulkPipeline:
         )
 
         splits_data = prepare_splits_for_pseudobulk(
-            splits_data,
-            num_labels=self.num_labels,
-            atlas=atlas,
+            splits_data, num_labels=self.num_labels, atlas=atlas, trim=trim
         )
         sizes = ", ".join(f"{name}={len(df)}" for name, df in splits_data.items())
         self.logger.info(f"  After preparation: {sizes}")
@@ -183,22 +187,7 @@ class PseudoBulkPipeline:
         """Run classifier predictions on all splits."""
         self.logger.info("Stage 3: Running classifier predictions ...")
         classifier_config = self.config["classifier_config"]
-
-        read_level_classifier = read_classifier_factory(
-            name=self.config["classifier_type"],
-            path=self.config["classifier_checkpoint"],
-            labels_dict=self.labels_dict,
-            num_labels=self.num_labels,
-            seq_length=classifier_config.get("seq_length"),
-            foundation_model_path=classifier_config.get("foundation_model"),
-            classifier_head_implementation=classifier_config.get(
-                "classifier_head_implementation"
-            ),
-            grg_label_column=classifier_config.get("grg_label_column"),
-            soft_labels=classifier_config.get("soft_labels", True),
-            dismir_flavor=classifier_config.get("dismir_flavor", "lstm"),
-            batch_size=classifier_config.get("batch_size"),
-        )
+        read_level_classifier = self._get_classifier()
 
         for name, df in splits_data.items():
             self.logger.info(f"  Predicting {name} split ({len(df)} reads) ...")
@@ -213,6 +202,27 @@ class PseudoBulkPipeline:
             splits_data[name] = predicted
 
         return splits_data
+
+    def _get_classifier(self):
+        """Build (once) and cache the read-level classifier."""
+        if self._classifier is None:
+            classifier_config = self.config["classifier_config"]
+            self._classifier = read_classifier_factory(
+                name=self.config["classifier_type"],
+                path=self.config["classifier_checkpoint"],
+                labels_dict=self.labels_dict,
+                num_labels=self.num_labels,
+                seq_length=classifier_config.get("seq_length"),
+                foundation_model_path=classifier_config.get("foundation_model"),
+                classifier_head_implementation=classifier_config.get(
+                    "classifier_head_implementation"
+                ),
+                grg_label_column=classifier_config.get("grg_label_column"),
+                soft_labels=classifier_config.get("soft_labels", True),
+                dismir_flavor=classifier_config.get("dismir_flavor", "lstm"),
+                batch_size=classifier_config.get("batch_size"),
+            )
+        return self._classifier
 
     def _filter_split_columns(self, splits_data: Dict[str, pd.DataFrame]) -> None:
         """Filter dataframes to retain only necessary columns."""
@@ -321,7 +331,34 @@ class PseudoBulkPipeline:
     # ═══════════════════════════════════════════════════════════════
 
     def _load_splits(self) -> Dict[str, pd.DataFrame]:
-        """Load configured splits from parquet or pickle."""
+        """Load configured splits based on ``input_type``.
+
+        ``raw_splits`` reads the shared columnar/legacy dataset directory;
+        ``pre_predicted`` loads this pipeline's own per-split output files.
+        """
+        if self.config["input_type"] == "raw_splits":
+            return self._load_raw_splits()
+        return self._load_pre_predicted_splits()
+
+    def _load_raw_splits(self) -> Dict[str, pd.DataFrame]:
+        """Load raw training splits from the shared columnar/legacy dataset dir."""
+        classifier = self._get_classifier()
+        classifier_cfg = self.config.get("classifier_config", {})
+        # required_fit_columns reads grg_label_column / classifier_head_implementation
+        # from a fit-config's model/training sections; the pseudobulk config keeps
+        # those under classifier_config, so expose it under both keys.
+        fit_shim = {"model": classifier_cfg, "training": classifier_cfg}
+        return load_raw_splits(
+            self.config["data_path"],
+            list(self.config["split_information"].keys()),
+            classifier_required_columns=classifier.required_fit_columns(fit_shim),
+            data_format=self.config.get("data_format", "auto"),
+            split_column=self.config.get("split_column", "split"),
+            min_pattern_length=self.config.get("min_pattern_length"),
+        )
+
+    def _load_pre_predicted_splits(self) -> Dict[str, pd.DataFrame]:
+        """Load pre-predicted splits from per-split parquet or pickle files."""
         splits_configs = self.config["split_information"]
         splits_data = {}
 

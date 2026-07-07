@@ -22,7 +22,7 @@
 # It must contain, per split:
 #   - outputs/{split}/pseudobulks/i_{idx}/{aggregated_features,target_proportions,...}
 #   - outputs/{split}/pure_profiles/{feature_matrices,uniform_prior,...}
-pseudobulk_h5_path: Data/extended_proportions/pseudobulk_v2/cancer_detector_soft_labels_uniform/pseudobulk_generation/pseudobulk.h5
+pseudobulk_h5_path: /mnt/data/syto_experiments/mlflow/198121009408531961/1f0aaa3947bb4732a945e76aed3a5864/artifacts/pseudobulk_generation/pseudobulk.h5
 
 # Splits to load from the HDF5 file. The first split is used as the reference
 # (train) split for least-squares deconvolvers; "valid" is used to compute the
@@ -56,7 +56,7 @@ guarantee_diagonal_selection: true
 # guarantee_columns_selection: [38]
 
 # Whether to render the per-split feature-mask comparison heatmap.
-generate_feature_selection_plot: true
+generate_feature_selection_plot: false
 
 # ── Optional caching ──────────────────────────────────────────────────────────
 # If set and present, Stage 2 loads pre-computed feature-selected matrices from
@@ -89,7 +89,7 @@ deconvolvers:
       weight_decay: 0.001
       early_stopping_metric: val_mae
       early_stopping_patience: 1000
-      scheduler_type: plateau
+      scheduler_type: none
       device: cuda
 
   - name: xgb
@@ -115,4 +115,4 @@ deconvolvers:
 # OUTPUT
 # ══════════════════════════════════════════════════════════════════════════════
 # Directory where fitted models, feature masks, plots and the summary CSV are written.
-output_dir: Data/extended_proportions/pseudobulk_v2/cancer_detector_soft_labels_uniform/deconvolution
+output_dir: /mnt/data/syto_experiments/mlflow/198121009408531961/1f0aaa3947bb4732a945e76aed3a5864/artifacts/deconvolution

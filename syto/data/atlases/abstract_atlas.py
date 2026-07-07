@@ -55,9 +55,6 @@ class AbstractAtlas(ABC):
         ----------
         df : pd.DataFrame
             Input reads sorted by ``["chromosome", "read_start", "read_end"]``.
-        seq_column, methylation_pattern_column : str
-            Not used directly but forwarded by :meth:`prepare_reads`
-            conventions.
 
         Returns
         -------
@@ -182,8 +179,6 @@ class AbstractAtlas(ABC):
         trim : bool
             Whether to clip coordinates (and subclass-specific columns)
             to region boundaries.  Default ``True``.
-        seq_column, methylation_pattern_column : str
-            Column names for sequence and methylation pattern.
         **kwargs
             Subclass-specific parameters.
         """
@@ -254,8 +249,6 @@ class AbstractMethylationAtlas(AbstractAtlas):
     def trim_reads(
         self,
         df: pd.DataFrame,
-        seq_column: str = "seq",
-        methylation_pattern_column: str = "pattern",
         **kwargs,
     ) -> pd.DataFrame:
         """Clip coordinates **and** re-slice ``seq`` / ``pattern`` to the region.
@@ -272,7 +265,8 @@ class AbstractMethylationAtlas(AbstractAtlas):
 
         offsets = (df["read_start"] - orig_start).values
         lengths = (df["read_end"] - df["read_start"] + 1).values
-
+        seq_column = resolve_column(df, "input_ids")
+        methylation_pattern_column = resolve_column(df, "methylation_ids")
         df[seq_column] = [
             s[o : o + l] for s, o, l in zip(df[seq_column].tolist(), offsets, lengths)
         ]
@@ -311,19 +305,13 @@ class AbstractMethylationAtlas(AbstractAtlas):
             Input reads sorted by ``["chromosome", "read_start", "read_end"]``.
         trim : bool
             Clip reads to region boundaries.  Default ``True``.
-        seq_column, methylation_pattern_column : str
-            Column names for DNA sequence and CpG methylation pattern.
         **kwargs
             Forwarded to :meth:`trim_reads`.
         """
-        dna_col = resolve_column(df.columns, "input_ids")
-        meth_col = resolve_column(df.columns, "methylation_ids")
         df = self.overlap_reads(df)
         if trim:
             df = self.trim_reads(
                 df,
-                seq_column=dna_col,
-                methylation_pattern_column=meth_col,
                 **kwargs,
             )
         return df

@@ -33,17 +33,17 @@ def _make_train_df(
     markers=("m1", "m2"),
     classes=("A", "B"),
     n_reads_per_group=10,
-    col_m="M",
-    col_u="U",
+    col_methylation="methylation_ids",
     col_label="original_label",
     col_marker="dmr_ctype_label",
     rng=None,
 ):
     """Build a small synthetic training DataFrame.
 
-    Each (marker, class) combination gets *n_reads_per_group* rows with random
-    CpG counts.  Column names can be customised to test the classifier's
-    column-name forwarding logic.
+    Each (marker, class) combination gets *n_reads_per_group* rows, each with a
+    methylation pattern string (``"1"`` per methylated CpG, ``"0"`` per
+    unmethylated CpG) from which the classifier derives its counts.  Column
+    names can be customised to test the classifier's column-name forwarding.
     """
     if rng is None:
         rng = np.random.RandomState(42)  # pylint: disable=no-member
@@ -55,8 +55,7 @@ def _make_train_df(
                 n_meth = rng.randint(0, n_cpgs + 1)
                 rows.append(
                     {
-                        col_m: n_meth,
-                        col_u: n_cpgs - n_meth,
+                        col_methylation: "1" * n_meth + "0" * (n_cpgs - n_meth),
                         col_label: cls,
                         col_marker: marker,
                     }
@@ -224,13 +223,11 @@ class TestFit(unittest.TestCase):
         np.testing.assert_array_equal(clf.classes, ["A", "Z"])
 
     def test_fit_missing_column_raises(self):
-        """Passing a non-existent column name should raise ``AssertionError``."""
+        """Passing a non-existent column name should raise."""
         df = _make_train_df()
         clf = CancerDetectorClassifier()
-        with self.assertRaises(AssertionError):
-            clf.fit(df, col_n_meth_cpgs="MISSING")
-        with self.assertRaises(AssertionError):
-            clf.fit(df, col_n_unmeth_cpgs="MISSING")
+        with self.assertRaises(ValueError):
+            clf.fit(df, col_methylation="MISSING")
         with self.assertRaises(AssertionError):
             clf.fit(df, col_label="MISSING")
         with self.assertRaises(AssertionError):
@@ -245,14 +242,11 @@ class TestFit(unittest.TestCase):
 
     def test_fit_custom_column_names(self):
         """Non-default column names should be correctly forwarded."""
-        df = _make_train_df(
-            col_m="meth", col_u="unmeth", col_label="lbl", col_marker="mk"
-        )
+        df = _make_train_df(col_methylation="pat", col_label="lbl", col_marker="mk")
         clf = CancerDetectorClassifier()
         clf.fit(
             df,
-            col_n_meth_cpgs="meth",
-            col_n_unmeth_cpgs="unmeth",
+            col_methylation="pat",
             col_label="lbl",
             col_marker_label="mk",
         )
@@ -448,18 +442,16 @@ class TestPredictProba(unittest.TestCase):
 
     def test_custom_column_names(self):
         """Non-default column names should propagate through fit → predict."""
-        df = _make_train_df(col_m="meth", col_u="unmeth", col_marker="mk")
+        df = _make_train_df(col_methylation="pat", col_marker="mk")
         clf = CancerDetectorClassifier()
         clf.fit(
             df,
-            col_n_meth_cpgs="meth",
-            col_n_unmeth_cpgs="unmeth",
+            col_methylation="pat",
             col_marker_label="mk",
         )
         proba = clf.predict_proba(
             df,
-            col_n_meth_cpgs="meth",
-            col_n_unmeth_cpgs="unmeth",
+            col_methylation="pat",
             col_marker_label="mk",
         )
         self.assertEqual(proba.shape[0], len(df))

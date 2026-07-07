@@ -475,6 +475,7 @@ class Dismir(AbstractReadClassifier):
     ):
         self.max_sequence_length = max_sequence_length
         self.num_labels = num_labels
+        self.flavour = flavour
         self.classifier_type = classifier_type
         self.num_grg_labels = num_grg_labels
         self.grg_label_column = grg_label_column
@@ -1516,6 +1517,25 @@ class Dismir(AbstractReadClassifier):
             result[col] = pred_df[col].values
 
         return result
+
+    def required_fit_columns(self, config: dict) -> list[str]:
+        model = config.get("model", {}) or {}
+        cols = ["input_ids", "methylation_ids"]
+        head = model.get("classifier_head_implementation", "grg_attention_based")
+        if head == "grg_attention_based":
+            cols.append(model.get("grg_label_column", "dmr_ctype_label"))
+        return cols
+
+    def mlflow_fit_params(self) -> dict:
+        return {
+            "flavour": self.flavour,
+            "num_labels": self.num_labels,
+            "classifier_type": self.classifier_type,
+            "num_grg_labels": self.num_grg_labels,
+            "grg_label_column": self.grg_label_column,
+            "soft_labels": self.soft_labels,
+            "max_sequence_length": self.max_sequence_length,
+        }
 
     @mlflow_tracked_fit
     def fit_classificaton(
