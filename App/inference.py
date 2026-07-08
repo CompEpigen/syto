@@ -598,7 +598,7 @@ class InferencePipeline:
             props_2d = np.expand_dims(props_2d, 0)
 
         # ── Linear calibrator ──────────────────────────────────────
-        linear_path = calibrators_dir / "linear_calibrator.npz"
+        linear_path = calibrators_dir / "linear_calibrator.joblib"
         if linear_path.exists():
             self.logger.info(f"  Loading linear calibrator from {linear_path}")
             linear_cal = LinearCalibrator.load(linear_path)
@@ -607,7 +607,7 @@ class InferencePipeline:
                 short_name = norm_method.replace("-", "_")
                 calibrator_label = f"linear_{short_name}"
                 try:
-                    calib, _ = linear_cal.predict(props_2d, norm_method=norm_method)
+                    calib = linear_cal.predict(props_2d, norm_method=norm_method)
                     results.append((base_name, calibrator_label, np.round(calib, 4)))
                     self.logger.info(f"    ✓ {base_name} + {calibrator_label}")
                 except Exception as e:
@@ -617,7 +617,7 @@ class InferencePipeline:
                     )
 
         # ── Vector-scaling calibrator ──────────────────────────────
-        vs_path = calibrators_dir / "vector_scaling_calibrator.joblib"
+        vs_path = calibrators_dir / "vector_scaling_calibrator_with_cv.joblib"
         if vs_path.exists():
             calibrator_label = "vector_scaling"
             self.logger.info(f"  Loading vector-scaling calibrator from {vs_path}")
@@ -707,30 +707,29 @@ class InferencePipeline:
         runs prediction on the GR-aggregated matrix.
         """
         checkpoint_path = method_cfg["checkpoint_path"]
+        metadata_path = method_cfg.get("metadata_path", None)
         architecture = method_cfg["name"]
         self.logger.info(f"Loading {architecture} from {checkpoint_path}")
 
         if architecture == "Shallow_Wide_Network":
-            deconvolver = SWNDeconvolver.load(checkpoint_path)
+            deconvolver = SWNDeconvolver.load(checkpoint_path, **{"metadata_path":metadata_path})
         elif architecture == "3Layer_MLP":
-            deconvolver = MLPDeconvolver.load(checkpoint_path)
+            deconvolver = MLPDeconvolver.load(checkpoint_path, **{"metadata_path":metadata_path})
         else:
             raise ValueError(
                 "Architecture for NN method should be either Shallow_Wide_Network or 3Layer_MLP"
             )
-        X = torch.FloatTensor(
-            apply_feature_mask(
-                np.array(
-                    self.dmr_aggregated[
-                        [f"prediction_{i}_wavg" for i in range(self.num_labels)]
-                    ]
-                ),
-                self.features_mask,
-            )[np.newaxis]
-        ).to("cuda")
+        X = apply_feature_mask(
+            np.array(
+                self.dmr_aggregated[
+                    [f"prediction_{i}_wavg" for i in range(self.num_labels)]
+                ]
+            ),
+            self.features_mask,
+        )[np.newaxis]
 
         deconv_preds = deconvolver.predict(X)
-        proportions = np.round(deconv_preds.to("cpu").detach().numpy(), 4)
+        proportions = np.round(deconv_preds, 4)
         self.logger.debug(f"{architecture} proportions: {proportions}")
 
         return proportions

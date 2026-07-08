@@ -181,18 +181,19 @@ class AbstractNNDeconvolver(AbstractDeconvolver):
 
         n_input_features = metadata.get("n_input_features")
         n_targets = metadata["n_targets"] or metadata["n_cell_types"]
-        mlp_deconv = cls(
+        nn_deconv = cls(
             n_input_features=n_input_features,
             n_targets=n_targets,
         )
-        mlp_deconv.model.load_state_dict(torch.load(path, weights_only=True))
-        mlp_deconv.is_fitted = metadata["is_fitted"]
+        nn_deconv.model.load_state_dict(torch.load(path, weights_only=True))
+        nn_deconv.is_fitted = metadata["is_fitted"]
         for param, value in metadata.get("params", {}).items():
             if not param.endswith("_"):
                 param += "_"
-            setattr(mlp_deconv, param, value)
+            setattr(nn_deconv, param, value)
+        nn_deconv.model.to("cuda")
 
-        return mlp_deconv
+        return nn_deconv
 
     def get_cv_metric(self, X, y, **kwargs) -> float:
         if not self.is_fitted:
