@@ -118,6 +118,9 @@ class PseudoBulkPipeline:
         # ── Stage 3: Classifier predictions (if needed) ───────────
         if input_type in ["raw_splits"]:
             splits_data = self._run_classifier_predictions(splits_data)
+            if self.config.get("generate_predictions_only", False):
+                self.logger.info("generate_predictions_only was set to True: Skipping the rest of the pseudobulk pipeline")
+                return 
         else:
             self.logger.info("Stage 3: Skipped (input already has predictions)")
 
@@ -211,7 +214,7 @@ class PseudoBulkPipeline:
                 name=self.config["classifier_type"],
                 path=self.config["classifier_checkpoint"],
                 labels_dict=self.labels_dict,
-                num_labels=self.num_labels,
+                num_labels=classifier_config.get("num_labels"),
                 seq_length=classifier_config.get("seq_length"),
                 foundation_model_path=classifier_config.get("foundation_model"),
                 classifier_head_implementation=classifier_config.get(
