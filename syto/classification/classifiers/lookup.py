@@ -150,6 +150,14 @@ class LookupClassifier(AbstractReadClassifier):
         self
         """
         self._resolve_signature_column(df)
+        # The fitting pipeline renames the configured label column to its
+        # canonical name ('label' for hard, 'soft_label' for soft) before fit;
+        # adopt whichever the frame actually carries so downstream reads work
+        # both standalone (no rename) and pipeline-driven (renamed).
+        if self.config.label_col not in df.columns:
+            self.config.label_col = (
+                "soft_label" if self.config.label_mode == "soft" else "label"
+            )
         t_start = time.time()
         self._lookup = self._build_mapping(df)
 

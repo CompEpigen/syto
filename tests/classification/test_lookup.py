@@ -474,6 +474,25 @@ class TestLookupClassifierHardMode(unittest.TestCase):
             self.assertEqual(len(nonzero), 1)
             self.assertAlmostEqual(nonzero[0], 1.0)
 
+    def test_fit_hard_mode_with_pipeline_renamed_label(self):
+        """fit() must work when the fitting pipeline has already renamed the
+        configured label column to the canonical 'label'.
+
+        The ClassifierFittingPipeline renames the chosen ``label_column`` to the
+        canonical ``label`` before handing the frame to the classifier, so
+        ``config.label_col`` (the pre-rename source name) is no longer present.
+        """
+        renamed_df = _make_sample_df().rename(columns={"original_label": "label"})
+        cfg = LabelConfig(
+            num_classes=NUM_CLASSES,
+            label_mode="hard",
+            label_col="hard_label_with_background",  # pre-rename source name
+        )
+        clf = LookupClassifier(cfg)
+        clf.fit(renamed_df, compute_train_metrics=True)
+        self.assertTrue(clf._is_fitted)
+        self.assertEqual(clf.n_keys, 2)
+
 
 # ──────────────────────────────────────────────────────────────────────
 # 1-NN fallback
