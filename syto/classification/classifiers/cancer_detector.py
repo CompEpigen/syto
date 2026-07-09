@@ -576,7 +576,7 @@ class CancerDetectorClassifier(AbstractReadClassifier):
                 f"Unsupported file extension: {file_extension}. Must be .pkl or .joblib."
             )
         _module_logger.info("CancerDetector model loaded with checkpoint: %s", path)
-        _module_logger.info("CancerDetector model loaded: %s", path)
+
         return instance
 
     def __str__(self) -> str:
