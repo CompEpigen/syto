@@ -50,7 +50,11 @@ class ClassifierFittingPipeline:
 
         self.model_arch = self.model_cfg["architecture"].lower()
         self.data_path = Path(config["data_path"])
-        self.base_output_dir = Path(output_cfg.get("output_dir", "output"))
+        # ``output_dir`` may be given at the top level (most configs and the
+        # ``--output_dir`` CLI override) or nested under an ``output:`` section.
+        self.base_output_dir = Path(
+            output_cfg.get("output_dir") or config.get("output_dir", "output")
+        )
 
         self.data_format = config.get("data_format", "auto")
         self.split_column = config.get("split_column", "split")
