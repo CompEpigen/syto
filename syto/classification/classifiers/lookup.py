@@ -360,6 +360,7 @@ class LookupClassifier(AbstractReadClassifier):
                 payload = pickle.load(f)
 
             config = LabelConfig.from_dict(payload["config"])
+
             clf = cls(config)
 
             clf._lookup = {cls._str_to_key(k): v for k, v in payload["lookup"].items()}
@@ -609,7 +610,7 @@ class LookupClassifier(AbstractReadClassifier):
 
     def required_fit_columns(self, config: dict) -> list[str]:
         # self.config is a LabelConfig with the ground-truth-class column name.
-        return ["name", "read_start", "methylation_ids", self.config.label_col]
+        return ["name", "read_start", "methylation_ids"]
 
     def mlflow_fit_params(self) -> dict:
         return self.config.to_dict()
