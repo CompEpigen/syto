@@ -136,6 +136,9 @@ def prepare_methylbert_list(
     params:
         stride: How far to move the window (75 = 50% overlap for 150bp window)
     """
+    if "read_name" not in results_df.columns: 
+        results_df["read_name"] = range(len(results_df))
+
     data_list = [
         [
             "dna_seq",
@@ -1017,7 +1020,7 @@ class MethylBert(AbstractReadClassifier):
 
     def required_fit_columns(self, config: dict) -> list[str]:
         training = config.get("training", {}) or {}
-        cols = ["input_ids", "methylation_ids"]
+        cols = ["input_ids", "methylation_ids", "original_label"]
         if self.num_grg_labels is not None:
             cols.append(training.get("grg_label_column", "dmr_ctype_label"))
         return cols
