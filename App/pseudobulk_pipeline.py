@@ -309,7 +309,7 @@ class PseudoBulkPipeline:
 
         return GenerationMetadata(
             grg_id_column=self.grg_label_column,
-            labeling_scheme=self.config["labeling_scheme"],
+            labeling_scheme=self.config.get("labeling_scheme",None),
             classifier=self.config["classifier_type"],
             data_watermark=data_watermark,
             data_stats=data_stats,
