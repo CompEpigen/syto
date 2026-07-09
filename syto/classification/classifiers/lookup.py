@@ -55,6 +55,7 @@ class LabelConfig:
     # KNN smoothing parameters (used during *fit* to build the table, soft mode only)
     min_reads: int = 30
     max_distance: float = 0.41
+    add_superset_counts: bool = False
 
     def to_dict(self) -> dict:
         return asdict(self)
