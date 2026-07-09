@@ -151,6 +151,7 @@ class PseudobulkGenerator:
         class_label_column: str = "original_label",
         grg_label_column: str = "dmr_ctype_label",
         columns_to_keep: List[str] = None,
+        num_prediction_classes: Optional[int] = None,
         logger: logging.Logger = _module_logger,
     ):
         """Initialize the PseudobulkGenerator.
@@ -171,6 +172,12 @@ class PseudobulkGenerator:
             grg_label_column: Column name containing the GRG labels for grouping reads.
             columns_to_keep: Columns to keep in aggregated output. If None, uses
                 the default columns from build_target_columns()
+            num_prediction_classes: Number of classifier prediction classes, i.e.
+                how many ``prediction_{i}_wavg`` feature columns to produce. This
+                is a distinct dimension from the number of cell types
+                (``len(cell_types_mapping)``): the classifier may emit extra
+                classes (e.g. a cancer class) with no cell-type entry. Defaults to
+                the cell-type count for backward compatibility.
             logger: Logger instance.
         """
         # Validate target proportions
@@ -193,9 +200,15 @@ class PseudobulkGenerator:
         self.class_label_column = class_label_column
         self.grg_label_column = grg_label_column
         self.n_classes = len(parameters.cell_types_mapping)
+        # Number of prediction feature columns (prediction_{i}_wavg). Decoupled
+        # from n_classes (cell types / deconvolution targets) so the classifier
+        # can emit more classes than there are cell types.
+        self.num_prediction_classes = num_prediction_classes or self.n_classes
         self.n_gr_groups = len(parameters.gr_groups_mapping)
         # Default to legacy target columns if not specified
-        self.columns_to_keep = columns_to_keep or build_target_columns(self.n_classes)
+        self.columns_to_keep = columns_to_keep or build_target_columns(
+            self.num_prediction_classes
+        )
         self.logger = logger
 
         # Initialize checkpoint manager
@@ -272,7 +285,7 @@ class PseudobulkGenerator:
         self._numpy_arrays_per_split: Dict[str, Dict[str, np.ndarray]] = {}
 
         # Build list of prediction columns
-        pred_cols = [f"prediction_{i}" for i in range(self.n_classes)]
+        pred_cols = [f"prediction_{i}" for i in range(self.num_prediction_classes)]
 
         for split_name, df in self.splits_df.items():
             arrays = {
@@ -440,7 +453,7 @@ class PseudobulkGenerator:
                 result = delayed(self.generate_single_pseudobulk)(
                     n_reads_to_sample=self.n_reads_to_sample,
                     n_gr_groups=self.n_gr_groups,
-                    n_classes=self.n_classes,
+                    n_classes=self.num_prediction_classes,
                     indices_per_class_and_grg=indices_dict,
                     numpy_arrays=numpy_arrays,
                     target_proportions=target_proportions[idx],
@@ -502,7 +515,7 @@ class PseudobulkGenerator:
             result = self.generate_single_pseudobulk(
                 n_reads_to_sample=self.n_reads_to_sample,
                 n_gr_groups=self.n_gr_groups,
-                n_classes=self.n_classes,
+                n_classes=self.num_prediction_classes,
                 indices_per_class_and_grg=indices_dict,
                 numpy_arrays=self._numpy_arrays_per_split[split_name],
                 target_proportions=proportions,
@@ -517,7 +530,7 @@ class PseudobulkGenerator:
                 df=result.aggregated_features,
                 expected_grg_ids=expected_grg_ids,
                 grg_label_column=self.grg_label_column,
-                n_classes=n_classes,
+                n_classes=self.num_prediction_classes,
                 substitution_strategy="uniform_number",
             )
             result.aggregated_features = filled_features

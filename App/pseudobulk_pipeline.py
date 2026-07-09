@@ -67,7 +67,15 @@ class PseudoBulkPipeline:
         with open(labels_dict_path, "r", encoding="utf-8") as f:
             raw = json.load(f)
             self.labels_dict: Dict[int, str] = {int(k): v for k, v in raw.items()}
-        self.num_labels = config["num_labels"]
+
+        # Number of classifier prediction classes (how many prediction_{i}_wavg
+        # feature columns to produce). Distinct from the number of cell types /
+        # deconvolution targets (len(labels_dict)): the classifier may emit extra
+        # classes (e.g. a cancer class) with no cell-type entry. Lives under
+        # classifier_config since it must match the classifier's num_labels.
+        self.num_prediction_classes: int = config["classifier_config"][
+            "num_prediction_classes"
+        ]
 
         # Output paths
         self.output_dir = Path(config["output_dir"])
@@ -150,6 +158,7 @@ class PseudoBulkPipeline:
             class_label_column=self.class_label_column,
             grg_label_column=self.grg_label_column,
             columns_to_keep=self.columns_to_keep,
+            num_prediction_classes=self.num_prediction_classes,
             logger=self.logger,
         )
 
@@ -178,7 +187,7 @@ class PseudoBulkPipeline:
         )
 
         splits_data = prepare_splits_for_pseudobulk(
-            splits_data, num_labels=self.num_labels, atlas=atlas, trim=trim
+            splits_data, num_labels=self.num_prediction_classes, atlas=atlas, trim=trim
         )
         sizes = ", ".join(f"{name}={len(df)}" for name, df in splits_data.items())
         self.logger.info(f"  After preparation: {sizes}")
@@ -214,7 +223,7 @@ class PseudoBulkPipeline:
                 name=self.config["classifier_type"],
                 path=self.config["classifier_checkpoint"],
                 labels_dict=self.labels_dict,
-                num_labels=classifier_config.get("num_labels"),
+                num_labels=classifier_config.get("num_prediction_classes"),
                 seq_length=classifier_config.get("seq_length"),
                 foundation_model_path=classifier_config.get("foundation_model"),
                 classifier_head_implementation=classifier_config.get(
