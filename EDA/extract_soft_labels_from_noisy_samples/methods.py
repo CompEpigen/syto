@@ -724,6 +724,7 @@ def sl_with_simple_archetypes_with_multiple_regions(
     return_num_iterations: bool = False,
     return_archetypes: bool = False,
     penalty_strength: float = 0.0,
+    record_history: bool = False,
     verbose=False,
 ):
     """
@@ -762,6 +763,11 @@ def sl_with_simple_archetypes_with_multiple_regions(
             ``start_CpG_index[region] + k``).
         penalty_strength: strength of the L2 penalty on the archetypes, which
            encourages the archetypes to be close to 0 or 1.
+        record_history: if True, additionally return a list of per-iteration
+           snapshots of the archetypes (one dict per iteration with keys
+           ``iteration``, ``delta`` and ``archetypes`` = {region: array copy}).
+           The first entry (``iteration`` 0, ``delta`` inf) is the initialization,
+           followed by one entry after each EM update.
 
     Returns:
         {region: {start: {read_length: np.ndarray of shape
@@ -830,6 +836,16 @@ def sl_with_simple_archetypes_with_multiple_regions(
             np.clip(pseudo_expected_o1 + pseudo_expected_o0, eps, None),
         )
         archetypes[region] = np.clip(region_archetypes, eps, 1 - eps)
+
+    archetype_history = []
+    if record_history:
+        archetype_history.append(
+            {
+                "iteration": 0,
+                "delta": float("inf"),
+                "archetypes": {r: archetypes[r].copy() for r in regions},
+            }
+        )
 
     for iteration in range(max_num_iterations):
         # E-step expected counts.
@@ -1013,6 +1029,15 @@ def sl_with_simple_archetypes_with_multiple_regions(
             delta = max(delta, np.max(np.abs(new_archetypes - archetypes[region])))
             archetypes[region] = new_archetypes
 
+        if record_history:
+            archetype_history.append(
+                {
+                    "iteration": iteration + 1,
+                    "delta": float(delta),
+                    "archetypes": {r: archetypes[r].copy() for r in regions},
+                }
+            )
+
         if delta < delta_tol:
             if verbose:
                 print(
@@ -1059,6 +1084,8 @@ def sl_with_simple_archetypes_with_multiple_regions(
         result = result + (archetypes_info,)
     if return_num_iterations:
         result = result + (num_iterations,)
+    if record_history:
+        result = result + (archetype_history,)
     if len(result) == 1:
         return result[0]
     return result
