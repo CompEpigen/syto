@@ -130,6 +130,9 @@ class ClassifierFittingPipeline:
 
         self.logger.info("Fitting classifier...")
 
+        # The entire ``training:`` section is forwarded as kwargs, so an optional
+        # ``training.early_stopping`` block reaches HF classifiers as the
+        # ``early_stopping`` kwarg (see MethylBert/EpigenDnabert2.fit_classificaton).
         classifier.fit_classificaton(
             train_df=train_df,
             val_df=val_df,

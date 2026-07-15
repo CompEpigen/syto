@@ -24,6 +24,7 @@ import pandas as pd
 from syto.classification.hf_training import (
     AuxLossLoggingTrainer,
     BalancedTrainer,
+    apply_early_stopping,
 )
 
 from syto.classification.evaluation import (
@@ -1101,13 +1102,22 @@ class EpigenDnabert2(AbstractReadClassifier):
 
         self.training_args = replace(self.training_args, **training_args_overrides)
 
+        # Attach an EarlyStoppingCallback when the config carries an
+        # ``early_stopping`` block (no-op otherwise). Prerequisites on the
+        # TrainingArguments are auto-enforced inside the helper.
+        self.training_args, callbacks = apply_early_stopping(
+            self.training_args,
+            kwargs.get("early_stopping"),
+            kwargs.get("callbacks"),
+        )
+
         self.fine_tune(
             data_path=None,
             train_dataset=train_dataset,
             val_dataset=val_dataset,
             test_dataset=val_dataset,
             training_args=self.training_args,
-            callbacks=kwargs.get("callbacks", None),
+            callbacks=callbacks,
             data_interface="pandas",
             resume_from_checkpoint=kwargs.get("resume_from_checkpoint", None),
             signal_mask=kwargs.get("signal_mask", None),

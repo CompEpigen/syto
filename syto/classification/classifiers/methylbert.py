@@ -203,6 +203,7 @@ from syto.classification.hf_training import (  # noqa: E402
     BalancedBackgroundBatchSampler,
     BalancedTrainer,
     MethylBertTrainer,
+    apply_early_stopping,
 )
 
 
@@ -1097,12 +1098,22 @@ class MethylBert(AbstractReadClassifier):
 
         training_args = replace(self.training_args, **training_args_overrides)
 
+        # Attach an EarlyStoppingCallback when the config carries an
+        # ``early_stopping`` block (no-op otherwise). Prerequisites on the
+        # TrainingArguments are auto-enforced inside the helper.
+        training_args, callbacks = apply_early_stopping(
+            training_args,
+            kwargs.get("early_stopping"),
+            kwargs.get("callbacks"),
+            logger=_module_logger,
+        )
+
         self.fine_tune(
             data_path=None,
             train_dataset=train_dataset,
             val_dataset=val_dataset,
             training_args=training_args,
-            callbacks=kwargs.get("callbacks", None),
+            callbacks=callbacks,
             resume_from_checkpoint=kwargs.get("resume_from_checkpoint", None),
             signal_mask=kwargs.get("signal_mask", None),
             bg_ratio=kwargs.get("bg_ratio", 0.3),

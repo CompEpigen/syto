@@ -1,11 +1,16 @@
 import unittest
+from dataclasses import dataclass
+from typing import Optional
 
 import numpy as np
+
+from transformers import EarlyStoppingCallback
 
 from syto.classification.hf_training import (
     AuxLossLoggingTrainer,
     BalancedBackgroundBatchSampler,
     BalancedTrainer,
+    apply_early_stopping,
 )
 # Back-compat: the old name must still import from methylbert.
 from syto.classification.classifiers.methylbert import (
@@ -64,6 +69,91 @@ class TestBalancedBackgroundBatchSampler(unittest.TestCase):
         for batch in emitted:
             sig = [i for i in batch if i < 5]
             self.assertEqual(len(sig), 2)
+
+
+@dataclass
+class _DummyArgs:
+    """Minimal stand-in for TrainingArguments (a dataclass) so we can exercise
+    the dataclasses.replace-based prerequisite auto-setting without building a
+    full transformers.TrainingArguments."""
+
+    load_best_model_at_end: bool = False
+    metric_for_best_model: Optional[str] = None
+
+
+class TestApplyEarlyStopping(unittest.TestCase):
+    def _ready_args(self):
+        return _DummyArgs(load_best_model_at_end=True, metric_for_best_model="eval_loss")
+
+    def test_none_cfg_is_noop(self):
+        args = _DummyArgs(load_best_model_at_end=False)
+        out_args, cbs = apply_early_stopping(args, None, None)
+        self.assertIs(out_args, args)
+        self.assertIsNone(cbs)
+
+    def test_empty_cfg_is_noop(self):
+        args = _DummyArgs()
+        out_args, cbs = apply_early_stopping(args, {}, [])
+        self.assertIs(out_args, args)
+        self.assertEqual(cbs, [])
+
+    def test_disabled_flag_is_noop(self):
+        args = self._ready_args()
+        out_args, cbs = apply_early_stopping(
+            args, {"enabled": False, "early_stopping_patience": 5}, []
+        )
+        self.assertIs(out_args, args)
+        self.assertEqual(cbs, [])
+
+    def test_enabled_appends_callback_with_params(self):
+        args = self._ready_args()
+        out_args, cbs = apply_early_stopping(
+            args,
+            {"early_stopping_patience": 7, "early_stopping_threshold": 0.01},
+            None,
+        )
+        self.assertEqual(len(cbs), 1)
+        cb = cbs[0]
+        self.assertIsInstance(cb, EarlyStoppingCallback)
+        self.assertEqual(cb.early_stopping_patience, 7)
+        self.assertAlmostEqual(cb.early_stopping_threshold, 0.01)
+        # prerequisites already satisfied -> args returned unchanged
+        self.assertIs(out_args, args)
+
+    def test_defaults_patience_and_threshold(self):
+        args = self._ready_args()
+        _, cbs = apply_early_stopping(args, {"enabled": True}, None)
+        cb = cbs[0]
+        self.assertEqual(cb.early_stopping_patience, 1)
+        self.assertEqual(cb.early_stopping_threshold, 0.0)
+
+    def test_preserves_existing_callbacks(self):
+        args = self._ready_args()
+        sentinel = object()
+        _, cbs = apply_early_stopping(args, {"early_stopping_patience": 1}, [sentinel])
+        self.assertEqual(len(cbs), 2)
+        self.assertIs(cbs[0], sentinel)
+        self.assertIsInstance(cbs[1], EarlyStoppingCallback)
+
+    def test_autosets_prereqs_with_defaults(self):
+        args = _DummyArgs(load_best_model_at_end=False, metric_for_best_model=None)
+        out_args, cbs = apply_early_stopping(args, {"early_stopping_patience": 3}, None)
+        self.assertIsNot(out_args, args)  # replaced, not mutated
+        self.assertTrue(out_args.load_best_model_at_end)
+        self.assertEqual(out_args.metric_for_best_model, "eval_loss")
+        # original left untouched
+        self.assertFalse(args.load_best_model_at_end)
+        self.assertIsNone(args.metric_for_best_model)
+        self.assertEqual(len(cbs), 1)
+
+    def test_keeps_existing_prereqs(self):
+        args = _DummyArgs(
+            load_best_model_at_end=True, metric_for_best_model="eval_accuracy"
+        )
+        out_args, _ = apply_early_stopping(args, {"early_stopping_patience": 2}, None)
+        # nothing to fix -> same instance, metric preserved
+        self.assertIs(out_args, args)
+        self.assertEqual(out_args.metric_for_best_model, "eval_accuracy")
 
 
 class TestReexports(unittest.TestCase):

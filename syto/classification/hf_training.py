@@ -6,9 +6,70 @@ classifier that trains through ``transformers.Trainer`` (MethylBERT, EpigenBERT)
 can reuse them. Dismir trains through a hand-written loop and does NOT use these.
 """
 
+import logging
+from dataclasses import replace
+
 import numpy as np
 from torch.utils.data import DataLoader, Sampler
-from transformers import Trainer
+from transformers import Trainer, EarlyStoppingCallback
+
+_module_logger = logging.getLogger(__name__)
+
+
+def apply_early_stopping(training_args, early_stopping_cfg, callbacks, logger=None):
+    """Attach a ``transformers.EarlyStoppingCallback`` when requested.
+
+    Parameters
+    ----------
+    training_args :
+        A ``TrainingArguments`` dataclass instance. When early stopping is
+        enabled but its prerequisites are unset, a copy with them enforced is
+        returned (via ``dataclasses.replace``); the original is left untouched.
+    early_stopping_cfg : dict | None
+        Parsed ``training.early_stopping`` block. Recognised keys:
+        ``enabled`` (default True when the block is present),
+        ``early_stopping_patience`` (default 1),
+        ``early_stopping_threshold`` (default 0.0).
+    callbacks : list | None
+        Existing callbacks to preserve.
+
+    Returns
+    -------
+    tuple
+        ``(training_args, callbacks)``. When ``early_stopping_cfg`` is falsy or
+        carries ``enabled: false`` both inputs are returned unchanged.
+    """
+    log = logger or _module_logger
+    if not early_stopping_cfg:
+        return training_args, callbacks
+
+    cfg = dict(early_stopping_cfg)
+    if not cfg.pop("enabled", True):
+        return training_args, callbacks
+
+    # EarlyStoppingCallback requires load_best_model_at_end=True and a
+    # metric_for_best_model; auto-enforce them (with a warning) when unset.
+    updates = {}
+    if not getattr(training_args, "load_best_model_at_end", False):
+        log.warning(
+            "Early stopping enabled: forcing load_best_model_at_end=True "
+            "(required by EarlyStoppingCallback)."
+        )
+        updates["load_best_model_at_end"] = True
+    if not getattr(training_args, "metric_for_best_model", None):
+        log.warning(
+            "Early stopping enabled: defaulting metric_for_best_model='eval_loss' "
+            "(required by EarlyStoppingCallback)."
+        )
+        updates["metric_for_best_model"] = "eval_loss"
+    if updates:
+        training_args = replace(training_args, **updates)
+
+    callback = EarlyStoppingCallback(
+        early_stopping_patience=cfg.get("early_stopping_patience", 1),
+        early_stopping_threshold=cfg.get("early_stopping_threshold", 0.0),
+    )
+    return training_args, list(callbacks or []) + [callback]
 
 
 class BalancedBackgroundBatchSampler(Sampler):
