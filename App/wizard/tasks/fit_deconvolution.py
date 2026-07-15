@@ -8,6 +8,7 @@ since the models are being created here). Shared deconvolver metadata and split
 discovery live in ``deconvolver_common``.
 """
 
+from App.wizard.fields import FieldSpec
 from App.wizard.tasks.deconvolver_common import (
     DECONVOLVER_DEFAULT_PARAMS,
     DECONVOLVER_ORDER,
@@ -50,6 +51,42 @@ def _splits_section(engine, answers) -> None:
             continue
         break
     answers["splits"] = selected
+
+
+def _guarantee_columns_section(engine, answers) -> None:
+    """Optionally force-select specific prediction-class columns.
+
+    The enable question is wizard-only and never written to the config; when the
+    user declines, ``guarantee_columns_selection`` is omitted entirely.
+    """
+    enabled = engine.ask_one(
+        FieldSpec(
+            key="_guarantee_columns_enabled",
+            label="Force-select specific prediction-class columns?",
+            kind="bool",
+            default=False,
+        ),
+        answers,
+    )
+    if not enabled:
+        return
+
+    while True:
+        raw = engine.ask_one(
+            FieldSpec(
+                key="_guarantee_columns_raw",
+                label="guarantee_columns_selection (comma-separated column indices)",
+                kind="text",
+            ),
+            answers,
+        )
+        try:
+            cols = [int(tok) for tok in str(raw).split(",") if tok.strip() != ""]
+        except ValueError:
+            print("  ✗ Enter comma-separated integers, e.g. '38, 5'.")
+            continue
+        break
+    answers["guarantee_columns_selection"] = cols
 
 
 def _deconvolvers_section(engine, answers) -> None:

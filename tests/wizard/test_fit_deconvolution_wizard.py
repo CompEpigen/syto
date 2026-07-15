@@ -82,5 +82,27 @@ class TestSplitsSection(unittest.TestCase):
         self.assertEqual(len(eng.calls), 1)  # no reprompt for absent 'valid'
 
 
+class TestGuaranteeColumnsSection(unittest.TestCase):
+    def test_declined_leaves_key_absent(self):
+        eng = _StubEngine(one=[False])
+        answers = {}
+        fd._guarantee_columns_section(eng, answers)
+        self.assertNotIn("guarantee_columns_selection", answers)
+
+    def test_accepted_parses_comma_separated_ints(self):
+        eng = _StubEngine(one=[True, "38, 5"])
+        answers = {}
+        fd._guarantee_columns_section(eng, answers)
+        self.assertEqual(answers["guarantee_columns_selection"], [38, 5])
+
+    def test_accepted_reprompts_on_non_integer(self):
+        eng = _StubEngine(one=[True, "x, 5", "38, 5"])
+        answers = {}
+        fd._guarantee_columns_section(eng, answers)
+        self.assertEqual(answers["guarantee_columns_selection"], [38, 5])
+        # 1 bool prompt + 2 text prompts (first invalid, second valid)
+        self.assertEqual(len(eng.one_specs), 3)
+
+
 if __name__ == "__main__":
     unittest.main()
