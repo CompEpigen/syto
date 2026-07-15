@@ -9,6 +9,8 @@ HuggingFace ``Trainer`` as a metrics table - replacing the default
 ``ProgressCallback``/``PrinterCallback``, which dump raw ``logs`` dicts.
 """
 
+import logging
+
 from typing import Dict, Optional
 
 from tqdm import tqdm
@@ -26,6 +28,31 @@ except ImportError:
         return False
 
     NotebookTrainingTracker = None
+
+
+def _mirror_to_log_file(message: str) -> None:
+    """Mirror a pre-rendered table line into any file-based logging handler.
+
+    The metrics table is rendered to the console via ``tqdm.write`` (stdout) so it
+    interleaves cleanly with active progress bars, which bypasses the ``logging``
+    framework - so it never reaches a ``FileHandler`` attached via ``--log-file``.
+    This writes the same raw line to every ``FileHandler`` on the root logger,
+    preserving the table's column alignment, without double-printing to the
+    console ``StreamHandler`` (a ``FileHandler`` is a ``StreamHandler`` subclass,
+    so the ``isinstance`` check matches file handlers only). A no-op when no file
+    handler is configured.
+    """
+    for handler in logging.getLogger().handlers:
+        if not isinstance(handler, logging.FileHandler):
+            continue
+        handler.acquire()
+        try:
+            if handler.stream is None:  # delay=True handler not yet opened
+                handler.stream = handler._open()
+            handler.stream.write(message + handler.terminator)
+            handler.flush()
+        finally:
+            handler.release()
 
 
 class TrainingProgressTracker:
@@ -84,6 +111,8 @@ class TrainingProgressTracker:
                 separator_str = "  ".join("-" * w for w in column_widths)
                 tqdm.write(header_str)
                 tqdm.write(separator_str)
+                _mirror_to_log_file(header_str)
+                _mirror_to_log_file(separator_str)
 
         # 2. Format row values
         row_dict = {
@@ -104,6 +133,9 @@ class TrainingProgressTracker:
         if self.use_notebook and not isinstance(self._tracker, dict):
             self._tracker.write_line(row_dict)
             self._tracker.update(epoch, comment=f"Epoch {epoch}/{epochs}")
+            _mirror_to_log_file(
+                "  ".join(str(row_dict[col]) for col in column_names)
+            )
         else:
             column_widths = self._tracker["column_widths"]
             row_values = [
@@ -113,7 +145,9 @@ class TrainingProgressTracker:
             ]
             for col_name, w in zip(column_names[3:], column_widths[3:]):
                 row_values.append(row_dict[col_name].ljust(w))
-            tqdm.write("  ".join(row_values))
+            row_str = "  ".join(row_values)
+            tqdm.write(row_str)
+            _mirror_to_log_file(row_str)
 
 
 # eval_* keys that report run timing rather than a model metric, plus
