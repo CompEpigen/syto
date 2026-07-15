@@ -104,5 +104,103 @@ class TestGuaranteeColumnsSection(unittest.TestCase):
         self.assertEqual(len(eng.one_specs), 3)
 
 
+from App.wizard.tasks import TASK_REGISTRY
+from App.wizard.tasks.fit_deconvolution import FitDeconvolutionWizard
+
+
+class TestSchema(unittest.TestCase):
+    def setUp(self):
+        self.specs = FitDeconvolutionWizard().field_specs()
+        self.keys = [s.key for s in self.specs]
+        self.by_key = {s.key: s for s in self.specs}
+
+    def test_registered(self):
+        self.assertIn("fit_deconvolution", TASK_REGISTRY)
+        self.assertIs(TASK_REGISTRY["fit_deconvolution"], FitDeconvolutionWizard)
+
+    def test_labels_dict_first(self):
+        self.assertEqual(self.keys[0], "labels_dict_path")
+
+    def test_input_labels_before_output_labels(self):
+        self.assertLess(
+            self.keys.index("num_input_labels"), self.keys.index("num_output_labels")
+        )
+
+    def test_both_label_counts_are_core(self):
+        self.assertEqual(self.by_key["num_input_labels"].tier, "core")
+        self.assertEqual(self.by_key["num_output_labels"].tier, "core")
+
+    def test_pseudobulk_before_splits(self):
+        self.assertLess(
+            self.keys.index("pseudobulk_h5_path"), self.keys.index("splits")
+        )
+
+    def test_feature_selection_mode_is_select(self):
+        spec = self.by_key["feature_selection_mode"]
+        self.assertEqual(spec.kind, "select")
+        self.assertEqual(set(spec.choices), {"cutoff", "top_features"})
+
+    def test_feature_cutoff_gated_on_cutoff_mode(self):
+        w = self.by_key["feature_cutoff"].when
+        self.assertTrue(w({"feature_selection_mode": "cutoff"}))
+        self.assertFalse(w({"feature_selection_mode": "top_features"}))
+
+    def test_top_features_gated_on_top_features_mode(self):
+        w = self.by_key["top_features"].when
+        self.assertTrue(w({"feature_selection_mode": "top_features"}))
+        self.assertFalse(w({"feature_selection_mode": "cutoff"}))
+
+    def test_plot_is_expert(self):
+        self.assertEqual(self.by_key["generate_feature_selection_plot"].tier, "expert")
+
+    def test_sections_are_list_sections(self):
+        for key in ("splits", "guarantee_columns_selection", "deconvolvers"):
+            self.assertEqual(self.by_key[key].kind, "list_section")
+
+
+class TestBuildConfig(unittest.TestCase):
+    def setUp(self):
+        self.wiz = FitDeconvolutionWizard()
+
+    def test_nested_and_lists_passthrough(self):
+        answers = {
+            "labels_dict_path": "App/labels_dict.json",
+            "num_input_labels": 39,
+            "num_output_labels": 39,
+            "pseudobulk_h5_path": "/tmp/pb.h5",
+            "splits": ["train", "valid", "test"],
+            "feature_selection_mode": "top_features",
+            "top_features": 156,
+            "guarantee_diagonal_selection": True,
+            "guarantee_columns_selection": [38],
+            "generate_feature_selection_plot": False,
+            "deconvolvers": [
+                {"name": "swn", "params": {"device": "cuda"}},
+                {"name": "nnls"},
+            ],
+            "output_dir": "/tmp/out",
+        }
+        cfg = self.wiz.build_config(answers)
+        self.assertEqual(cfg["pseudobulk_h5_path"], "/tmp/pb.h5")
+        self.assertEqual(cfg["splits"], ["train", "valid", "test"])
+        self.assertEqual(cfg["top_features"], 156)
+        self.assertEqual(cfg["guarantee_columns_selection"], [38])
+        self.assertEqual(cfg["deconvolvers"][0]["params"]["device"], "cuda")
+        self.assertNotIn("params", cfg["deconvolvers"][1])
+        # wizard-only gate key never leaks
+        self.assertNotIn("feature_selection_mode", cfg)
+
+    def test_drops_blank_strings(self):
+        answers = {"output_dir": "", "labels_dict_path": "App/labels_dict.json"}
+        cfg = self.wiz.build_config(answers)
+        self.assertNotIn("output_dir", cfg)
+        self.assertIn("labels_dict_path", cfg)
+
+    def test_guarantee_columns_absent_when_not_provided(self):
+        answers = {"labels_dict_path": "App/labels_dict.json"}
+        cfg = self.wiz.build_config(answers)
+        self.assertNotIn("guarantee_columns_selection", cfg)
+
+
 if __name__ == "__main__":
     unittest.main()
