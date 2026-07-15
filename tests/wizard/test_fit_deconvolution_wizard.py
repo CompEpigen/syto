@@ -202,5 +202,26 @@ class TestBuildConfig(unittest.TestCase):
         self.assertNotIn("guarantee_columns_selection", cfg)
 
 
+class TestGeneratedConfigSatisfiesValidator(unittest.TestCase):
+    def test_build_config_has_pipeline_required_fields(self):
+        # Mirrors App/main.py validate_config required_fields["fit_deconvolution"].
+        answers = {
+            "labels_dict_path": "App/labels_dict.json",
+            "num_input_labels": 39,
+            "num_output_labels": 39,
+            "pseudobulk_h5_path": "/tmp/pb.h5",
+            "splits": ["train", "valid"],
+            "feature_selection_mode": "cutoff",
+            "feature_cutoff": 1.1,
+            "guarantee_diagonal_selection": True,
+            "generate_feature_selection_plot": False,
+            "deconvolvers": [{"name": "nnls"}],
+            "output_dir": "/tmp/out",
+        }
+        cfg = FitDeconvolutionWizard().build_config(answers)
+        for field in ("pseudobulk_h5_path", "output_dir", "labels_dict_path"):
+            self.assertIn(field, cfg)
+
+
 if __name__ == "__main__":
     unittest.main()
