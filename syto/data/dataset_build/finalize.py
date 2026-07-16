@@ -16,14 +16,22 @@ from syto.data.dataset_build.filters import (
 
 
 def label_and_split(
-    df, split_plan, *, labelers_config, context, fit_splits=None, fallback="uniform"
+    df,
+    split_plan,
+    *,
+    labelers_config,
+    context,
+    fit_splits=None,
+    fallback="uniform",
+    remap=None,
 ):
     """Stamp the split column first, then apply all configured labelers.
 
     Splitting first lets signature labelers fit on ``fit_splits`` only, avoiding
-    validation/test information leaking into their own targets.
+    validation/test information leaking into their own targets. ``remap`` (an
+    old->new split-name map) is applied as the final stamping step.
     """
-    df = apply_splits(df, split_plan)
+    df = apply_splits(df, split_plan, remap=remap)
     df = apply_labelers(
         df, labelers_config, context, fit_splits=fit_splits, fallback=fallback
     )
@@ -45,6 +53,7 @@ def finalize_bucket(
     pattern_column="pattern",
     fit_splits=None,
     fallback="uniform",
+    split_remap=None,
 ):
     """Gather one bucket's staged shards, filter, label+split, sort, and compact.
 
@@ -79,6 +88,7 @@ def finalize_bucket(
         context=context,
         fit_splits=fit_splits,
         fallback=fallback,
+        remap=split_remap,
     )
     # "signature" is a tuple-of-tuples the soft/archetype labelers add for
     # grouping; pyarrow cannot serialize it, so drop before writing.

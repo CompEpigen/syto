@@ -62,8 +62,13 @@ def plan_splits(counts, *, train_ratio=0.7, valid_ratio=0.15, test_ratio=0.15, s
     return {"file_level": file_level, "read_level": read_level}
 
 
-def apply_splits(df, plan):
-    """Stamp a deterministic ``split`` column onto ``df`` from a plan."""
+def apply_splits(df, plan, *, remap=None):
+    """Stamp a deterministic ``split`` column onto ``df`` from a plan.
+
+    When ``remap`` is given, it is an old->new split-name mapping applied as the
+    final step; unmapped values and NA pass through unchanged. The canonical
+    partition from ``plan_splits`` is unaffected.
+    """
     df = df.copy()
     df["split"] = pd.NA
 
@@ -84,5 +89,10 @@ def apply_splits(df, plan):
         assign[order[:n_train]] = "train"
         assign[order[n_train : n_train + n_valid]] = "valid"
         df.loc[idx, "split"] = assign
+
+    if remap:
+        df["split"] = df["split"].map(
+            lambda s: remap.get(s, s) if pd.notna(s) else s
+        )
 
     return df

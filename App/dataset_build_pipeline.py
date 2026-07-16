@@ -139,6 +139,7 @@ class DatasetBuildPipeline:
         min_pattern_length = self.config.get("min_pattern_length")
         fit_splits = self.config.get("fit_splits")
         fallback = self.config.get("label_fallback", "uniform")
+        split_remap = self.config.get("split_remap")
 
         region_names = (
             load_region_names(finalize_atlas_path) if finalize_atlas_path else None
@@ -185,6 +186,7 @@ class DatasetBuildPipeline:
                 pattern_column=pattern_column,
                 fit_splits=fit_splits,
                 fallback=fallback,
+                split_remap=split_remap,
             )
             if path is not None:
                 written.append(path)
