@@ -139,6 +139,47 @@ class TestFitSplits(unittest.TestCase):
             self.assertAlmostEqual(max(lab), 1.0 / NUM_CLASSES, places=6)
 
 
+class TestLabelAndSplitRemap(unittest.TestCase):
+    def test_remap_renames_split_values(self):
+        rows = []
+        for _ in range(20):
+            rows.append(
+                {
+                    "name": "chr1:1-9",
+                    "read_start": 100,
+                    "methylation_ids": "01",
+                    "original_label": 0,
+                    "dmr_ctype_label": 0,
+                    "file": "f0",
+                }
+            )
+        for _ in range(20):
+            rows.append(
+                {
+                    "name": "chr1:1-9",
+                    "read_start": 100,
+                    "methylation_ids": "01",
+                    "original_label": 1,
+                    "dmr_ctype_label": 0,
+                    "file": "f1",
+                }
+            )
+        df = pd.DataFrame(rows)
+        plan = {
+            "file_level": {(0, "f0"): "valid", (1, "f1"): "test"},
+            "read_level": {},
+        }
+        out = label_and_split(
+            df,
+            plan,
+            labelers_config=_labelers_config(),
+            context=_context(),
+            remap={"valid": "train", "test": "valid"},
+        )
+        self.assertEqual(set(out["split"]), {"train", "valid"})
+        self.assertNotIn("test", set(out["split"]))
+
+
 class TestFinalizeBucketFilter(unittest.TestCase):
     def test_filters_by_region_and_pattern_length(self):
         with tempfile.TemporaryDirectory() as d:
