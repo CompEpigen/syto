@@ -46,3 +46,46 @@ class TestApplySplits(unittest.TestCase):
         out2 = apply_splits(df, plan)
         self.assertEqual(set(out1["split"]), {"train", "valid", "test"})
         pd.testing.assert_series_equal(out1["split"], out2["split"])
+
+
+class TestApplySplitsRemap(unittest.TestCase):
+    def _plan(self):
+        return {
+            "file_level": {
+                (0, "f0"): "train",
+                (0, "f1"): "valid",
+                (0, "f2"): "test",
+            },
+            "read_level": {},
+        }
+
+    def _df(self):
+        return pd.DataFrame(
+            {
+                "original_label": [0, 0, 0],
+                "file": ["f0", "f1", "f2"],
+                "x": [1, 2, 3],
+            }
+        )
+
+    def test_remap_merges_and_renames(self):
+        remap = {"train": "train", "valid": "train", "test": "valid"}
+        out = apply_splits(self._df(), self._plan(), remap=remap)
+        by_file = out.set_index("file")["split"]
+        self.assertEqual(by_file.loc["f0"], "train")
+        self.assertEqual(by_file.loc["f1"], "train")  # valid merged into train
+        self.assertEqual(by_file.loc["f2"], "valid")  # test renamed to valid
+        self.assertNotIn("test", set(out["split"]))
+
+    def test_remap_none_is_noop(self):
+        out_none = apply_splits(self._df(), self._plan(), remap=None)
+        out_plain = apply_splits(self._df(), self._plan())
+        pd.testing.assert_series_equal(out_none["split"], out_plain["split"])
+
+    def test_unmapped_values_pass_through(self):
+        remap = {"test": "valid"}  # train/valid not listed
+        out = apply_splits(self._df(), self._plan(), remap=remap)
+        by_file = out.set_index("file")["split"]
+        self.assertEqual(by_file.loc["f0"], "train")
+        self.assertEqual(by_file.loc["f1"], "valid")
+        self.assertEqual(by_file.loc["f2"], "valid")
