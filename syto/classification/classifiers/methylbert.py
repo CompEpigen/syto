@@ -136,7 +136,7 @@ def prepare_methylbert_list(
     params:
         stride: How far to move the window (75 = 50% overlap for 150bp window)
     """
-    if "read_name" not in results_df.columns: 
+    if "read_name" not in results_df.columns:
         results_df["read_name"] = range(len(results_df))
 
     data_list = [
@@ -204,6 +204,8 @@ from syto.classification.hf_training import (  # noqa: E402
     BalancedTrainer,
     MethylBertTrainer,
     apply_early_stopping,
+    evaluate_train_metrics,
+    log_fit_completion,
 )
 
 
@@ -1118,6 +1120,14 @@ class MethylBert(AbstractReadClassifier):
             signal_mask=kwargs.get("signal_mask", None),
             bg_ratio=kwargs.get("bg_ratio", 0.3),
         )
+
+        # Optionally compute train-set metrics with a final evaluation pass
+        # (best model already reloaded via load_best_model_at_end), then log an
+        # explicit completion summary before metrics/artifacts are recorded.
+        if kwargs.get("compute_train_metrics", True):
+            evaluate_train_metrics(self.trainer, logger=_module_logger)
+        log_fit_completion(self.trainer, logger=_module_logger)
+
         self.history.append(extract_trainer_metrics(self.trainer))
 
         if output_dir:
