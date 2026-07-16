@@ -83,6 +83,56 @@ class TestDatasetBuildPipeline(unittest.TestCase):
             self.assertTrue(set(out["split"]).issubset({"train", "valid", "test"}))
 
 
+class TestDatasetBuildSplitRemap(unittest.TestCase):
+    def test_split_remap_relabels_output_splits(self):
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            _write_atlas(d / "atlas.tsv")
+            (d / "labels.json").write_text(
+                json.dumps({"0": "Adipocytes", "1": "Gallbladder"})
+            )
+            inp = d / "in"
+            inp.mkdir()
+            reads = pd.DataFrame(
+                {
+                    "ref_name": ["chr1"] * 6,
+                    "ref_pos": [1000] * 6,
+                    "original_seq": ["ACGTACGTAC"] * 6,
+                    "methyl_seq": ["0101010101"] * 6,
+                    "ctype": ["Adipocytes"] * 6,
+                }
+            )
+            for s in ["s1", "s2", "s3"]:
+                reads.to_csv(inp / f"{s}.csv", sep="\t", index=False)
+            cfg = {
+                "phase": "all",
+                "input_dir": str(inp),
+                "output_dir": str(d / "out"),
+                "atlas_path": str(d / "atlas.tsv"),
+                "reference_genome": "hg38",
+                "labels_dict_path": str(d / "labels.json"),
+                "n_buckets": 2,
+                "n_workers": 1,
+                "seed": 42,
+                "split_remap": {"train": "train", "valid": "train", "test": "valid"},
+                "signature": {
+                    "start_column": "read_start",
+                    "methylation_pattern_column": "methylation_ids",
+                },
+                "labelers": {
+                    "label": {"type": "hard_with_background"},
+                },
+            }
+            DatasetBuildPipeline(cfg, logging.getLogger("t")).run()
+            finals = list((d / "out" / "final").rglob("*.parquet"))
+            self.assertTrue(finals)
+            out = pd.concat(
+                [pd.read_parquet(p) for p in finals], ignore_index=True
+            )
+            self.assertTrue(set(out["split"]).issubset({"train", "valid"}))
+            self.assertNotIn("test", set(out["split"]))
+
+
 class TestFinalizeAtlasSubset(unittest.TestCase):
     def test_finalize_atlas_filters_regions(self):
         with tempfile.TemporaryDirectory() as d:
