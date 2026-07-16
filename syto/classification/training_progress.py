@@ -133,9 +133,7 @@ class TrainingProgressTracker:
         if self.use_notebook and not isinstance(self._tracker, dict):
             self._tracker.write_line(row_dict)
             self._tracker.update(epoch, comment=f"Epoch {epoch}/{epochs}")
-            _mirror_to_log_file(
-                "  ".join(str(row_dict[col]) for col in column_names)
-            )
+            _mirror_to_log_file("  ".join(str(row_dict[col]) for col in column_names))
         else:
             column_widths = self._tracker["column_widths"]
             row_values = [

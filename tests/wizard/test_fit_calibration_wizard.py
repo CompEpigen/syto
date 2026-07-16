@@ -36,7 +36,9 @@ class _StubEngine:
 
 class TestSplitsSection(unittest.TestCase):
     def test_splits_resolved_from_file(self):
-        with mock.patch.object(fc, "_list_splits", return_value=["train", "valid", "test"]):
+        with mock.patch.object(
+            fc, "_list_splits", return_value=["train", "valid", "test"]
+        ):
             eng = _StubEngine([["train", "valid"]])
             answers = {"pseudobulk_h5_path": "x.h5"}
             fc._splits_section(eng, answers)
@@ -52,7 +54,9 @@ class TestSplitsSection(unittest.TestCase):
         self.assertEqual(eng.calls, [])
 
     def test_splits_reprompts_until_valid_included(self):
-        with mock.patch.object(fc, "_list_splits", return_value=["train", "valid", "test"]):
+        with mock.patch.object(
+            fc, "_list_splits", return_value=["train", "valid", "test"]
+        ):
             eng = _StubEngine([["train"], ["train", "valid"]])  # 1st omits valid
             answers = {"pseudobulk_h5_path": "x.h5"}
             fc._splits_section(eng, answers)
@@ -71,7 +75,8 @@ class TestSplitsSection(unittest.TestCase):
 class TestDeconvolversSection(unittest.TestCase):
     def test_default_params_attached_in_selection_order(self):
         with mock.patch.object(
-            fc, "_available_deconvolvers",
+            fc,
+            "_available_deconvolvers",
             return_value=["xgb", "swn", "mlp", "nnls", "psls"],
         ):
             eng = _StubEngine([["swn", "xgb", "psls"]])
@@ -87,7 +92,9 @@ class TestDeconvolversSection(unittest.TestCase):
         )
 
     def test_discovery_offers_only_present(self):
-        with mock.patch.object(fc, "_available_deconvolvers", return_value=["swn", "mlp"]):
+        with mock.patch.object(
+            fc, "_available_deconvolvers", return_value=["swn", "mlp"]
+        ):
             eng = _StubEngine([["swn"]])
             answers = {"deconvolvers_dir": "d"}
             fc._deconvolvers_section(eng, answers)

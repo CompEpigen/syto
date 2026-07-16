@@ -10,8 +10,8 @@ class _StubEngine:
     def __init__(self, checkbox=None, one=None):
         self._checkbox = list(checkbox or [])
         self._one = list(one or [])
-        self.calls = []       # choices offered on each ask_checkbox call
-        self.one_specs = []    # FieldSpecs passed to each ask_one call
+        self.calls = []  # choices offered on each ask_checkbox call
+        self.one_specs = []  # FieldSpecs passed to each ask_one call
 
     def ask_checkbox(self, label, choices):
         self.calls.append(list(choices))
@@ -67,7 +67,9 @@ class TestSplitsSection(unittest.TestCase):
         with mock.patch.object(
             fd, "_list_splits", return_value=["train", "valid", "test"]
         ):
-            eng = _StubEngine(checkbox=[["valid"], ["train", "valid"]])  # 1st omits train
+            eng = _StubEngine(
+                checkbox=[["valid"], ["train", "valid"]]
+            )  # 1st omits train
             answers = {"pseudobulk_h5_path": "x.h5"}
             fd._splits_section(eng, answers)
         self.assertEqual(answers["splits"], ["train", "valid"])

@@ -127,8 +127,10 @@ class PseudoBulkPipeline:
         if input_type in ["raw_splits"]:
             splits_data = self._run_classifier_predictions(splits_data)
             if self.config.get("generate_predictions_only", False):
-                self.logger.info("generate_predictions_only was set to True: Skipping the rest of the pseudobulk pipeline")
-                return 
+                self.logger.info(
+                    "generate_predictions_only was set to True: Skipping the rest of the pseudobulk pipeline"
+                )
+                return
         else:
             self.logger.info("Stage 3: Skipped (input already has predictions)")
 
@@ -309,7 +311,7 @@ class PseudoBulkPipeline:
 
         return GenerationMetadata(
             grg_id_column=self.grg_label_column,
-            labeling_scheme=self.config.get("labeling_scheme","Not Set | Irrelevant"),
+            labeling_scheme=self.config.get("labeling_scheme", "Not Set | Irrelevant"),
             classifier=self.config["classifier_type"],
             data_watermark=data_watermark,
             data_stats=data_stats,

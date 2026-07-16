@@ -459,7 +459,7 @@ class LookupClassifier(AbstractReadClassifier):
             max_distance=cfg.max_distance,
             num_classes=cfg.num_classes,
             keep_intermediate_values=True,
-            add_superset_counts = cfg.add_superset_counts
+            add_superset_counts=cfg.add_superset_counts,
         )
 
         # The weighted (globally normalized) counts play the role of the

@@ -712,9 +712,13 @@ class InferencePipeline:
         self.logger.info(f"Loading {architecture} from {checkpoint_path}")
 
         if architecture == "Shallow_Wide_Network":
-            deconvolver = SWNDeconvolver.load(checkpoint_path, **{"metadata_path":metadata_path})
+            deconvolver = SWNDeconvolver.load(
+                checkpoint_path, **{"metadata_path": metadata_path}
+            )
         elif architecture == "3Layer_MLP":
-            deconvolver = MLPDeconvolver.load(checkpoint_path, **{"metadata_path":metadata_path})
+            deconvolver = MLPDeconvolver.load(
+                checkpoint_path, **{"metadata_path": metadata_path}
+            )
         else:
             raise ValueError(
                 "Architecture for NN method should be either Shallow_Wide_Network or 3Layer_MLP"
