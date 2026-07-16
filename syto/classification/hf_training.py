@@ -72,6 +72,63 @@ def apply_early_stopping(training_args, early_stopping_cfg, callbacks, logger=No
     return training_args, list(callbacks or []) + [callback]
 
 
+def evaluate_train_metrics(trainer, logger=None):
+    """Run one evaluation pass over the training set to materialise train metrics.
+
+    HuggingFace ``Trainer`` only runs ``compute_metrics`` on the eval set, so
+    accuracy/f1/precision/recall/AP/MCC are never computed for the training
+    split. This triggers a single ``evaluate`` over ``trainer.train_dataset``
+    with the ``train`` prefix (best model already reloaded when
+    ``load_best_model_at_end`` is set), appending a ``train_*`` entry to
+    ``trainer.state.log_history`` that ``extract_trainer_metrics`` picks up.
+
+    This is a full extra forward pass over the training data — potentially
+    expensive on large datasets. It is a no-op when there is no training set.
+    """
+    log = logger or _module_logger
+    if getattr(trainer, "train_dataset", None) is None:
+        return
+    log.info("Computing train-set metrics (full evaluation pass over training data)...")
+
+    # This manual evaluate() uses the "train" metric prefix, so the periodic
+    # EarlyStoppingCallback would not find its "eval_*" metric and log a
+    # misleading "early stopping is disabled" warning. Detach it for the pass.
+    handler = getattr(trainer, "callback_handler", None)
+    early_stopping_cbs = [
+        cb
+        for cb in getattr(handler, "callbacks", [])
+        if isinstance(cb, EarlyStoppingCallback)
+    ]
+    for cb in early_stopping_cbs:
+        trainer.remove_callback(cb)
+    try:
+        trainer.evaluate(eval_dataset=trainer.train_dataset, metric_key_prefix="train")
+    finally:
+        for cb in early_stopping_cbs:
+            trainer.add_callback(cb)
+
+
+def log_fit_completion(trainer, logger=None):
+    """Emit an explicit "fit finished successfully" line with the best checkpoint.
+
+    Logged after the training/metrics tables and before MLflow artifacts are
+    written, so the captured log records a clean finish plus the best checkpoint
+    and its metric value.
+    """
+    log = logger or _module_logger
+    state = getattr(trainer, "state", None)
+    best_ckpt = getattr(state, "best_model_checkpoint", None)
+    best_metric = getattr(state, "best_metric", None)
+    metric_name = getattr(getattr(trainer, "args", None), "metric_for_best_model", None)
+
+    msg = "Fit finished successfully."
+    if best_ckpt is not None:
+        msg += f" Best checkpoint: {best_ckpt}."
+    if best_metric is not None:
+        msg += f" Best {metric_name or 'metric'}={best_metric:.6f}."
+    log.info(msg)
+
+
 class BalancedBackgroundBatchSampler(Sampler):
     """
     Yields batches where background reads are capped at bg_ratio of the batch.

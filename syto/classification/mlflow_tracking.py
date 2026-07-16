@@ -78,6 +78,11 @@ def mlflow_tracked_fit(fit_classificaton: Callable) -> Callable:
       wrapped ``fit_classificaton``. Used by the caller to record run metadata
       that is not a fit hyperparameter (dataset/split/label config, and each
       architecture's relevant init params via ``mlflow_fit_params``).
+    - ``mlflow_extra_artifacts`` (list[str]): standalone files to log as run
+      artifacts (e.g. the run config and log file). Log-only: consumed here and
+      never forwarded. Logged after the fit completes; missing paths are
+      skipped. Logging handlers are flushed first so an in-progress log file
+      captures the fit's "finished successfully" summary.
 
     The tracking URI and experiment are expected to already be configured
     (e.g. via ``mlflow.set_tracking_uri`` / ``mlflow.set_experiment``) before
@@ -94,6 +99,7 @@ def mlflow_tracked_fit(fit_classificaton: Callable) -> Callable:
         run_name = kwargs.pop("mlflow_run_name", None)
         tags = kwargs.pop("mlflow_tags", None) or {}
         extra_params = kwargs.pop("mlflow_extra_params", None) or {}
+        extra_artifacts = kwargs.pop("mlflow_extra_artifacts", None) or []
 
         with mlflow.start_run(
             run_name=run_name, tags=tags, nested=mlflow.active_run() is not None
@@ -122,6 +128,19 @@ def mlflow_tracked_fit(fit_classificaton: Callable) -> Callable:
 
             if output_dir is not None and Path(output_dir).exists():
                 mlflow.log_artifacts(str(output_dir))
+
+            # Standalone artifacts (config, log file). Flush logging handlers
+            # first so an in-progress log file captures the fit's completion
+            # summary before it is copied into the run.
+            if extra_artifacts:
+                for handler in logging.getLogger().handlers:
+                    try:
+                        handler.flush()
+                    except Exception:  # pylint: disable=broad-exception-caught
+                        pass
+                for artifact_path in extra_artifacts:
+                    if artifact_path and Path(artifact_path).exists():
+                        mlflow.log_artifact(str(artifact_path))
 
             metrics = _fit_metrics(result)
             if metrics:

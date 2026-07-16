@@ -38,6 +38,12 @@ def positive_float(value: float) -> str | None:
     return None
 
 
+def non_negative_float(value: float) -> str | None:
+    if value < 0:
+        return "Value must be zero or a positive number."
+    return None
+
+
 def non_empty(value: str) -> str | None:
     if value is None or value.strip() == "":
         return "Value must not be empty."

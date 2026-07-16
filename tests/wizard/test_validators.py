@@ -42,6 +42,13 @@ class TestValidators(unittest.TestCase):
     def test_positive_float_rejects_nonpositive(self):
         self.assertIsInstance(v.positive_float(0.0), str)
 
+    def test_non_negative_float_accepts_zero_and_positive(self):
+        self.assertIsNone(v.non_negative_float(0.0))
+        self.assertIsNone(v.non_negative_float(0.01))
+
+    def test_non_negative_float_rejects_negative(self):
+        self.assertIsInstance(v.non_negative_float(-0.5), str)
+
     def test_non_empty_rejects_blank(self):
         self.assertIsInstance(v.non_empty("  "), str)
         self.assertIsNone(v.non_empty("x"))

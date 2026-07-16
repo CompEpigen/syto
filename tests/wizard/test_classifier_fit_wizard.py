@@ -82,6 +82,36 @@ class TestClassifierFitSchema(unittest.TestCase):
             self.by_key["training.training_args.adam_beta1"].tier, "expert"
         )
 
+    def test_early_stopping_enabled_hf_only(self):
+        w = self.by_key["training.early_stopping.enabled"].when
+        self.assertTrue(w(self._arch("methylbert")))
+        self.assertTrue(w(self._arch("epigenbert2")))
+        self.assertFalse(w(self._arch("dismir")))
+        self.assertFalse(w(self._arch("lookup")))
+
+    def test_early_stopping_params_gated_on_enabled_and_hf(self):
+        spec = self.by_key["training.early_stopping.early_stopping_patience"]
+        # HF arch but not enabled -> hidden
+        self.assertFalse(spec.when({"model.architecture": "methylbert"}))
+        # HF arch and enabled -> shown
+        self.assertTrue(
+            spec.when(
+                {
+                    "model.architecture": "methylbert",
+                    "training.early_stopping.enabled": True,
+                }
+            )
+        )
+        # enabled but non-HF arch -> hidden
+        self.assertFalse(
+            spec.when(
+                {
+                    "model.architecture": "dismir",
+                    "training.early_stopping.enabled": True,
+                }
+            )
+        )
+
     def test_label_column_mandatory_for_neural(self):
         spec = self.by_key["label_column"]
         self.assertTrue(spec.when(self._arch("dismir")))
@@ -208,6 +238,27 @@ class TestClassifierFitBuildConfig(unittest.TestCase):
         self.assertNotIn("grg_label_column", cfg["model"])  # lives in training
         self.assertEqual(cfg["training"]["grg_label_column"], "dmr_ctype_label")
         self.assertEqual(cfg["training"]["training_args"]["learning_rate"], 0.0004)
+
+    def test_methylbert_early_stopping_nested_block(self):
+        ans = self._shared("methylbert")
+        ans.update(
+            {
+                "model.foundation_model": "foundationalModels/methylbert_hg19_12l",
+                "model.num_labels": 39,
+                "model.num_grg_labels": 39,
+                "model.classifier_head_implementation": "grg_attention_based",
+                "model.soft_labels": False,
+                "training.grg_label_column": "dmr_ctype_label",
+                "training.early_stopping.enabled": True,
+                "training.early_stopping.early_stopping_patience": 5,
+                "training.early_stopping.early_stopping_threshold": 0.0,
+            }
+        )
+        cfg = self.wiz.build_config(ans)
+        es = cfg["training"]["early_stopping"]
+        self.assertTrue(es["enabled"])
+        self.assertEqual(es["early_stopping_patience"], 5)
+        self.assertEqual(es["early_stopping_threshold"], 0.0)
 
     def test_epigenbert2_no_num_grg_labels(self):
         ans = self._shared("epigenbert2")

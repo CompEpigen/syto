@@ -2,13 +2,70 @@ import unittest
 import numpy as np
 import torch
 
+from types import SimpleNamespace
+
 from syto.classification.evaluation import (
     calculate_metric_with_sklearn,
     preprocess_logits_for_prediction,
     compute_metrics,
     compute_metrics_soft_labels,
     make_compute_metrics,
+    extract_trainer_metrics,
 )
+
+
+def _fake_trainer(log_history, best_global_step=None):
+    return SimpleNamespace(
+        state=SimpleNamespace(
+            log_history=log_history, best_global_step=best_global_step
+        )
+    )
+
+
+class TestExtractTrainerMetrics(unittest.TestCase):
+    """extract_trainer_metrics must report the BEST checkpoint's eval metrics."""
+
+    def _history(self):
+        return [
+            {"loss": 0.5, "step": 200},  # training log (no train_loss summary key)
+            {"eval_loss": 0.30, "eval_accuracy": 0.90, "step": 200},
+            {"eval_loss": 0.26, "eval_accuracy": 0.95, "step": 400},  # best
+            {"eval_loss": 0.28, "eval_accuracy": 0.93, "step": 600},
+            {"eval_loss": 0.29, "eval_accuracy": 0.92, "step": 800},  # last (worse)
+            {"train_loss": 0.31, "train_runtime": 123.4, "step": 800},  # end summary
+        ]
+
+    def test_selects_best_step_not_last(self):
+        trainer = _fake_trainer(self._history(), best_global_step=400)
+        m = extract_trainer_metrics(trainer)
+        # val metrics come from the best step (400), not the last eval (800)
+        self.assertAlmostEqual(m["val_loss"], 0.26)
+        self.assertAlmostEqual(m["val_accuracy"], 0.95)
+        # train summary still captured
+        self.assertAlmostEqual(m["train_loss"], 0.31)
+        self.assertAlmostEqual(m["train_runtime"], 123.4)
+
+    def test_falls_back_to_last_eval_when_no_best_step(self):
+        trainer = _fake_trainer(self._history(), best_global_step=None)
+        m = extract_trainer_metrics(trainer)
+        self.assertAlmostEqual(m["val_loss"], 0.29)
+        self.assertAlmostEqual(m["val_accuracy"], 0.92)
+
+    def test_captures_train_prefixed_eval_entry(self):
+        # A trailing evaluate(train_dataset, metric_key_prefix="train") entry
+        history = self._history() + [
+            {"train_loss": 0.20, "train_accuracy": 0.97, "train_f1": 0.8, "step": 800}
+        ]
+        trainer = _fake_trainer(history, best_global_step=400)
+        m = extract_trainer_metrics(trainer)
+        self.assertAlmostEqual(m["train_accuracy"], 0.97)
+        self.assertAlmostEqual(m["train_f1"], 0.8)
+
+    def test_no_eval_entries_returns_train_only(self):
+        history = [{"train_loss": 0.4, "step": 100}]
+        trainer = _fake_trainer(history, best_global_step=None)
+        m = extract_trainer_metrics(trainer)
+        self.assertEqual(m, {"train_loss": 0.4, "step": 100})
 
 
 import unittest

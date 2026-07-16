@@ -1,6 +1,9 @@
+import logging
 import unittest
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Optional
+from unittest import mock
 
 import numpy as np
 
@@ -11,7 +14,10 @@ from syto.classification.hf_training import (
     BalancedBackgroundBatchSampler,
     BalancedTrainer,
     apply_early_stopping,
+    evaluate_train_metrics,
+    log_fit_completion,
 )
+
 # Back-compat: the old name must still import from methylbert.
 from syto.classification.classifiers.methylbert import (
     MethylBertTrainer as MethylBertTrainerReexport,
@@ -83,7 +89,9 @@ class _DummyArgs:
 
 class TestApplyEarlyStopping(unittest.TestCase):
     def _ready_args(self):
-        return _DummyArgs(load_best_model_at_end=True, metric_for_best_model="eval_loss")
+        return _DummyArgs(
+            load_best_model_at_end=True, metric_for_best_model="eval_loss"
+        )
 
     def test_none_cfg_is_noop(self):
         args = _DummyArgs(load_best_model_at_end=False)
@@ -154,6 +162,59 @@ class TestApplyEarlyStopping(unittest.TestCase):
         # nothing to fix -> same instance, metric preserved
         self.assertIs(out_args, args)
         self.assertEqual(out_args.metric_for_best_model, "eval_accuracy")
+
+
+class TestEvaluateTrainMetrics(unittest.TestCase):
+    def test_runs_evaluate_over_train_dataset(self):
+        trainer = mock.Mock()
+        trainer.train_dataset = [1, 2, 3]
+        trainer.callback_handler.callbacks = []
+        evaluate_train_metrics(trainer)
+        trainer.evaluate.assert_called_once()
+        _, kwargs = trainer.evaluate.call_args
+        self.assertEqual(kwargs.get("metric_key_prefix"), "train")
+        self.assertIs(kwargs.get("eval_dataset"), trainer.train_dataset)
+
+    def test_skips_when_no_train_dataset(self):
+        trainer = mock.Mock()
+        trainer.train_dataset = None
+        evaluate_train_metrics(trainer)
+        trainer.evaluate.assert_not_called()
+
+    def test_detaches_and_restores_early_stopping_callback(self):
+        trainer = mock.Mock()
+        trainer.train_dataset = [1]
+        es = EarlyStoppingCallback(early_stopping_patience=2)
+        trainer.callback_handler.callbacks = [es]
+        evaluate_train_metrics(trainer)
+        trainer.remove_callback.assert_called_once_with(es)
+        trainer.add_callback.assert_called_once_with(es)
+
+
+class TestLogFitCompletion(unittest.TestCase):
+    def _trainer(self, best_ckpt, best_metric, metric_name="eval_loss"):
+        return SimpleNamespace(
+            state=SimpleNamespace(
+                best_model_checkpoint=best_ckpt, best_metric=best_metric
+            ),
+            args=SimpleNamespace(metric_for_best_model=metric_name),
+        )
+
+    def test_logs_finished_with_best_checkpoint_and_metric(self):
+        trainer = self._trainer("/out/checkpoint-400", 0.2612345)
+        with self.assertLogs("syto.classification.hf_training", level="INFO") as cm:
+            log_fit_completion(trainer)
+        text = "\n".join(cm.output)
+        self.assertIn("finished", text.lower())
+        self.assertIn("checkpoint-400", text)
+        self.assertIn("eval_loss", text)
+        self.assertIn("0.261", text)
+
+    def test_handles_missing_best_info(self):
+        trainer = self._trainer(None, None)
+        with self.assertLogs("syto.classification.hf_training", level="INFO") as cm:
+            log_fit_completion(trainer)  # must not raise
+        self.assertIn("finished", "\n".join(cm.output).lower())
 
 
 class TestReexports(unittest.TestCase):

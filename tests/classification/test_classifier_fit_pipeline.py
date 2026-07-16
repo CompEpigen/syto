@@ -99,6 +99,33 @@ class TestClassifierFitPipelineColumnar(unittest.TestCase):
         # Architecture-relevant params, namespaced under "model".
         self.assertEqual(extra["model"], {"flavour": "lstm"})
 
+    def test_effective_config_dumped_next_to_outputs(self):
+        pipe = ClassifierFittingPipeline(self._config(), logging.getLogger("t"))
+        pipe.run()
+        run_config = Path(self.tmp.name) / "out" / "all" / "run_config.yaml"
+        self.assertTrue(run_config.exists())
+        import yaml
+
+        dumped = yaml.safe_load(run_config.read_text())
+        self.assertEqual(dumped["model"]["architecture"], "dismir")
+        self.assertEqual(dumped["label_column"], "soft_label_pooled")
+
+    def test_log_file_forwarded_as_extra_artifact(self):
+        with tempfile.NamedTemporaryFile(suffix=".log", delete=False) as lf:
+            log_path = lf.name
+        logger = logging.getLogger("pipeline_artifact_test")
+        handler = logging.FileHandler(log_path)
+        logger.addHandler(handler)
+        try:
+            pipe = ClassifierFittingPipeline(self._config(), logger)
+            pipe.run()
+            clf = _StubClassifier.last
+            self.assertIn(log_path, clf.fit_kwargs["mlflow_extra_artifacts"])
+        finally:
+            logger.removeHandler(handler)
+            handler.close()
+            Path(log_path).unlink(missing_ok=True)
+
 
 class TestClassifierFitPipelinePatternFilter(unittest.TestCase):
     def setUp(self):

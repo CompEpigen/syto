@@ -213,27 +213,45 @@ compute_metrics_soft_labels = make_compute_metrics(
 def extract_trainer_metrics(trainer) -> dict:
     """Extract the train/validation metrics a HuggingFace ``Trainer`` already computed.
 
-    Scans ``trainer.state.log_history`` for the training-summary entry
-    (``train_loss``, ``train_runtime``, ...) produced at the end of
-    ``Trainer.train()``, and the last evaluation entry (``eval_loss``,
-    ``eval_accuracy``, ...) produced by ``compute_metrics`` /
-    ``compute_metrics_soft_labels`` during periodic evaluation.
+    Scans ``trainer.state.log_history`` for training-summary entries
+    (``train_loss``, ``train_runtime``, ... — including any explicit
+    ``evaluate(..., metric_key_prefix="train")`` pass), and the evaluation entry
+    corresponding to the **best** checkpoint. With early stopping the model
+    trains several evaluations past the best step and ``load_best_model_at_end``
+    restores the best checkpoint, so reporting the *last* eval would disagree
+    with the saved artifact; ``trainer.state.best_global_step`` identifies the
+    right entry. When it is unset (no ``metric_for_best_model`` /
+    ``load_best_model_at_end``), the last eval entry is used as a fallback.
     ``eval_*`` keys are renamed to ``val_*`` for consistency with the
     ``train_*``/``val_*`` convention used by other classifiers' ``history``
     records.
     """
+    log_history = trainer.state.log_history
+    best_step = getattr(trainer.state, "best_global_step", None)
+
+    eval_entries = [e for e in log_history if any(k.startswith("eval_") for k in e)]
+    chosen_eval = None
+    if best_step is not None:
+        chosen_eval = next(
+            (e for e in eval_entries if e.get("step") == best_step), None
+        )
+    if chosen_eval is None and eval_entries:
+        chosen_eval = eval_entries[-1]
+
     metrics: dict = {}
-    for entry in trainer.state.log_history:
+    # Training-summary entries (end-of-train summary and/or an explicit
+    # train-set evaluation) carry ``train_*`` keys directly.
+    for entry in log_history:
         if "train_loss" in entry:
             metrics.update(
                 {k: v for k, v in entry.items() if isinstance(v, (int, float))}
             )
-        elif any(k.startswith("eval_") for k in entry):
-            metrics.update(
-                {
-                    (f"val_{k[len('eval_'):]}" if k.startswith("eval_") else k): v
-                    for k, v in entry.items()
-                    if isinstance(v, (int, float))
-                }
-            )
+    if chosen_eval is not None:
+        metrics.update(
+            {
+                (f"val_{k[len('eval_'):]}" if k.startswith("eval_") else k): v
+                for k, v in chosen_eval.items()
+                if isinstance(v, (int, float))
+            }
+        )
     return metrics

@@ -326,13 +326,15 @@ class ClassifierFitWizard:
                 validate=v.non_negative_int,
                 when=_is("dismir"),
             ),
-            # ── Training: lookup ──
+            # ── Training: lookup + HuggingFace (train-set metric computation) ──
+            # For HF archs this triggers a full evaluation pass over the training
+            # set after fit to log train_* metrics (potentially expensive).
             FieldSpec(
                 key="training.compute_train_metrics",
                 label="compute_train_metrics?",
                 kind="bool",
                 default=True,
-                when=_is("lookup"),
+                when=_in({"lookup"} | HF_ARCHS),
             ),
             # ── Training: HuggingFace (methylbert / epigenbert2) ──
             FieldSpec(
@@ -341,6 +343,32 @@ class ClassifierFitWizard:
                 kind="text",
                 default="dmr_ctype_label",
                 when=_in(HF_ARCHS),
+            ),
+            # early stopping (transformers.EarlyStoppingCallback)
+            FieldSpec(
+                key="training.early_stopping.enabled",
+                label="Enable early stopping?",
+                kind="bool",
+                default=False,
+                when=_in(HF_ARCHS),
+            ),
+            FieldSpec(
+                key="training.early_stopping.early_stopping_patience",
+                label="early_stopping_patience",
+                kind="int",
+                default=5,
+                validate=v.positive_int,
+                when=lambda a: _arch(a) in HF_ARCHS
+                and bool(a.get("training.early_stopping.enabled")),
+            ),
+            FieldSpec(
+                key="training.early_stopping.early_stopping_threshold",
+                label="early_stopping_threshold",
+                kind="float",
+                default=0.0,
+                validate=v.non_negative_float,
+                when=lambda a: _arch(a) in HF_ARCHS
+                and bool(a.get("training.early_stopping.enabled")),
             ),
             # core training_args
             FieldSpec(

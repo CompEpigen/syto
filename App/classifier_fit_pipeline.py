@@ -14,7 +14,9 @@ call is then recorded as its own MLflow run by the
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
+
+import yaml
 
 from syto.classification.classifiers.lazy_classifier_factory import (
     read_classifier_factory,
@@ -128,6 +130,10 @@ class ClassifierFittingPipeline:
             )
             val_df = None
 
+        # Persist the effective config (post CLI-override) next to the fit
+        # outputs so it is captured by the run's ``log_artifacts(out_dir)``.
+        self._dump_effective_config(out_dir)
+
         self.logger.info("Fitting classifier...")
 
         # The entire ``training:`` section is forwarded as kwargs, so an optional
@@ -140,6 +146,7 @@ class ClassifierFittingPipeline:
             mlflow_run_name=f"{self.model_arch}_{dataset_name}_{self.label_column}",
             mlflow_tags={"architecture": self.model_arch, "dataset": dataset_name},
             mlflow_extra_params=self._mlflow_extra_params(classifier),
+            mlflow_extra_artifacts=self._mlflow_extra_artifacts(),
             track_with_mlflow=self.mlflow_cfg.get("enabled", True),
             **self.training_cfg,
         )
@@ -149,6 +156,46 @@ class ClassifierFittingPipeline:
     # ═══════════════════════════════════════════════════════════════
     #  Helpers
     # ═══════════════════════════════════════════════════════════════
+
+    def _dump_effective_config(self, out_dir: Path) -> None:
+        """Write the effective (post-override) config into the fit output dir.
+
+        Captured by the run's ``log_artifacts(out_dir)``, so the exact config
+        that produced the run is logged as an MLflow artifact.
+        """
+        try:
+            out_dir.mkdir(parents=True, exist_ok=True)
+            with open(out_dir / "run_config.yaml", "w", encoding="utf-8") as f:
+                yaml.safe_dump(self.config, f, sort_keys=False)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            self.logger.warning(f"Could not write run_config.yaml: {exc}")
+
+    def _mlflow_extra_artifacts(self) -> List[str]:
+        """Standalone files to log as run artifacts (the run log file, if any).
+
+        The log file path is resolved from the active logging handlers rather
+        than passed in explicitly.
+        """
+        log_file = self._resolve_log_file()
+        return [log_file] if log_file else []
+
+    def _resolve_log_file(self) -> Optional[str]:
+        """Return the path of the active ``FileHandler`` log file, if configured.
+
+        Walks the pipeline logger's handler chain up to the root (records
+        propagate there), so it finds the file handler whether it was attached
+        to this logger or configured on the root via ``logging.basicConfig``.
+        """
+        logger = self.logger
+        while logger:
+            for handler in logger.handlers:
+                base = getattr(handler, "baseFilename", None)
+                if base:
+                    return base
+            if not getattr(logger, "propagate", True):
+                break
+            logger = logger.parent
+        return None
 
     def _configure_mlflow(self) -> None:
         """Configure the MLflow tracking URI and experiment, if requested."""

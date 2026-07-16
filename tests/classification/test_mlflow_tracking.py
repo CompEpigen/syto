@@ -1,3 +1,5 @@
+import os
+import tempfile
 import unittest
 from unittest import mock
 
@@ -51,6 +53,30 @@ class TestMlflowExtraParams(unittest.TestCase):
         self.assertIsNone(logged["min_pattern_length"])
         self.assertEqual(logged["model.flavour"], "lstm")
         self.assertEqual(logged["model.num_labels"], 2)
+
+    def test_extra_artifacts_logged_and_not_forwarded(self):
+        with tempfile.TemporaryDirectory() as d:
+            cfg = os.path.join(d, "methylbert.yaml")
+            log = os.path.join(d, "classifier_fit.log")
+            for p in (cfg, log):
+                with open(p, "w") as f:
+                    f.write("x")
+            missing = os.path.join(d, "does_not_exist.log")
+
+            clf = _Classifier().fit_classificaton(
+                pd.DataFrame({"x": [1]}),
+                epochs=1,
+                mlflow_extra_artifacts=[cfg, log, missing],
+            )
+
+            # Log-only: never forwarded to the wrapped fit.
+            self.assertEqual(clf.forwarded_kwargs, {"epochs": 1})
+
+            logged = {c.args[0] for c in self.mlflow_stub.log_artifact.call_args_list}
+            # Existing artifacts logged; the missing path is skipped, not raised.
+            self.assertIn(cfg, logged)
+            self.assertIn(log, logged)
+            self.assertNotIn(missing, logged)
 
 
 if __name__ == "__main__":
