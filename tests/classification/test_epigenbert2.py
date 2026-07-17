@@ -738,5 +738,27 @@ class TestDnabert2OnTargetMask(unittest.TestCase):
         self.assertEqual(list(batch["on_target_mask"]), [True, False])
 
 
+class TestDnabert2ExtractSignalMask(unittest.TestCase):
+    def test_returns_bool_array_from_dataset(self):
+        ds = SimpleNamespace(on_target_mask=np.array([1, 0, 1]))
+        mask = dnabert2_module.extract_signal_mask(ds)
+        self.assertEqual(mask.dtype, np.bool_)
+        np.testing.assert_array_equal(mask, np.array([True, False, True]))
+
+    def test_raises_when_mask_missing(self):
+        ds = SimpleNamespace(on_target_mask=None)
+        with self.assertRaises(ValueError):
+            dnabert2_module.extract_signal_mask(ds)
+
+
+class TestDnabert2RequiredFitColumns(unittest.TestCase):
+    def test_includes_original_label(self):
+        model = object.__new__(EpigenDnabert2)
+        model.num_grg_labels = 39
+        cols = model.required_fit_columns({"training": {}})
+        self.assertIn("original_label", cols)
+        self.assertIn("dmr_ctype_label", cols)
+
+
 if __name__ == "__main__":
     unittest.main()

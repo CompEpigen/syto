@@ -59,6 +59,23 @@ from syto.classification.prediction_aggregation import (
 from pathlib import Path
 
 
+def extract_signal_mask(dataset) -> np.ndarray:
+    """Boolean on-target mask aligned to a DNABERT2 dataset's indices.
+
+    Reads the ``on_target_mask`` computed at dataset construction
+    (``original_label == dmr_ctype_label``). Raises ``ValueError`` when the
+    dataset carries no on-target information so a ``use_balanced_trainer`` run
+    fails explicitly rather than silently.
+    """
+    if getattr(dataset, "on_target_mask", None) is None:
+        raise ValueError(
+            "use_balanced_trainer requires on-target columns (original_label and "
+            "the grg label column) in the training data, but the DNABERT2 dataset "
+            "has no on_target_mask."
+        )
+    return np.asarray(dataset.on_target_mask, dtype=bool)
+
+
 class DNABERT2FineTuneDataset(Dataset):
     """Dataset for supervised fine-tuning or predicting with DNABERT2 (EpigenBERT)."""
 
@@ -599,6 +616,7 @@ class BertForSequenceClassification(BertPreTrainedModel):
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
         grg_ids: Optional[torch.Tensor] = None,  # DMR labels
+        on_target_mask: Optional[torch.Tensor] = None,  # accepted; unused for now
     ) -> Union[Tuple[torch.Tensor], SequenceClassifierOutput]:
         # labels (`torch.LongTensor` of shape `(batch_size,)`, *optional*):
         # Labels for computing the sequence classification/regression loss.
@@ -1059,7 +1077,7 @@ class EpigenDnabert2(AbstractReadClassifier):
 
     def required_fit_columns(self, config: dict) -> list[str]:
         training = config.get("training", {}) or {}
-        cols = ["input_ids", "methylation_ids"]
+        cols = ["input_ids", "methylation_ids", "original_label"]
         if self.num_grg_labels is not None:
             cols.append(training.get("grg_label_column", "dmr_ctype_label"))
         return cols
