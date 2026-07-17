@@ -16,6 +16,7 @@ from syto.classification.hf_training import (
     apply_early_stopping,
     evaluate_train_metrics,
     log_fit_completion,
+    validate_signal_mask,
 )
 
 # Back-compat: the old name must still import from methylbert.
@@ -222,6 +223,21 @@ class TestReexports(unittest.TestCase):
         self.assertIs(MethylBertTrainerReexport, AuxLossLoggingTrainer)
         self.assertIs(BalancedTrainerReexport, BalancedTrainer)
         self.assertIs(SamplerReexport, BalancedBackgroundBatchSampler)
+
+
+class TestValidateSignalMask(unittest.TestCase):
+    def test_passes_with_mixed_mask(self):
+        validate_signal_mask(np.array([True, False, True]), architecture="methylbert")
+
+    def test_raises_when_no_background(self):
+        with self.assertRaises(ValueError) as ctx:
+            validate_signal_mask(np.array([True, True]), architecture="methylbert")
+        self.assertIn("methylbert", str(ctx.exception))
+
+    def test_raises_when_no_on_target(self):
+        with self.assertRaises(ValueError) as ctx:
+            validate_signal_mask(np.array([False, False]), architecture="epigenbert")
+        self.assertIn("epigenbert", str(ctx.exception))
 
 
 if __name__ == "__main__":
