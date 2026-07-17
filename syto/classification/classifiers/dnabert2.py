@@ -27,6 +27,7 @@ from syto.classification.hf_training import (
     apply_early_stopping,
     evaluate_train_metrics,
     log_fit_completion,
+    validate_signal_mask,
 )
 
 from syto.classification.evaluation import (
@@ -57,6 +58,23 @@ from syto.classification.prediction_aggregation import (
     aggregate_chuncked_predictions_weighted,
 )
 from pathlib import Path
+
+
+def extract_signal_mask(dataset) -> np.ndarray:
+    """Boolean on-target mask aligned to a DNABERT2 dataset's indices.
+
+    Reads the ``on_target_mask`` computed at dataset construction
+    (``original_label == dmr_ctype_label``). Raises ``ValueError`` when the
+    dataset carries no on-target information so a ``use_balanced_trainer`` run
+    fails explicitly rather than silently.
+    """
+    if getattr(dataset, "on_target_mask", None) is None:
+        raise ValueError(
+            "use_balanced_trainer requires on-target columns (original_label and "
+            "the grg label column) in the training data, but the DNABERT2 dataset "
+            "has no on_target_mask."
+        )
+    return np.asarray(dataset.on_target_mask, dtype=bool)
 
 
 class DNABERT2FineTuneDataset(Dataset):
@@ -90,6 +108,10 @@ class DNABERT2FineTuneDataset(Dataset):
         self.include_grg_ids = include_grg_ids
         self.soft_labels = soft_labels
         self.grg_label_column = grg_label_column
+        # Boolean on-target mask (original_label == grg label column), aligned to
+        # rows. Populated only via the pandas interface when both columns exist;
+        # stays None otherwise (e.g. CSV path, or missing columns).
+        self.on_target_mask = None
 
         # Determine input type
         if data_interface == "csv":
@@ -186,6 +208,14 @@ class DNABERT2FineTuneDataset(Dataset):
             self.labels = labels.to_list()
             self.cpg_methylation = methylation.to_list()
             texts = dna.to_list()
+            if (
+                "original_label" in data.columns
+                and self.grg_label_column is not None
+                and self.grg_label_column in data.columns
+            ):
+                self.on_target_mask = (
+                    data["original_label"] == data[self.grg_label_column]
+                ).to_numpy()
         if not lazy_tokenization:
             # Tokenize genome sequences
             output = tokenizer(
@@ -274,12 +304,11 @@ class DNABERT2FineTuneDataset(Dataset):
             item["labels"] = torch.tensor(self.labels[i])
         if self.include_grg_ids:
             item["grg_ids"] = torch.tensor(self.grg_ids[i])
+        if self.on_target_mask is not None:
+            item["on_target_mask"] = torch.tensor(
+                bool(self.on_target_mask[i]), dtype=torch.bool
+            )
         return item
-
-
-# Backward-compatible alias
-SupervisedDataset = DNABERT2FineTuneDataset
-
 
 @dataclass
 class DataCollatorForFineTunedDataset:
@@ -316,6 +345,8 @@ class DataCollatorForFineTunedDataset:
                 batch["labels"] = torch.stack(batch["labels"]).long()
         if "grg_ids" in batch:
             batch["grg_ids"] = torch.tensor(batch["grg_ids"], dtype=torch.long)
+        if "on_target_mask" in batch:
+            batch["on_target_mask"] = torch.stack(batch["on_target_mask"])
 
         return batch
 
@@ -586,6 +617,7 @@ class BertForSequenceClassification(BertPreTrainedModel):
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
         grg_ids: Optional[torch.Tensor] = None,  # DMR labels
+        on_target_mask: Optional[torch.Tensor] = None,  # accepted; unused for now
     ) -> Union[Tuple[torch.Tensor], SequenceClassifierOutput]:
         # labels (`torch.LongTensor` of shape `(batch_size,)`, *optional*):
         # Labels for computing the sequence classification/regression loss.
@@ -1046,7 +1078,7 @@ class EpigenDnabert2(AbstractReadClassifier):
 
     def required_fit_columns(self, config: dict) -> list[str]:
         training = config.get("training", {}) or {}
-        cols = ["input_ids", "methylation_ids"]
+        cols = ["input_ids", "methylation_ids", "original_label"]
         if self.num_grg_labels is not None:
             cols.append(training.get("grg_label_column", "dmr_ctype_label"))
         return cols
@@ -1113,6 +1145,11 @@ class EpigenDnabert2(AbstractReadClassifier):
             kwargs.get("callbacks"),
         )
 
+        signal_mask = kwargs.get("signal_mask")
+        if signal_mask is None and kwargs.get("use_balanced_trainer", False):
+            signal_mask = extract_signal_mask(train_dataset)
+            validate_signal_mask(signal_mask, architecture="epigenbert")
+
         self.fine_tune(
             data_path=None,
             train_dataset=train_dataset,
@@ -1122,7 +1159,7 @@ class EpigenDnabert2(AbstractReadClassifier):
             callbacks=callbacks,
             data_interface="pandas",
             resume_from_checkpoint=kwargs.get("resume_from_checkpoint", None),
-            signal_mask=kwargs.get("signal_mask", None),
+            signal_mask=signal_mask,
             bg_ratio=kwargs.get("bg_ratio", 0.3),
         )
 

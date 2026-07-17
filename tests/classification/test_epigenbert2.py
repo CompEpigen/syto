@@ -2,6 +2,8 @@ import unittest
 import os
 from types import SimpleNamespace
 
+import numpy as np
+import pandas as pd
 import torch
 import syto.classification.classifiers.dnabert2 as dnabert2_module
 
@@ -9,6 +11,7 @@ from syto.classification.classifiers.dnabert2 import (
     EpigenDnabert2,
     TrainingArguments,
     DNABERT2FineTuneDataset,
+    DataCollatorForFineTunedDataset,
 )
 from syto.data.dataset import generate_example_data
 from unittest.mock import patch, MagicMock
@@ -648,6 +651,170 @@ class TestBertForSequenceClassificationSoftLabels(unittest.TestCase):
 
         self.assertEqual(model.config.problem_type, "regression")
         self.assertIsNotNone(result.loss)
+
+
+class _FakeTokenizer:
+    """Minimal tokenizer for exercising the pandas dataset path without a model."""
+
+    model_max_length = 8
+    pad_token_id = 0
+
+    def __init__(self):
+        self.vocab = {"A": 0, "C": 1, "G": 2, "T": 3}
+
+    def __call__(self, text, **kwargs):
+        return {
+            "input_ids": torch.tensor([[0, 1]]),
+            "attention_mask": torch.tensor([[1, 1]]),
+        }
+
+
+class TestDnabert2OnTargetMask(unittest.TestCase):
+    def _frame(self, original_labels, dmr_labels):
+        return pd.DataFrame(
+            {
+                "input_ids": ["ACGT"] * len(original_labels),
+                "methylation_ids": ["2222"] * len(original_labels),
+                "label": [0] * len(original_labels),
+                "original_label": original_labels,
+                "dmr_ctype_label": dmr_labels,
+            }
+        )
+
+    def test_on_target_mask_matches_label_equality(self):
+        ds = DNABERT2FineTuneDataset(
+            data_path_or_list=self._frame([0, 1, 2], [0, 9, 2]),
+            tokenizer=_FakeTokenizer(),
+            data_interface="pandas",
+            lazy_tokenization=True,
+            grg_label_column="dmr_ctype_label",
+        )
+        np.testing.assert_array_equal(
+            ds.on_target_mask, np.array([True, False, True])
+        )
+
+    def test_on_target_mask_none_when_columns_missing(self):
+        frame = self._frame([0, 1], [0, 1]).drop(columns=["original_label"])
+        ds = DNABERT2FineTuneDataset(
+            data_path_or_list=frame,
+            tokenizer=_FakeTokenizer(),
+            data_interface="pandas",
+            lazy_tokenization=True,
+            grg_label_column="dmr_ctype_label",
+        )
+        self.assertIsNone(ds.on_target_mask)
+
+    def test_getitem_includes_on_target_mask(self):
+        ds = DNABERT2FineTuneDataset(
+            data_path_or_list=self._frame([0, 1], [0, 9]),
+            tokenizer=_FakeTokenizer(),
+            data_interface="pandas",
+            lazy_tokenization=True,
+            grg_label_column="dmr_ctype_label",
+        )
+        ds.cpg_methylation = None  # skip methylation tokenization in getitem
+        item = ds[0]
+        self.assertIn("on_target_mask", item)
+        self.assertTrue(bool(item["on_target_mask"]))
+
+    def test_collator_stacks_on_target_mask(self):
+        collator = DataCollatorForFineTunedDataset(tokenizer=_FakeTokenizer())
+        instances = [
+            {
+                "input_ids": torch.tensor([0, 1]),
+                "attention_mask": torch.tensor([1, 1]),
+                "labels": torch.tensor(0),
+                "on_target_mask": torch.tensor(True),
+            },
+            {
+                "input_ids": torch.tensor([0, 1]),
+                "attention_mask": torch.tensor([1, 1]),
+                "labels": torch.tensor(1),
+                "on_target_mask": torch.tensor(False),
+            },
+        ]
+        batch = collator(instances)
+        self.assertIn("on_target_mask", batch)
+        self.assertEqual(list(batch["on_target_mask"]), [True, False])
+
+
+class TestDnabert2ExtractSignalMask(unittest.TestCase):
+    def test_returns_bool_array_from_dataset(self):
+        ds = SimpleNamespace(on_target_mask=np.array([1, 0, 1]))
+        mask = dnabert2_module.extract_signal_mask(ds)
+        self.assertEqual(mask.dtype, np.bool_)
+        np.testing.assert_array_equal(mask, np.array([True, False, True]))
+
+    def test_raises_when_mask_missing(self):
+        ds = SimpleNamespace(on_target_mask=None)
+        with self.assertRaises(ValueError):
+            dnabert2_module.extract_signal_mask(ds)
+
+
+class TestDnabert2RequiredFitColumns(unittest.TestCase):
+    def test_includes_original_label(self):
+        model = object.__new__(EpigenDnabert2)
+        model.num_grg_labels = 39
+        cols = model.required_fit_columns({"training": {}})
+        self.assertIn("original_label", cols)
+        self.assertIn("dmr_ctype_label", cols)
+
+
+class TestDnabert2UseBalancedTrainer(unittest.TestCase):
+    def _stub_model(self):
+        model = object.__new__(EpigenDnabert2)
+        model.tokenizer = _FakeTokenizer()
+        model.num_grg_labels = None
+        model.soft_labels = False
+        model.num_labels = 2
+        # replace() in fit_classificaton needs a real (dataclass) TrainingArguments;
+        # eval_strategy must be passed explicitly (the dataclass default is broken).
+        model.training_args = TrainingArguments(
+            output_dir="/tmp/db2-out", eval_strategy="steps"
+        )
+        model.fine_tune = MagicMock(name="fine_tune")
+        model.trainer = MagicMock()
+        model.history = []
+        model.save = MagicMock()
+        return model
+
+    def _frame(self, original_labels, dmr_labels):
+        return pd.DataFrame(
+            {
+                "input_ids": ["ACGT"] * len(original_labels),
+                "methylation_ids": ["2222"] * len(original_labels),
+                "label": [0] * len(original_labels),
+                "original_label": original_labels,
+                "dmr_ctype_label": dmr_labels,
+            }
+        )
+
+    def test_computes_and_forwards_signal_mask(self):
+        model = self._stub_model()
+        fake_mask = np.array([True, False])
+        with patch.object(
+            dnabert2_module, "extract_signal_mask", return_value=fake_mask
+        ) as mocked_extract, patch.object(
+            dnabert2_module, "evaluate_train_metrics"
+        ), patch.object(
+            dnabert2_module, "log_fit_completion"
+        ), patch.object(
+            dnabert2_module, "extract_trainer_metrics", return_value={}
+        ):
+            EpigenDnabert2.fit_classificaton.__wrapped__(
+                model,
+                train_df=self._frame([0, 1], [0, 9]),
+                val_df=None,
+                output_dir=None,
+                grg_label_column="dmr_ctype_label",
+                use_balanced_trainer=True,
+                bg_ratio=0.25,
+                compute_train_metrics=False,
+            )
+        mocked_extract.assert_called_once()
+        _, kwargs = model.fine_tune.call_args
+        np.testing.assert_array_equal(kwargs["signal_mask"], fake_mask)
+        self.assertEqual(kwargs["bg_ratio"], 0.25)
 
 
 if __name__ == "__main__":

@@ -276,5 +276,24 @@ class BalancedTrainer(AuxLossLoggingTrainer):
         )
 
 
+def validate_signal_mask(signal_mask, *, architecture: str) -> None:
+    """Ensure a signal mask can drive balanced background sampling.
+
+    ``BalancedBackgroundBatchSampler`` needs both on-target and background
+    reads. Raise ``ValueError`` when either population is empty so a
+    misconfigured ``use_balanced_trainer`` run fails explicitly.
+    """
+    mask = np.asarray(signal_mask, dtype=bool)
+    n_on_target = int(mask.sum())
+    n_background = int((~mask).sum())
+    if n_on_target == 0 or n_background == 0:
+        raise ValueError(
+            f"use_balanced_trainer requires both on-target and background reads "
+            f"for {architecture}, but got n_on_target={n_on_target}, "
+            f"n_background={n_background}. Check that on-target reads "
+            f"(original_label == dmr_ctype_label) are present in the training data."
+        )
+
+
 # Back-compat alias for the pre-extraction name.
 MethylBertTrainer = AuxLossLoggingTrainer

@@ -45,6 +45,26 @@ mlflow:
 # Training Configuration (forwarded to EpigenDnabert2.fit_split as kwargs)
 training:
   grg_label_column: dmr_ctype_label
+  # Balanced training: cap background (off-target) reads per batch. When true,
+  # a signal_mask is computed from the training data as
+  # (original_label == dmr_ctype_label) and BalancedTrainer is used instead of
+  # the default trainer. Requires both on-target and background reads present,
+  # else the run fails with a ValueError.
+  use_balanced_trainer: false
+  # Fraction of each training batch allowed to be background reads (only used
+  # when use_balanced_trainer: true).
+  bg_ratio: 0.3
+  # Compute train-set metrics (accuracy/f1/precision/recall/AP/MCC) via a final
+  # full evaluation pass over the training data after fit. Expensive on large
+  # datasets; set to false to skip.
+  compute_train_metrics: true
+  # Optional early stopping (transformers.EarlyStoppingCallback). Omit this
+  # block or set enabled: false to disable. When enabled, load_best_model_at_end
+  # and metric_for_best_model are auto-enforced if unset.
+  early_stopping:
+    enabled: true
+    early_stopping_patience: 5
+    early_stopping_threshold: 0.0
   training_args:
     run_name: dnabert2_with_dmr_head_loyfer
     per_device_train_batch_size: 512
