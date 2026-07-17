@@ -27,6 +27,7 @@ from syto.classification.hf_training import (
     apply_early_stopping,
     evaluate_train_metrics,
     log_fit_completion,
+    validate_signal_mask,
 )
 
 from syto.classification.evaluation import (
@@ -1144,6 +1145,11 @@ class EpigenDnabert2(AbstractReadClassifier):
             kwargs.get("callbacks"),
         )
 
+        signal_mask = kwargs.get("signal_mask")
+        if signal_mask is None and kwargs.get("use_balanced_trainer", False):
+            signal_mask = extract_signal_mask(train_dataset)
+            validate_signal_mask(signal_mask, architecture="epigenbert")
+
         self.fine_tune(
             data_path=None,
             train_dataset=train_dataset,
@@ -1153,7 +1159,7 @@ class EpigenDnabert2(AbstractReadClassifier):
             callbacks=callbacks,
             data_interface="pandas",
             resume_from_checkpoint=kwargs.get("resume_from_checkpoint", None),
-            signal_mask=kwargs.get("signal_mask", None),
+            signal_mask=signal_mask,
             bg_ratio=kwargs.get("bg_ratio", 0.3),
         )
 

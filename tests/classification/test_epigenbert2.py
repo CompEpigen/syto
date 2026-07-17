@@ -760,5 +760,62 @@ class TestDnabert2RequiredFitColumns(unittest.TestCase):
         self.assertIn("dmr_ctype_label", cols)
 
 
+class TestDnabert2UseBalancedTrainer(unittest.TestCase):
+    def _stub_model(self):
+        model = object.__new__(EpigenDnabert2)
+        model.tokenizer = _FakeTokenizer()
+        model.num_grg_labels = None
+        model.soft_labels = False
+        model.num_labels = 2
+        # replace() in fit_classificaton needs a real (dataclass) TrainingArguments;
+        # eval_strategy must be passed explicitly (the dataclass default is broken).
+        model.training_args = TrainingArguments(
+            output_dir="/tmp/db2-out", eval_strategy="steps"
+        )
+        model.fine_tune = MagicMock(name="fine_tune")
+        model.trainer = MagicMock()
+        model.history = []
+        model.save = MagicMock()
+        return model
+
+    def _frame(self, original_labels, dmr_labels):
+        return pd.DataFrame(
+            {
+                "input_ids": ["ACGT"] * len(original_labels),
+                "methylation_ids": ["2222"] * len(original_labels),
+                "label": [0] * len(original_labels),
+                "original_label": original_labels,
+                "dmr_ctype_label": dmr_labels,
+            }
+        )
+
+    def test_computes_and_forwards_signal_mask(self):
+        model = self._stub_model()
+        fake_mask = np.array([True, False])
+        with patch.object(
+            dnabert2_module, "extract_signal_mask", return_value=fake_mask
+        ) as mocked_extract, patch.object(
+            dnabert2_module, "evaluate_train_metrics"
+        ), patch.object(
+            dnabert2_module, "log_fit_completion"
+        ), patch.object(
+            dnabert2_module, "extract_trainer_metrics", return_value={}
+        ):
+            EpigenDnabert2.fit_classificaton.__wrapped__(
+                model,
+                train_df=self._frame([0, 1], [0, 9]),
+                val_df=None,
+                output_dir=None,
+                grg_label_column="dmr_ctype_label",
+                use_balanced_trainer=True,
+                bg_ratio=0.25,
+                compute_train_metrics=False,
+            )
+        mocked_extract.assert_called_once()
+        _, kwargs = model.fine_tune.call_args
+        np.testing.assert_array_equal(kwargs["signal_mask"], fake_mask)
+        self.assertEqual(kwargs["bg_ratio"], 0.25)
+
+
 if __name__ == "__main__":
     unittest.main()
