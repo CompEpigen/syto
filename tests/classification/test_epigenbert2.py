@@ -2,6 +2,8 @@ import unittest
 import os
 from types import SimpleNamespace
 
+import numpy as np
+import pandas as pd
 import torch
 import syto.classification.classifiers.dnabert2 as dnabert2_module
 
@@ -9,6 +11,7 @@ from syto.classification.classifiers.dnabert2 import (
     EpigenDnabert2,
     TrainingArguments,
     DNABERT2FineTuneDataset,
+    DataCollatorForFineTunedDataset,
 )
 from syto.data.dataset import generate_example_data
 from unittest.mock import patch, MagicMock
@@ -648,6 +651,91 @@ class TestBertForSequenceClassificationSoftLabels(unittest.TestCase):
 
         self.assertEqual(model.config.problem_type, "regression")
         self.assertIsNotNone(result.loss)
+
+
+class _FakeTokenizer:
+    """Minimal tokenizer for exercising the pandas dataset path without a model."""
+
+    model_max_length = 8
+    pad_token_id = 0
+
+    def __init__(self):
+        self.vocab = {"A": 0, "C": 1, "G": 2, "T": 3}
+
+    def __call__(self, text, **kwargs):
+        return {
+            "input_ids": torch.tensor([[0, 1]]),
+            "attention_mask": torch.tensor([[1, 1]]),
+        }
+
+
+class TestDnabert2OnTargetMask(unittest.TestCase):
+    def _frame(self, original_labels, dmr_labels):
+        return pd.DataFrame(
+            {
+                "input_ids": ["ACGT"] * len(original_labels),
+                "methylation_ids": ["2222"] * len(original_labels),
+                "label": [0] * len(original_labels),
+                "original_label": original_labels,
+                "dmr_ctype_label": dmr_labels,
+            }
+        )
+
+    def test_on_target_mask_matches_label_equality(self):
+        ds = DNABERT2FineTuneDataset(
+            data_path_or_list=self._frame([0, 1, 2], [0, 9, 2]),
+            tokenizer=_FakeTokenizer(),
+            data_interface="pandas",
+            lazy_tokenization=True,
+            grg_label_column="dmr_ctype_label",
+        )
+        np.testing.assert_array_equal(
+            ds.on_target_mask, np.array([True, False, True])
+        )
+
+    def test_on_target_mask_none_when_columns_missing(self):
+        frame = self._frame([0, 1], [0, 1]).drop(columns=["original_label"])
+        ds = DNABERT2FineTuneDataset(
+            data_path_or_list=frame,
+            tokenizer=_FakeTokenizer(),
+            data_interface="pandas",
+            lazy_tokenization=True,
+            grg_label_column="dmr_ctype_label",
+        )
+        self.assertIsNone(ds.on_target_mask)
+
+    def test_getitem_includes_on_target_mask(self):
+        ds = DNABERT2FineTuneDataset(
+            data_path_or_list=self._frame([0, 1], [0, 9]),
+            tokenizer=_FakeTokenizer(),
+            data_interface="pandas",
+            lazy_tokenization=True,
+            grg_label_column="dmr_ctype_label",
+        )
+        ds.cpg_methylation = None  # skip methylation tokenization in getitem
+        item = ds[0]
+        self.assertIn("on_target_mask", item)
+        self.assertTrue(bool(item["on_target_mask"]))
+
+    def test_collator_stacks_on_target_mask(self):
+        collator = DataCollatorForFineTunedDataset(tokenizer=_FakeTokenizer())
+        instances = [
+            {
+                "input_ids": torch.tensor([0, 1]),
+                "attention_mask": torch.tensor([1, 1]),
+                "labels": torch.tensor(0),
+                "on_target_mask": torch.tensor(True),
+            },
+            {
+                "input_ids": torch.tensor([0, 1]),
+                "attention_mask": torch.tensor([1, 1]),
+                "labels": torch.tensor(1),
+                "on_target_mask": torch.tensor(False),
+            },
+        ]
+        batch = collator(instances)
+        self.assertIn("on_target_mask", batch)
+        self.assertEqual(list(batch["on_target_mask"]), [True, False])
 
 
 if __name__ == "__main__":

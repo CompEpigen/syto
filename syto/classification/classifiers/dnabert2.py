@@ -90,6 +90,10 @@ class DNABERT2FineTuneDataset(Dataset):
         self.include_grg_ids = include_grg_ids
         self.soft_labels = soft_labels
         self.grg_label_column = grg_label_column
+        # Boolean on-target mask (original_label == grg label column), aligned to
+        # rows. Populated only via the pandas interface when both columns exist;
+        # stays None otherwise (e.g. CSV path, or missing columns).
+        self.on_target_mask = None
 
         # Determine input type
         if data_interface == "csv":
@@ -186,6 +190,14 @@ class DNABERT2FineTuneDataset(Dataset):
             self.labels = labels.to_list()
             self.cpg_methylation = methylation.to_list()
             texts = dna.to_list()
+            if (
+                "original_label" in data.columns
+                and self.grg_label_column is not None
+                and self.grg_label_column in data.columns
+            ):
+                self.on_target_mask = (
+                    data["original_label"] == data[self.grg_label_column]
+                ).to_numpy()
         if not lazy_tokenization:
             # Tokenize genome sequences
             output = tokenizer(
@@ -274,12 +286,11 @@ class DNABERT2FineTuneDataset(Dataset):
             item["labels"] = torch.tensor(self.labels[i])
         if self.include_grg_ids:
             item["grg_ids"] = torch.tensor(self.grg_ids[i])
+        if self.on_target_mask is not None:
+            item["on_target_mask"] = torch.tensor(
+                bool(self.on_target_mask[i]), dtype=torch.bool
+            )
         return item
-
-
-# Backward-compatible alias
-SupervisedDataset = DNABERT2FineTuneDataset
-
 
 @dataclass
 class DataCollatorForFineTunedDataset:
@@ -316,6 +327,8 @@ class DataCollatorForFineTunedDataset:
                 batch["labels"] = torch.stack(batch["labels"]).long()
         if "grg_ids" in batch:
             batch["grg_ids"] = torch.tensor(batch["grg_ids"], dtype=torch.long)
+        if "on_target_mask" in batch:
+            batch["on_target_mask"] = torch.stack(batch["on_target_mask"])
 
         return batch
 
