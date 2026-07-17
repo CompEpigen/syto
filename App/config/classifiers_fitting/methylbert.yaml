@@ -19,30 +19,51 @@
 model:
   architecture: methylbert
   foundation_model: foundationalModels/methylbert_hg19_12l  # local path to a cached MethylBERT checkpoint
-  num_labels: 40
+  num_labels: 39
   num_grg_labels: 39
   classifier_head_implementation: grg_attention_based
-  soft_labels: false
+  soft_labels: true
 
 # Data Configuration
-data_path: /home/luna.kuleuven.be/u0169940/Data/Loyfer/
-max_sequence_length: 150
-prediction_batch_size: 2200
-datasets: SoftLabelsTrainingData_205files_pooled_Jaccard_hg38_mincpg_4_minlen_10_no_data_leak_d041
+data_path: /mnt/data/loyfer/parsed_dataset/U25.l4.hg38/
+max_sequence_length: 160
+prediction_batch_size: 128
+datasets: labelers_on_train_no_pattern_len_filter/final
+label_column: soft_label_pooled
+min_pattern_length: 4
 
 # Output Configuration
-output:
-  output_dir: tmp/classifier_fit_test/methylbert
+output_dir: tmp/classifier_fit_test/methylbert
 
 # MLflow Configuration
 mlflow:
   enabled: true
-  experiment_name: classifier_fit_test_methylbert
-  tracking_uri: null  # Leave as null for local tracking or specify remote URI
+  experiment_name: pseudobulk
+  tracking_uri: file:///mnt/data/syto_experiments/mlflow # Leave as null for local tracking or specify remote URI
 
 # Training Configuration (forwarded to MethylBert.fit_split as kwargs)
 training:
   grg_label_column: dmr_ctype_label
+  # Balanced training: cap background (off-target) reads per batch. When true,
+  # a signal_mask is computed from the training data as
+  # (original_label == dmr_ctype_label) and BalancedTrainer is used instead of
+  # the default trainer. Requires both on-target and background reads present,
+  # else the run fails with a ValueError.
+  use_balanced_trainer: false
+  # Fraction of each training batch allowed to be background reads (only used
+  # when use_balanced_trainer: true).
+  bg_ratio: 0.3
+  # Compute train-set metrics (accuracy/f1/precision/recall/AP/MCC) via a final
+  # full evaluation pass over the training data after fit. Expensive on large
+  # datasets; set to false to skip.
+  compute_train_metrics: true
+  # Optional early stopping (transformers.EarlyStoppingCallback). Omit this
+  # block or set enabled: false to disable. When enabled, load_best_model_at_end
+  # and metric_for_best_model are auto-enforced if unset.
+  early_stopping:
+    enabled: true
+    early_stopping_patience: 5
+    early_stopping_threshold: 0.002
   training_args:
     learning_rate: 0.0004
     weight_decay: 0.1
@@ -53,7 +74,7 @@ training:
     save_steps: 200
     per_device_train_batch_size: 512
     per_device_eval_batch_size: 2200
-    num_train_epochs: 1
+    num_train_epochs: 5
     eval_strategy: steps
     fp16: true
     gradient_accumulation_steps: 1
@@ -61,3 +82,5 @@ training:
     adam_beta1: 0.9
     adam_beta2: 0.98
     seed: 950410
+    save_total_limit: 1
+    metric_for_best_model: "eval_loss"
