@@ -1,11 +1,13 @@
 import unittest
 import tempfile
 import os
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 from parameterized import parameterized
 
 from transformers import BertConfig, TrainingArguments
 import torch
+import numpy as np
 import pandas as pd
 
 import syto.classification.classifiers.methylbert as methylbert_module
@@ -1202,6 +1204,79 @@ class TestMethylBertSoftLabelForward(unittest.TestCase):
         self.assertIsNotNone(output.loss)
         self.assertFalse(torch.isnan(output.loss))
         self.assertEqual(output.logits.shape, (2, 5))
+
+
+class TestMethylBertUseBalancedTrainer(unittest.TestCase):
+    """use_balanced_trainer computes and forwards a signal mask."""
+
+    def _stub_model(self):
+        model = object.__new__(MethylBert)
+        model.seq_len = 150
+        model.num_labels = 2
+        model.soft_labels = False
+        # replace() in fit_classificaton needs a real (dataclass) TrainingArguments.
+        model.training_args = TrainingArguments(output_dir="/tmp/mb-out")
+        model.fine_tune = MagicMock(name="fine_tune")
+        model.trainer = MagicMock()
+        model.history = []
+        model.save = MagicMock()
+        return model
+
+    def _train_df(self, original_labels, dmr_labels):
+        n = len(original_labels)
+        return pd.DataFrame(
+            {
+                # methylation string must match the DNA length (per-base codes).
+                "input_ids": ["ACGACGACG"] * n,
+                "methylation_ids": ["010010010"] * n,
+                "label": [0] * n,
+                "original_label": original_labels,
+                "dmr_ctype_label": dmr_labels,
+            }
+        )
+
+    def test_computes_and_forwards_signal_mask(self):
+        model = self._stub_model()
+        fake_mask = np.array([True, False])
+        with patch.object(
+            methylbert_module, "extract_signal_mask", return_value=fake_mask
+        ) as mocked_extract, patch.object(
+            methylbert_module, "evaluate_train_metrics"
+        ), patch.object(
+            methylbert_module, "log_fit_completion"
+        ), patch.object(
+            methylbert_module, "extract_trainer_metrics", return_value={}
+        ):
+            MethylBert.fit_classificaton.__wrapped__(
+                model,
+                train_df=self._train_df([0, 1], [0, 0]),
+                val_df=None,
+                output_dir=None,
+                grg_label_column="dmr_ctype_label",
+                use_balanced_trainer=True,
+                bg_ratio=0.25,
+                compute_train_metrics=False,
+            )
+        mocked_extract.assert_called_once()
+        _, kwargs = model.fine_tune.call_args
+        np.testing.assert_array_equal(kwargs["signal_mask"], fake_mask)
+        self.assertEqual(kwargs["bg_ratio"], 0.25)
+
+    def test_raises_when_mask_has_no_background(self):
+        model = self._stub_model()
+        with patch.object(
+            methylbert_module, "extract_signal_mask", return_value=np.array([True])
+        ):
+            with self.assertRaises(ValueError):
+                MethylBert.fit_classificaton.__wrapped__(
+                    model,
+                    train_df=self._train_df([0], [0]),
+                    val_df=None,
+                    output_dir=None,
+                    grg_label_column="dmr_ctype_label",
+                    use_balanced_trainer=True,
+                    compute_train_metrics=False,
+                )
 
 
 if __name__ == "__main__":
