@@ -130,11 +130,18 @@ def prepare_methylbert_list(
     soft_labels=False,
     is_binary=False,
     grg_ctype_label="dmr_ctype_label",
+    include_labels=True,
 ):
     """
     Prepares inference data with sliding window chunking.
     params:
         stride: How far to move the window (75 = 50% overlap for 150bp window)
+        include_labels: Read the ground-truth label column into ``ctype``. Set
+            False for pure prediction, where the split carries no label column
+            and the label is unused anyway; ``ctype`` is then None, which the
+            dataset carries through to a batch with no ``labels`` key so the
+            Trainer skips compute_metrics instead of scoring against a
+            fabricated class.
     """
     if "read_name" not in results_df.columns:
         results_df["read_name"] = range(len(results_df))
@@ -169,7 +176,9 @@ def prepare_methylbert_list(
             dna = " ".join([x[0] for x in chunk])
             methyl = "".join([x[1] for x in chunk])
             ncpgs_marked = methyl.count("0") + methyl.count("1")
-            if is_binary:
+            if not include_labels:
+                label = None
+            elif is_binary:
                 label = int(row[grg_label_column] == row["label"])
             else:
                 label = row["soft_label"] if soft_labels else row["label"]
@@ -223,6 +232,11 @@ def methylbert_finetune_collator(features):
 
     if "on_target_mask" in features[0]:
         batch["on_target_mask"] = torch.stack([f["on_target_mask"] for f in features])
+
+    # Prediction-only data carries no labels; leaving the key out is what makes
+    # the Trainer skip compute_metrics instead of scoring against placeholders.
+    if "labels" not in features[0]:
+        return batch
 
     # Handle labels flexibly based on their type
     first_label = features[0]["labels"]
@@ -996,6 +1010,10 @@ class MethylBert(AbstractReadClassifier):
             stride=int(self.seq_len / 2),
             soft_labels=self.soft_labels,
             is_binary=True if self.num_labels == 2 else False,
+            # Pure inference: the split need not carry a ground-truth label, and
+            # the label would be unused anyway. Excluding it also keeps the
+            # Trainer's compute_metrics from scoring against a fabricated class.
+            include_labels=False,
         )
 
         dataset = MethylBertFinetuneDataset(
@@ -1257,7 +1275,11 @@ def _line2tokens_finetune(l, tokenizer, max_len=150, headers=None, soft_labels=F
     l["dna_seq"] = [[f] for f in tokenizer.to_seq(l["dna_seq"])]
 
     # 4. Parse Labels (The Harmonized Logic)
-    if soft_labels:
+    # A None ctype means "no ground truth" (prediction-only data); carry it
+    # through so the dataset can omit the label entirely.
+    if l["ctype"] is None:
+        l["ctype_label"] = None
+    elif soft_labels:
         if isinstance(l["ctype"], str):
             l["ctype_label"] = [float(x) for x in l["ctype"].split(",")]
         else:
@@ -1733,19 +1755,23 @@ class MethylBertFinetuneDataset(MethylBertDataset):
         dna_seq = torch.cat((torch.tensor([self.vocab.sos_index]), dna_seq))
         methyl_seq = torch.cat((torch.tensor([2]), methyl_seq))
 
-        # For soft labels, return as float tensor; for hard labels, return scalar int
-        if self.soft_labels:
-            labels = torch.tensor(item["ctype_label"], dtype=torch.float)
-        else:
-            labels = item["ctype_label"]
-
-        return {
+        result = {
             "input_ids": dna_seq,
             "token_type_ids": methyl_seq,
-            "labels": labels,
             "grg_ids": item["grg_label"],
             "on_target_mask": on_target_tensor,
         }
+
+        # No ground truth (prediction-only data): omit `labels` rather than
+        # inventing one, so the Trainer sees no label_ids and skips metrics.
+        if item["ctype_label"] is not None:
+            # For soft labels, return as float tensor; for hard labels, scalar int
+            if self.soft_labels:
+                result["labels"] = torch.tensor(item["ctype_label"], dtype=torch.float)
+            else:
+                result["labels"] = item["ctype_label"]
+
+        return result
 
     def __del__(self):
         """Save cache when object is destroyed."""

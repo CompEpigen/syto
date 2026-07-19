@@ -333,6 +333,205 @@ class TestMethylVocab(unittest.TestCase):
             )
 
 
+class TestLabelFreeInferencePath(unittest.TestCase):
+    """Prediction must not require (or invent) a ground-truth label.
+
+    Raw pseudobulk splits carry no ``soft_label``/``label`` column, and the label
+    is unused at inference: it only rides along in ``ctype``. Feeding a
+    placeholder would be worse than crashing, because the Trainer's
+    ``compute_metrics`` stays wired in during prediction and would score the
+    predictions against the invented labels. So the whole chain must carry
+    "no label" through to a batch with no ``labels`` key, which is what makes
+    HF skip metrics entirely.
+    """
+
+    def setUp(self):
+        self.vocab = MethylVocab(k=3)
+
+    def test_prepare_emits_none_ctype_when_labels_excluded(self):
+        """Builds the inference table from a split with no label column."""
+        results_df = pd.DataFrame(
+            [
+                {
+                    "read_name": "read-1",
+                    "input_ids": "ATCGAT",
+                    "methylation_ids": "010101",
+                    "grg_ctype_label": "tumor",
+                    "grg_label": "grg-a",
+                    "original_label": 775,
+                }
+            ]
+        )
+
+        prepared = prepare_methylbert_list(
+            results_df,
+            grg_label_column="grg_label",
+            seq_length=2,
+            stride=1,
+            soft_labels=True,
+            include_labels=False,
+            grg_ctype_label="grg_ctype_label",
+        )
+
+        ctype_index = prepared[0].index("ctype")
+        self.assertEqual(len(prepared), 4)
+        for row in prepared[1:]:
+            self.assertIsNone(row[ctype_index])
+
+    def test_prepare_still_reads_label_column_by_default(self):
+        """Fine-tuning keeps its current behavior: the label column is required."""
+        results_df = pd.DataFrame(
+            [
+                {
+                    "read_name": "read-1",
+                    "input_ids": "ATCGAT",
+                    "methylation_ids": "010101",
+                    "grg_ctype_label": "tumor",
+                    "grg_label": "grg-a",
+                    "original_label": 775,
+                }
+            ]
+        )
+
+        with self.assertRaises(KeyError):
+            prepare_methylbert_list(
+                results_df,
+                grg_label_column="grg_label",
+                seq_length=2,
+                stride=1,
+                soft_labels=True,
+                grg_ctype_label="grg_ctype_label",
+            )
+
+    def test_tokenizer_leaves_ctype_label_none_when_ctype_is_none(self):
+        """A None ctype is carried through instead of parsed into a class."""
+        line = {
+            "dna_seq": "AAA TTT",
+            "methyl_seq": "01",
+            "ctype": None,
+            "grg_ctype": "tumor",
+            "grg_label": "0",
+        }
+
+        tokenized = _line2tokens_finetune(
+            line,
+            tokenizer=self.vocab,
+            max_len=5,
+            headers=["dna_seq", "methyl_seq", "ctype", "grg_ctype", "grg_label"],
+            soft_labels=True,
+        )
+
+        self.assertIsNone(tokenized["ctype_label"])
+
+    def test_dataset_item_has_no_labels_key_when_ctype_is_none(self):
+        """The dataset omits `labels` rather than emitting a placeholder class."""
+        data = [
+            ["dna_seq", "methyl_seq", "ctype", "grg_ctype", "grg_label"],
+            ["AAA TTT CCC", "012", None, "1", "0"],
+        ]
+
+        dataset = MethylBertFinetuneDataset(
+            data_source=data, vocab=self.vocab, seq_len=10, n_cores=1
+        )
+
+        item = dataset[0]
+
+        self.assertNotIn("labels", item)
+        self.assertIn("input_ids", item)
+        self.assertIn("grg_ids", item)
+
+    def test_collator_omits_labels_when_features_have_none(self):
+        """No `labels` in the batch is what makes HF skip compute_metrics."""
+        features = [
+            {
+                "input_ids": torch.randint(0, 10, (150,)),
+                "token_type_ids": torch.randint(0, 3, (150,)),
+                "grg_ids": 0,
+            },
+            {
+                "input_ids": torch.randint(0, 10, (150,)),
+                "token_type_ids": torch.randint(0, 3, (150,)),
+                "grg_ids": 1,
+            },
+        ]
+
+        batch = methylbert_finetune_collator(features)
+
+        self.assertNotIn("labels", batch)
+        self.assertEqual(batch["input_ids"].shape, (2, 150))
+
+    def test_predict_split_runs_on_a_split_with_no_label_column(self):
+        """The pseudobulk case: raw split, no soft_label/label column, soft_labels=True."""
+        split_df = pd.DataFrame(
+            [
+                {
+                    "read_name": "read-1",
+                    "seq": "ATCGATCG",
+                    "pattern": "01010101",
+                    "dmr_ctype_label": 3,
+                    "original_label": 775,
+                }
+            ]
+        )
+
+        clf = object.__new__(MethylBert)
+        clf.seq_len = 4
+        clf.soft_labels = True
+        clf.num_labels = 2
+        captured = {}
+
+        def fake_predict(dataset, batch_size=None):
+            # Every item must be collatable without a label, as at real inference.
+            batch = methylbert_finetune_collator([dataset[i] for i in range(len(dataset))])
+            captured["has_labels"] = "labels" in batch
+            return (np.tile([0.25, 0.75], (len(dataset), 1)),)
+
+        clf.predict = fake_predict
+
+        result = clf.predict_split(split_df, grg_label_column="dmr_ctype_label")
+
+        self.assertFalse(captured["has_labels"])
+        self.assertEqual(list(result["read_name"]), ["read-1"])
+        self.assertIn("prediction_0", result.columns)
+
+    def test_label_free_split_survives_the_whole_prepare_to_batch_chain(self):
+        """End-to-end: a split with no label column reaches a label-free batch."""
+        results_df = pd.DataFrame(
+            [
+                {
+                    "read_name": "read-1",
+                    "input_ids": "ATCGATCG",
+                    "methylation_ids": "01010101",
+                    "grg_ctype_label": "tumor",
+                    "grg_label": 3,
+                    "original_label": 775,
+                }
+            ]
+        )
+
+        data_list = prepare_methylbert_list(
+            results_df,
+            grg_label_column="grg_label",
+            seq_length=4,
+            stride=2,
+            soft_labels=True,
+            include_labels=False,
+            grg_ctype_label="grg_ctype_label",
+        )
+        dataset = MethylBertFinetuneDataset(
+            data_source=data_list,
+            vocab=self.vocab,
+            seq_len=10,
+            lazy_tokenization=True,
+            soft_labels=True,
+        )
+
+        batch = methylbert_finetune_collator([dataset[i] for i in range(len(dataset))])
+
+        self.assertNotIn("labels", batch)
+        self.assertEqual(batch["grg_ids"].tolist(), [3] * len(dataset))
+
+
 class TestMethylBertFinetuneDataset(unittest.TestCase):
     """Test suite for MethylBertFinetuneDataset."""
 
