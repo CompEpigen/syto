@@ -908,6 +908,22 @@ class InferencePipeline:
                 f"method/calibrator combinations) to {path}"
             )
 
+            # ── Optional visualization report (opt-in) ─────────────────
+            viz_cfg = output_cfg.get("visualization", {})
+            if viz_cfg.get("enabled", False):
+                try:
+                    from syto.visualization.inference import (
+                        render_deconvolution_report,
+                    )
+
+                    render_deconvolution_report(
+                        results_df, output_dir, viz_cfg, logger=self.logger
+                    )
+                except Exception as e:  # pylint: disable=broad-exception-caught
+                    self.logger.error(
+                        f"Deconvolution visualization failed: {e}", exc_info=True
+                    )
+
         # ── GR-aggregated predictions (pickle) ────────────────────────
         if self.dmr_aggregated is not None:
             path = os.path.join(output_dir, "dmr_aggregated.pkl")
