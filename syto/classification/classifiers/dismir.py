@@ -546,9 +546,7 @@ class Dismir(AbstractReadClassifier):
             dtype=int,
         )
 
-        # Build the one-hot directly as float32 (the dtype the model consumes) so
-        # the downstream torch conversion can share this buffer zero-copy instead
-        # of allocating a second full-size array. See _train_fixed_length.
+        
         onehot = np.zeros((len(dna_seq), self.max_sequence_length, 5), dtype=np.float32)
 
         for i, tmp_seq in enumerate(dna_seq):
@@ -712,9 +710,7 @@ class Dismir(AbstractReadClassifier):
             self.valid_x, self.valid_y = _get_data(valid_df, self.valid_data_path)
             _module_logger.info(f"... Valid is ready")
 
-        # Convert features to torch.Tensor. conv_onehot already produces float32
-        # numpy arrays, so from_numpy shares the buffer instead of copying it,
-        # avoiding a momentary ~2x memory spike on these multi-GB feature arrays.
+        # Convert features to torch.Tensor
         self.train_x = torch.from_numpy(self.train_x)
         self.valid_x = torch.from_numpy(self.valid_x)
 
