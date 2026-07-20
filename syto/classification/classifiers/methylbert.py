@@ -998,6 +998,13 @@ class MethylBert(AbstractReadClassifier):
                     (default: 'grg_ctype_label')
                 - batch_size: Batch size for prediction (default: 2200)
         """
+        # Ensure a stable per-read id exists on the ORIGINAL frame so it survives
+        # the rename below and matches the synthetic id prepare_methylbert_list
+        # would otherwise fabricate on the copy alone. Without this the final
+        # merge on "read_name" has the key only on pred_df and raises KeyError.
+        if "read_name" not in split_df.columns:
+            split_df["read_name"] = range(len(split_df))
+
         # Prepare chunked input data
         input_df = split_df.rename(
             columns={"seq": "input_ids", "pattern": "methylation_ids"}
