@@ -610,7 +610,10 @@ class LookupClassifier(AbstractReadClassifier):
 
     def required_fit_columns(self, config: dict) -> list[str]:
         # self.config is a LabelConfig with the ground-truth-class column name.
-        return ["name", "read_start", "methylation_ids"]
+        # It must be projected out of the dataset: it is the per-read integer
+        # label the soft labeler builds from, and is generally a *different*
+        # column than the pipeline's top-level ``label_column``.
+        return ["name", "read_start", "methylation_ids", self.config.label_col]
 
     def mlflow_fit_params(self) -> dict:
         return self.config.to_dict()
