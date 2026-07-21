@@ -415,9 +415,14 @@ class InferencePipeline:
         self.logger.info("Running classifier predictions ...")
 
         result_df = read_classifier.predict_split(self.prepared_reads, **classifier_cfg)
-        result_df = result_df.dropna(
-            subset=result_df.columns.difference(["soft_label", "ctype"])
-        )
+
+        prediction_cols = [
+            c
+            for c in result_df.columns
+            if c.startswith("prediction_") and c[len("prediction_") :].isdigit()
+        ]
+        result_df = result_df.dropna(subset=prediction_cols)
+
         if "M_rate" in result_df.columns:
             result_df.rename(columns={"M_rate": "methylation_level"}, inplace=True)
 
