@@ -27,6 +27,9 @@ from syto.classification.classifiers.abstract_read_classifier import (
     AbstractReadClassifier,
 )
 from syto.classification.mlflow_tracking import mlflow_tracked_fit
+from syto.classification.prediction_aggregation import (
+    aggregate_chuncked_predictions_weighted,
+)
 
 from syto.data.dataset import resolve_column
 
@@ -276,6 +279,22 @@ class DISMIRNet(nn.Module):
         return logits, attention_weights
 
 
+def _iter_read_chunks(dna_seq, methylation_seq, max_sequence_length):
+    """Split one read into non-overlapping windows for weighted aggregation.
+
+    Yields ``(chunk_dna, chunk_methylation, weight)`` for every window of
+    ``max_sequence_length`` bases, weighting each chunk by its CpG count
+    (minimum 1). Shared by ``VariableLengthDataset`` (training) and
+    ``Dismir.predict_split`` (inference) so both chunk reads identically.
+    """
+    seq_len = len(dna_seq)
+    for start in range(0, seq_len, max_sequence_length):
+        end = min(start + max_sequence_length, seq_len)
+        chunk_dna = dna_seq[start:end]
+        chunk_methylation = methylation_seq[start:end]
+        yield chunk_dna, chunk_methylation, max(chunk_dna.count("CG"), 1)
+
+
 class VariableLengthDataset(Dataset):
     """
     Custom dataset for variable-length sequences that handles chunking.
@@ -313,26 +332,16 @@ class VariableLengthDataset(Dataset):
             self.read_labels[read_id] = label
 
             # Create chunks
-            seq_len = len(dna_seq)
             chunks = []
             weights = []
 
-            for start in range(0, seq_len, self.max_sequence_length):
-                end = min(start + self.max_sequence_length, seq_len)
-
-                # Extract chunk
-                chunk_dna = dna_seq[start:end]
-                chunk_methylation = methylation_seq[start:end]
-
+            for chunk_dna, chunk_methylation, weight in _iter_read_chunks(
+                dna_seq, methylation_seq, self.max_sequence_length
+            ):
                 # Convert to one-hot
                 chunk_onehot = self.conv_onehot([chunk_dna], [chunk_methylation])[0]
                 chunks.append(chunk_onehot)
-
-                # Calculate CpG count for weighting
-                cpg_count = self._count_cpg(
-                    chunk_dna[: end - start]
-                )  # Only count real sequence, not padding
-                weights.append(max(cpg_count, 1))  # Ensure minimum weight of 1
+                weights.append(weight)
 
             # Normalize weights for this read
             total_weight = sum(weights)
@@ -341,14 +350,6 @@ class VariableLengthDataset(Dataset):
             self.read_chunks[read_id] = chunks
             self.chunk_weights[read_id] = normalized_weights
             self.read_chunk_counts[read_id] = len(chunks)
-
-    def _count_cpg(self, sequence):
-        """Count CpG dinucleotides in a sequence."""
-        count = 0
-        for i in range(len(sequence) - 1):
-            if sequence[i : i + 2] == "CG":
-                count += 1
-        return count
 
     def get_chunk_count(self, idx):
         """Get the number of chunks for a specific read."""
@@ -1484,6 +1485,13 @@ class Dismir(AbstractReadClassifier):
                       GRG labels (if using attention-based classifier).
             **kwargs: additional parameters for prediction, such as:
                 - batch_size: batch size for prediction (default: 2200)
+
+        Reads longer than ``max_sequence_length`` would otherwise be silently
+        truncated by ``conv_onehot``. To keep the full read in play, each read is
+        split into non-overlapping windows via ``_iter_read_chunks`` (the same
+        chunking ``VariableLengthDataset`` uses during training), every chunk is
+        predicted independently, and the chunk predictions are recombined into a
+        single read-level prediction with a CpG-count-weighted average.
         """
         batch_size = kwargs.get("batch_size", 2200)
 
@@ -1492,31 +1500,49 @@ class Dismir(AbstractReadClassifier):
         dna_col = resolve_column(cols, "input_ids")
         meth_col = resolve_column(cols, "methylation_ids")
 
-        dna_sequences = split_df[dna_col].tolist()
-        methylation_sequences = split_df[meth_col].tolist()
+        # Ensure a stable per-read id survives chunking so the weighted
+        # aggregation and final merge can regroup chunks back into reads.
+        if "read_name" not in split_df.columns:
+            split_df["read_name"] = range(len(split_df))
 
-        # GRG ids if using attention-based classifier
-        grg_ids = None
-        if self.classifier_type == "grg_attention_based":
-            grg_ids = split_df[self.grg_label_column].values
+        use_grg = self.classifier_type == "grg_attention_based"
 
-        # Run prediction
+        # Split each read into chunks, carrying its read id, per-chunk CpG weight,
+        # and (for the attention head) its constant GRG id across all chunks.
+        chunk_dna, chunk_meth, chunk_read_names, chunk_weights = [], [], [], []
+        chunk_grg = [] if use_grg else None
+        for _, row in split_df.iterrows():
+            read_name = row["read_name"]
+            grg_id = row[self.grg_label_column] if use_grg else None
+            for sub_dna, sub_meth, weight in _iter_read_chunks(
+                row[dna_col], row[meth_col], self.max_sequence_length
+            ):
+                chunk_dna.append(sub_dna)
+                chunk_meth.append(sub_meth)
+                chunk_read_names.append(read_name)
+                chunk_weights.append(weight)
+                if use_grg:
+                    chunk_grg.append(grg_id)
+
+        # Run prediction on the flattened chunks
         probabilities, _ = self.predict(
-            dna_sequences=dna_sequences,
-            methylation_sequences=methylation_sequences,
-            grg_ids=grg_ids,
+            dna_sequences=chunk_dna,
+            methylation_sequences=chunk_meth,
+            grg_ids=np.array(chunk_grg) if use_grg else None,
             batch_size=batch_size,
         )
 
-        # Build predictions DataFrame
+        # Build chunk-level predictions DataFrame
         pred_cols = [f"prediction_{i}" for i in range(self.num_labels)]
         pred_df = pd.DataFrame(probabilities, columns=pred_cols)
+        pred_df["read_name"] = chunk_read_names
+        pred_df["ncpgs_marked"] = chunk_weights
 
-        # Merge with original DataFrame
-        result = split_df.copy()
-        for col in pred_cols:
-            result[col] = pred_df[col].values
+        # Collapse chunk predictions into a read-level weighted average
+        pred_df = aggregate_chuncked_predictions_weighted(pred_df)
 
+        # Merge read-level predictions back with the original split
+        result = pd.merge(split_df, pred_df, on="read_name")
         return result
 
     def required_fit_columns(self, config: dict) -> list[str]:
