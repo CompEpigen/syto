@@ -223,11 +223,11 @@ class CelFiEDeconvolver(BaselineDeconvolver):
     def __init__(
         self,
         atlas: "CpGBetaCountsMethylationAtlas",
-        num_iterations: int = 50,
-        convergence_criteria: float = 0.001,
-        random_restarts: int = 1,
-        freeze_gamma: bool = False,
-        sum_by_region: bool = False,
+        num_iterations: int = 1000,
+        convergence_criteria: float = 0.0001,
+        random_restarts: int = 10,
+        freeze_gamma: bool = True,
+        sum_by_region: bool = True,
         em_checkpoints: Optional[List[int]] = None,
     ) -> None:
         self._atlas = atlas

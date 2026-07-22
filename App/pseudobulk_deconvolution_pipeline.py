@@ -275,9 +275,9 @@ class PseudobulkDeconvolutionPipeline:
                 atlas,
                 num_iterations=num_iterations,
                 convergence_criteria=convergence_criteria,
-                random_restarts=model_cfg.get("random_restarts", 1),
-                freeze_gamma=model_cfg.get("freeze_gamma", False),
-                sum_by_region=model_cfg.get("sum_by_region", False),
+                random_restarts=model_cfg.get("random_restarts", 10),
+                freeze_gamma=model_cfg.get("freeze_gamma", True),
+                sum_by_region=model_cfg.get("sum_by_region", True),
                 em_checkpoints=em_checkpoints,
             )
 
