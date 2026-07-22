@@ -136,6 +136,24 @@ def _deconv_baselines_section(engine, answers):
                     ),
                     answers,
                 )
+                entry["sum_by_region"] = engine.ask_one(
+                    FieldSpec(
+                        key="_celfie_sum_by_region",
+                        label="[celfie] sum_by_region (pool CpGs per region)",
+                        kind="bool",
+                        default=False,
+                    ),
+                    answers,
+                )
+                entry["freeze_gamma"] = engine.ask_one(
+                    FieldSpec(
+                        key="_celfie_freeze_gamma",
+                        label="[celfie] freeze_gamma (hold atlas methylation)",
+                        kind="bool",
+                        default=False,
+                    ),
+                    answers,
+                )
         baselines.append(entry)
     answers["deconvolution.baselines"] = baselines
 

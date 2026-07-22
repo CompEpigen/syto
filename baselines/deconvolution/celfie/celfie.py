@@ -128,8 +128,14 @@ class _CelfieModel:
         num_iterations: int = 50,
         convergence_criteria: float = 0.001,
         random_restarts: int = 1,
+        freeze_gamma: bool = False,
     ) -> np.ndarray:
-        """Run EM with optional restarts; return best-likelihood alpha ndarray(T,)."""
+        """Run EM with optional restarts; return best-likelihood alpha ndarray(T,).
+
+        When ``freeze_gamma`` is True the reference methylation fractions
+        ``gamma`` are held at their initial atlas values (the M-step re-estimate
+        is discarded), so only ``alpha`` is optimised.
+        """
         best_ll = -np.inf
         best_alpha = None
         for _ in range(random_restarts):
@@ -143,6 +149,8 @@ class _CelfieModel:
             for i in range(num_iterations):
                 p0, p1 = self._expectation(gamma, alpha)
                 a, g = self._maximization(p0, p1, self._x, self._x_depths, y, y_depths)
+                if freeze_gamma:
+                    g = gamma
                 alpha_diff = np.mean(abs(a - alpha)) / np.mean(abs(alpha))
                 gamma_diff = np.nanmean(abs(g - gamma)) / np.nanmean(abs(gamma))
                 if i and (alpha_diff + gamma_diff < convergence_criteria):
@@ -158,9 +166,13 @@ class _CelfieModel:
         return best_alpha.flatten()
 
     def fit_with_checkpoints(
-        self, checkpoints: List[int]
+        self, checkpoints: List[int], freeze_gamma: bool = False
     ) -> List[Tuple[int, np.ndarray]]:
-        """Run EM for max(checkpoints) iterations; return snapshots."""
+        """Run EM for max(checkpoints) iterations; return snapshots.
+
+        When ``freeze_gamma`` is True the reference methylation fractions
+        ``gamma`` are held at their initial atlas values.
+        """
         y, y_depths = self._y.copy(), self._y_depths.copy()
         alpha = np.random.uniform(size=(self._x.shape[0], y.shape[0]))
         alpha /= np.sum(alpha, axis=1)[:, np.newaxis]
@@ -170,9 +182,11 @@ class _CelfieModel:
         results: List[Tuple[int, np.ndarray]] = []
         for i in range(1, max(checkpoints) + 1):
             p0, p1 = self._expectation(gamma, alpha)
-            alpha, gamma = self._maximization(
+            alpha, new_gamma = self._maximization(
                 p0, p1, self._x, self._x_depths, y, y_depths
             )
+            if not freeze_gamma:
+                gamma = new_gamma
             if i in checkpoint_set:
                 results.append((i, alpha.flatten().copy()))
         return results
@@ -192,6 +206,14 @@ class CelFiEDeconvolver(BaselineDeconvolver):
     num_iterations : int
     convergence_criteria : float
     random_restarts : int
+    freeze_gamma : bool
+        When True, hold the reference methylation fractions ``gamma`` at their
+        atlas values instead of jointly re-estimating them in the EM M-step.
+    sum_by_region : bool
+        When True, pool per-CpG methylated/coverage counts into a single
+        summary count per atlas region (CelFiE's ±250bp windowing convention)
+        before running the EM, so each region contributes one feature instead
+        of one feature per CpG.
     em_checkpoints : list of int, optional
         When set, ``deconvolute_reads`` returns ``[(n_steps, proportions), …]``.
     """
@@ -204,12 +226,16 @@ class CelFiEDeconvolver(BaselineDeconvolver):
         num_iterations: int = 50,
         convergence_criteria: float = 0.001,
         random_restarts: int = 1,
+        freeze_gamma: bool = False,
+        sum_by_region: bool = False,
         em_checkpoints: Optional[List[int]] = None,
     ) -> None:
         self._atlas = atlas
         self.num_iterations = num_iterations
         self.convergence_criteria = convergence_criteria
         self.random_restarts = random_restarts
+        self.freeze_gamma = freeze_gamma
+        self.sum_by_region = sum_by_region
         self.em_checkpoints = em_checkpoints
 
     @property
@@ -338,9 +364,15 @@ class CelFiEDeconvolver(BaselineDeconvolver):
         y_list, y_cov_list = self._atlas.get_meth_cov_for_regions(
             celfie_in["region_names"]
         )
-        model = _CelfieModel(
-            celfie_in["x_meth"], celfie_in["x_cov"], y_list, y_cov_list
-        )
+        x_meth_list, x_cov_list = celfie_in["x_meth"], celfie_in["x_cov"]
+        if self.sum_by_region:
+            # Collapse the CpG axis so each region is one summed feature, applying
+            # the identical reduction to sample (x) and atlas (y) so columns align.
+            x_meth_list = [a.sum(axis=1, keepdims=True) for a in x_meth_list]
+            x_cov_list = [a.sum(axis=1, keepdims=True) for a in x_cov_list]
+            y_list = [a.sum(axis=1, keepdims=True) for a in y_list]
+            y_cov_list = [a.sum(axis=1, keepdims=True) for a in y_cov_list]
+        model = _CelfieModel(x_meth_list, x_cov_list, y_list, y_cov_list)
         ref_cells = self._atlas.ref_cells
         if self.em_checkpoints is not None:
             return [
@@ -350,12 +382,17 @@ class CelFiEDeconvolver(BaselineDeconvolver):
                         labels_dict_reversed, alpha, ref_cells, n_labels=n_labels
                     ),
                 )
-                for n_steps, alpha in model.fit_with_checkpoints(self.em_checkpoints)
+                for n_steps, alpha in model.fit_with_checkpoints(
+                    self.em_checkpoints, freeze_gamma=self.freeze_gamma
+                )
             ]
         return rearange_deconvolution_results(
             labels_dict_reversed,
             model.fit(
-                self.num_iterations, self.convergence_criteria, self.random_restarts
+                self.num_iterations,
+                self.convergence_criteria,
+                self.random_restarts,
+                freeze_gamma=self.freeze_gamma,
             ),
             ref_cells,
             n_labels=n_labels,

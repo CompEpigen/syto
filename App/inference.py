@@ -807,6 +807,8 @@ class InferencePipeline:
                             num_iterations=num_iterations,
                             convergence_criteria=convergence_criteria,
                             random_restarts=cfg.get("random_restarts", 1),
+                            freeze_gamma=cfg.get("freeze_gamma", False),
+                            sum_by_region=cfg.get("sum_by_region", False),
                             em_checkpoints=em_checkpoints,
                         )
                     )

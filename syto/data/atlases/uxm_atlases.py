@@ -103,6 +103,7 @@ class UXMMethylationAtlas(AbstractMethylationAtlas):
         if include:
             all_cells = [c for c in all_cells if c in include]
         self._ref_cells: List[str] = all_cells
+        self._atlas = self._atlas[self._atlas["target"].apply(lambda x: x in self._ref_cells)]
 
     # ------------------------------------------------------------------
     # AbstractAtlas interface

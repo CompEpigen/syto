@@ -90,6 +90,23 @@ class TestCelfieModelFit(unittest.TestCase):
         for _, alpha in model.fit_with_checkpoints([5, 10]):
             self.assertAlmostEqual(float(alpha.sum()), 1.0, places=5)
 
+    def test_freeze_gamma_keeps_reference_fixed(self):
+        """With gamma frozen at the (clean) atlas, ct1 still dominates."""
+        model = _make_pure_signal_model()
+        np.random.seed(0)
+        alpha = model.fit(
+            num_iterations=100, convergence_criteria=1e-6, freeze_gamma=True
+        )
+        self.assertAlmostEqual(float(alpha.sum()), 1.0, places=5)
+        self.assertGreater(float(alpha[0]), 0.7)
+
+    def test_freeze_gamma_checkpoints_run(self):
+        model = _make_pure_signal_model()
+        results = model.fit_with_checkpoints([3, 6], freeze_gamma=True)
+        self.assertEqual([n for n, _ in results], [3, 6])
+        for _, alpha in results:
+            self.assertAlmostEqual(float(alpha.sum()), 1.0, places=5)
+
 
 # ---------------------------------------------------------------------------
 # CelFiEDeconvolver.build_input
@@ -189,6 +206,37 @@ class TestCelFiEDeconvolver(unittest.TestCase):
             _make_prepared_reads(), {"ct1": 0, "ct2": 1}, prepare=False
         )
         self.assertIsNone(result)
+
+    def test_sum_by_region_collapses_to_one_feature(self):
+        """sum_by_region pools the 3 CpGs into a single summed feature."""
+        atlas = _make_atlas_mock(n_cpgs=3)
+        atlas.ref_cells = ["ct1", "ct2"]
+        y = np.array([[4.0, 4.0, 4.0], [0.0, 0.0, 0.0]])
+        y_cov = np.array([[8.0, 8.0, 8.0], [8.0, 8.0, 8.0]])
+        atlas.get_meth_cov_for_regions.return_value = ([y], [y_cov])
+        captured = {}
+
+        import baselines.deconvolution.celfie.celfie as celfie_mod
+
+        orig_model = celfie_mod._CelfieModel
+
+        def _spy(x_meth, x_cov, y_list, y_cov_list):
+            captured["x_shape"] = x_meth[0].shape
+            captured["y_shape"] = y_list[0].shape
+            return orig_model(x_meth, x_cov, y_list, y_cov_list)
+
+        d = CelFiEDeconvolver(atlas, sum_by_region=True)
+        celfie_mod._CelfieModel = _spy
+        try:
+            result = d.deconvolute_reads(
+                _make_prepared_reads(), {"ct1": 0, "ct2": 1}, prepare=False
+            )
+        finally:
+            celfie_mod._CelfieModel = orig_model
+
+        self.assertEqual(captured["x_shape"], (1, 1))
+        self.assertEqual(captured["y_shape"], (2, 1))
+        self.assertAlmostEqual(sum(result), 1.0, places=4)
 
     def test_checkpoints_return_list_of_tuples(self):
         atlas = _make_atlas_mock(n_cpgs=3)
