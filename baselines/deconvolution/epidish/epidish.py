@@ -5,12 +5,22 @@ Ports the RPC, CBS, and CP estimators from the EpiDISH R package
 (https://github.com/sjczheng/EpiDISH, GPL-2). See LICENSE.md.
 """
 
+import logging
+from typing import Dict, List, Optional, Sequence
+
 import cvxpy as cp
 import numpy as np
+import pandas as pd
 import statsmodels.api as sm
 from sklearn.svm import NuSVR
 from statsmodels.robust.norms import HuberT
 from statsmodels.robust.robust_linear_model import RLM
+
+from baselines.deconvolution.base import BaselineDeconvolver
+from baselines.deconvolution.utils import rearange_deconvolution_results
+from syto.data.dataset import resolve_column
+
+_module_logger = logging.getLogger(__name__)
 
 
 def _normalize_nonneg(coef: np.ndarray) -> np.ndarray:
@@ -89,3 +99,114 @@ def _do_cp(mixture: np.ndarray, ref: np.ndarray, constraint: str = "inequality")
     cp.Problem(objective, constraints).solve()
 
     return _normalize_nonneg(np.asarray(w.value, dtype=float).ravel())
+
+
+class EpiDishDeconvolver(BaselineDeconvolver):
+    """EpiDISH reference-based deconvolution baseline (RPC / CBS / CP)."""
+
+    name = "epidish"
+    _METHODS = {"RPC", "CBS", "CP"}
+    _CONSTRAINTS = {"inequality", "equality"}
+
+    def __init__(
+        self,
+        atlas,
+        method: str = "RPC",
+        maxit: int = 50,
+        nu_v: Sequence[float] = (0.25, 0.5, 0.75),
+        constraint: str = "inequality",
+    ) -> None:
+        if method not in self._METHODS:
+            raise ValueError(f"method must be one of {self._METHODS}; got {method!r}.")
+        if constraint not in self._CONSTRAINTS:
+            raise ValueError(
+                f"constraint must be one of {self._CONSTRAINTS}; got {constraint!r}."
+            )
+        self._atlas = atlas
+        self.method = method
+        self.maxit = maxit
+        self.nu_v = tuple(nu_v)
+        self.constraint = constraint
+
+    @property
+    def atlas(self):
+        return self._atlas
+
+    def prepare_reads(self, reads: pd.DataFrame, **kwargs) -> pd.DataFrame:
+        return self._atlas.prepare_reads(reads, trim=True)
+
+    def build_input(self, reads: pd.DataFrame) -> Optional[dict]:
+        meth_col = resolve_column(reads.columns, "methylation_ids")
+        region_names: List[str] = []
+        mixtures: List[np.ndarray] = []
+
+        for region_name, group in reads.groupby("name", sort=False):
+            if region_name not in self._atlas:
+                _module_logger.warning("Region %s not in atlas; skipping.", region_name)
+                continue
+            cpg_lookup = self._atlas.get_cpg_lookup(region_name)
+            n_cpgs = self._atlas.get_n_cpgs(region_name)
+            meth_counts = np.zeros(n_cpgs)
+            tot_counts = np.zeros(n_cpgs)
+
+            for pattern, rs in zip(
+                group[meth_col].tolist(), group["read_start"].tolist()
+            ):
+                arr = np.frombuffer(pattern.encode("ascii"), dtype=np.uint8)
+                cpg_mask = (arr == 48) | (arr == 49)  # '0' / '1'
+                offsets = np.where(cpg_mask)[0]
+                if offsets.size == 0:
+                    continue
+                abs_pos = int(rs) + offsets
+                meths = (arr[cpg_mask] == 49).astype(float)
+                col = pd.Series(abs_pos).map(cpg_lookup)
+                valid = col.notna().values
+                if not valid.any():
+                    continue
+                cols = col[valid].astype(int).values
+                np.add.at(tot_counts, cols, 1.0)
+                np.add.at(meth_counts, cols, meths[valid])
+
+            with np.errstate(invalid="ignore", divide="ignore"):
+                beta = np.where(tot_counts > 0, meth_counts / tot_counts, np.nan)
+            region_names.append(region_name)
+            mixtures.append(beta)
+
+        if not region_names:
+            return None
+
+        mixture = np.concatenate(mixtures)
+        ref_list = self._atlas.get_beta_for_regions(region_names)  # (T, n_cpgs) each
+        ref = np.concatenate([np.asarray(m, dtype=float).T for m in ref_list], axis=0)
+
+        keep = ~np.isnan(mixture) & ~np.isnan(ref).any(axis=1)
+        return {
+            "mixture": mixture[keep],
+            "ref": ref[keep],
+            "ref_cells": list(self._atlas.ref_cells),
+        }
+
+    def deconvolute_reads(
+        self,
+        reads: pd.DataFrame,
+        labels_dict_reversed: Dict[str, int],
+        n_labels: Optional[int] = None,
+        prepare: bool = True,
+    ) -> Optional[List[float]]:
+        reads_sorted = self._sort_reads(reads)
+        prepared = self.prepare_reads(reads_sorted) if prepare else reads_sorted
+        epi_in = self.build_input(prepared)
+        if epi_in is None or epi_in["ref"].shape[0] == 0:
+            return None
+
+        mixture, ref = epi_in["mixture"], epi_in["ref"]
+        if self.method == "RPC":
+            fracs = _do_rpc(mixture, ref, self.maxit)
+        elif self.method == "CBS":
+            fracs = _do_cbs(mixture, ref, self.nu_v)
+        else:  # "CP"
+            fracs = _do_cp(mixture, ref, self.constraint)
+
+        return rearange_deconvolution_results(
+            labels_dict_reversed, fracs, epi_in["ref_cells"], n_labels=n_labels
+        )
