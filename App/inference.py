@@ -19,7 +19,7 @@ import torch
 import numpy as np
 import pandas as pd
 from baselines.deconvolution.base import BaselineDeconvolver
-from baselines.deconvolution.uxm import mark_records_methyl_state
+from syto.data.atlases.uxm_atlases import mark_records_methyl_state
 from baselines.deconvolution.uxm.uxm import UXMDeconvolver
 from baselines.deconvolution.celfie.celfie import CelFiEDeconvolver
 from baselines.deconvolution.celfieish.celfieish import CelFiEISHDeconvolver

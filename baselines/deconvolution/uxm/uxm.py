@@ -13,9 +13,13 @@ from typing import TYPE_CHECKING, Dict, List, Optional
 import pandas as pd
 import numpy as np
 from scipy import optimize
-from syto.data.dataset import resolve_column
 from baselines.deconvolution.base import BaselineDeconvolver
 from baselines.deconvolution.utils import rearange_deconvolution_results
+
+# ``mark_records_methyl_state`` is owned by syto core (used both by the UXM
+# baseline and by :meth:`UXMMethylationAtlas.from_reads`); re-exported here for
+# backward compatibility.
+from syto.data.atlases.uxm_atlases import mark_records_methyl_state
 
 if TYPE_CHECKING:
     from syto.data.atlases.uxm_atlases import UXMMethylationAtlas
@@ -23,31 +27,6 @@ if TYPE_CHECKING:
 ### Selected original deconvolution code from https://github.com/nloyfer/UXM_deconv ###
 
 _module_logger = logging.getLogger(__name__)
-
-
-def mark_records_methyl_state(
-    reads_data,
-    methyl_tr=0.75,
-    unmethyl_tr=0.25,
-):
-    """Classify each CpG read as methylated (M), unmethylated (U), or ambiguous (X).
-
-    Adds columns ``M``, ``U``, ``NCPGS``, ``M_rate``, ``record_M``,
-    ``record_U``, ``record_X`` to ``reads_data`` in-place and returns it.
-    """
-    meth_col = resolve_column(reads_data.columns, "methylation_ids")
-    pat = reads_data[meth_col]
-    reads_data["M"] = pat.apply(lambda x: x.count("1"))
-    reads_data["U"] = pat.apply(lambda x: x.count("0"))
-    reads_data["NCPGS"] = reads_data["M"] + reads_data["U"]
-    reads_data["M_rate"] = reads_data["M"] / reads_data["NCPGS"].replace(0, np.nan)
-
-    is_M = reads_data["M_rate"] >= methyl_tr
-    is_U = reads_data["M_rate"] <= unmethyl_tr
-    reads_data["record_M"] = is_M.astype(int)
-    reads_data["record_U"] = is_U.astype(int)
-    reads_data["record_X"] = (~is_M & ~is_U).astype(int)
-    return reads_data
 
 
 # ---------------------------------------------------------------------------

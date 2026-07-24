@@ -84,7 +84,7 @@ def _run_baseline_on_reads(
     from baselines.deconvolution.uxm.uxm import UXMDeconvolver
 
     if isinstance(deconvolver, UXMDeconvolver):
-        from baselines.deconvolution.uxm import mark_records_methyl_state
+        from syto.data.atlases.uxm_atlases import mark_records_methyl_state
 
         reads = mark_records_methyl_state(reads.copy())
 
