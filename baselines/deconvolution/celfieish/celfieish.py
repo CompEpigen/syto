@@ -76,6 +76,15 @@ class _CelfieISHModel:
         self.log_beta = [np.log(b) for b in self.beta]
         self.log_one_minus_beta = [np.log(1 - b) for b in self.beta]
         self.log_term1 = self._calc_term1()
+        # Concatenate the per-region (T, n_reads) log-likelihood terms into one
+        # (T, total_reads) array.  log_term1 is constant across EM iterations and
+        # each read column is independent, so the E/M steps can run as a single
+        # vectorised op instead of a per-region Python loop every iteration.
+        self.log_term1_cat = (
+            np.hstack(self.log_term1)
+            if self.log_term1
+            else np.zeros((self.t, 0))
+        )
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -129,6 +138,20 @@ class _CelfieISHModel:
             z.append(np.exp(a - np.tile(b, (T, 1))))
         return z
 
+    def _log_expectation_cat(self, alpha):
+        """Vectorised E-step over all reads at once → z of shape (T, total_reads).
+
+        Equivalent to ``np.hstack(self._log_expectation(alpha))`` — a stable
+        softmax over the cell-type axis — but computed as a single array op with
+        an in-place softmax rather than a per-region loop over ``scipy``'s
+        ``logsumexp`` (which together dominated EM runtime at atlas scale).
+        """
+        a = np.log(alpha)[:, None] + self.log_term1_cat  # (T, total_reads)
+        a -= a.max(axis=0)  # stabilise, then softmax down the cell-type axis
+        np.exp(a, out=a)
+        a /= a.sum(axis=0)
+        return a
+
     def _maximization(self, z):
         all_z = np.hstack(z)
         new_alpha = np.sum(all_z, axis=1)
@@ -157,8 +180,10 @@ class _CelfieISHModel:
             self._init_alpha()
         i = 0
         for i in range(self.num_iterations):
-            z = self._log_expectation(self.alpha)
-            new_alpha = self._maximization(z)
+            z = self._log_expectation_cat(self.alpha)  # (T, total_reads)
+            new_alpha = z.sum(axis=1)
+            new_alpha /= new_alpha.sum()
+            assert not np.isnan(new_alpha).any(), "alpha has NaN"
             if i and self._test_convergence(new_alpha):
                 break
             self.alpha = new_alpha
@@ -190,8 +215,10 @@ class _CelfieISHModel:
         results: List[Tuple[int, np.ndarray]] = []
 
         for i in range(1, max_iter + 1):
-            z = self._log_expectation(self.alpha)
-            new_alpha = self._maximization(z)
+            z = self._log_expectation_cat(self.alpha)
+            new_alpha = z.sum(axis=1)
+            new_alpha /= new_alpha.sum()
+            assert not np.isnan(new_alpha).any(), "alpha has NaN"
             self.alpha = new_alpha
             if i in checkpoint_set:
                 results.append((i, self.alpha.copy()))
