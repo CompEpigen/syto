@@ -203,9 +203,13 @@ class EpiDishDeconvolver(BaselineDeconvolver):
                 continue
             cpg_lookup = self._atlas.get_cpg_lookup(region_name)
             n_cpgs = self._atlas.get_n_cpgs(region_name)
-            meth_counts = np.zeros(n_cpgs)
-            tot_counts = np.zeros(n_cpgs)
 
+            # Scan all reads with numpy ASCII ops, collecting (abs_pos, meth)
+            # across the whole region.  A single pd.Series.map then resolves all
+            # positions to column indices — one map per region, not per read
+            # (the per-read version was ~1000x slower on real pseudobulks).
+            all_abs_pos: List[np.ndarray] = []
+            all_meths: List[np.ndarray] = []
             for pattern, rs in zip(
                 group[meth_col].tolist(), group["read_start"].tolist()
             ):
@@ -214,15 +218,22 @@ class EpiDishDeconvolver(BaselineDeconvolver):
                 offsets = np.where(cpg_mask)[0]
                 if offsets.size == 0:
                     continue
-                abs_pos = int(rs) + offsets
-                meths = (arr[cpg_mask] == 49).astype(float)
-                col = pd.Series(abs_pos).map(cpg_lookup)
-                valid = col.notna().values
-                if not valid.any():
-                    continue
-                cols = col[valid].astype(int).values
-                np.add.at(tot_counts, cols, 1.0)
-                np.add.at(meth_counts, cols, meths[valid])
+                all_abs_pos.append(int(rs) + offsets)
+                all_meths.append((arr[cpg_mask] == 49).astype(float))
+
+            meth_counts = np.zeros(n_cpgs)
+            tot_counts = np.zeros(n_cpgs)
+            if all_abs_pos:
+                positions = np.concatenate(all_abs_pos)
+                meth_states = np.concatenate(all_meths)
+                col_series = pd.Series(positions).map(cpg_lookup)  # one call/region
+                valid = col_series.notna().values
+                if valid.any():
+                    cols = col_series[valid].astype(np.intp).values
+                    tot_counts = np.bincount(cols, minlength=n_cpgs).astype(float)
+                    meth_counts = np.bincount(
+                        cols, weights=meth_states[valid], minlength=n_cpgs
+                    )
 
             with np.errstate(invalid="ignore", divide="ignore"):
                 beta = np.where(tot_counts > 0, meth_counts / tot_counts, np.nan)
