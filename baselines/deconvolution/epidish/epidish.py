@@ -1,0 +1,212 @@
+"""
+EpiDISH reference-based deconvolution — Python port.
+
+Ports the RPC, CBS, and CP estimators from the EpiDISH R package
+(https://github.com/sjczheng/EpiDISH, GPL-2). See LICENSE.md.
+"""
+
+import logging
+from typing import Dict, List, Optional, Sequence
+
+import cvxpy as cp
+import numpy as np
+import pandas as pd
+import statsmodels.api as sm
+from sklearn.svm import NuSVR
+from statsmodels.robust.norms import HuberT
+from statsmodels.robust.robust_linear_model import RLM
+
+from baselines.deconvolution.base import BaselineDeconvolver
+from baselines.deconvolution.utils import rearange_deconvolution_results
+from syto.data.dataset import resolve_column
+
+_module_logger = logging.getLogger(__name__)
+
+
+def _normalize_nonneg(coef: np.ndarray) -> np.ndarray:
+    """Clip negatives to 0 and normalize to sum 1 (uniform if all <= 0)."""
+    coef = np.asarray(coef, dtype=float).copy()
+    coef[coef < 0] = 0.0
+    total = coef.sum()
+    if total <= 0:
+        return np.full(coef.shape, 1.0 / coef.size)
+    return coef / total
+
+
+def _do_rpc(mixture: np.ndarray, ref: np.ndarray, maxit: int = 50) -> np.ndarray:
+    """Robust Partial Correlations (EpiDISH RPC).
+
+    Robust linear regression (Huber M-estimation via IWLS) of the mixture
+    beta-vector on the reference centroid columns; intercept dropped, negative
+    coefficients clipped, result normalized. Mirrors MASS::rlm defaults.
+    """
+    X = sm.add_constant(np.asarray(ref, dtype=float))  # intercept is column 0
+    res = RLM(np.asarray(mixture, dtype=float), X, M=HuberT()).fit(maxiter=maxit)
+    coef = np.asarray(res.params)[1:]  # drop intercept (R: coef[2:(N+1)])
+    return _normalize_nonneg(coef)
+
+
+def _do_cbs(mixture: np.ndarray, ref: np.ndarray, nu_v=(0.25, 0.5, 0.75)) -> np.ndarray:
+    """CIBERSORT (EpiDISH CBS): linear nu-SVR over candidate nu values.
+
+    Reproduces e1071's ``scale=TRUE`` by z-scoring feature columns and the
+    response before fitting. For each nu, coefficients (== t(coefs) %*% SV) are
+    clipped and normalized; the nu minimizing reconstruction RMSE in the
+    original beta space is selected.
+    """
+    mixture = np.asarray(mixture, dtype=float)
+    ref = np.asarray(ref, dtype=float)
+
+    ref_mean = ref.mean(axis=0)
+    ref_std = ref.std(axis=0)
+    ref_std[ref_std == 0] = 1.0
+    ref_s = (ref - ref_mean) / ref_std
+
+    y_std = mixture.std()
+    y_std = y_std if y_std > 0 else 1.0
+    y_s = (mixture - mixture.mean()) / y_std
+
+    best_coef = None
+    best_rmse = np.inf
+    for nu in nu_v:
+        model = NuSVR(kernel="linear", nu=nu).fit(ref_s, y_s)
+        coef = _normalize_nonneg(model.coef_.ravel())
+        rmse = float(np.sqrt(np.mean((mixture - ref @ coef) ** 2)))
+        if rmse < best_rmse:
+            best_rmse = rmse
+            best_coef = coef
+    return best_coef
+
+
+def _do_cp(mixture: np.ndarray, ref: np.ndarray, constraint: str = "inequality") -> np.ndarray:
+    """Constrained Projection (EpiDISH CP, Houseman): quadratic program.
+
+    Minimizes ||ref @ w - mixture||^2 subject to w >= 0 and either sum(w) <= 1
+    (``inequality``) or sum(w) == 1 (``equality``). EpiDISH's inequality mode
+    does not renormalize; here the result is normalized to sum 1 for
+    consistency with the other baselines (a no-op under a perfect fit).
+    """
+    mixture = np.asarray(mixture, dtype=float)
+    ref = np.asarray(ref, dtype=float)
+    n_ct = ref.shape[1]
+
+    w = cp.Variable(n_ct)
+    objective = cp.Minimize(cp.sum_squares(ref @ w - mixture))
+    if constraint == "equality":
+        constraints = [w >= 0, cp.sum(w) == 1]
+    else:
+        constraints = [w >= 0, cp.sum(w) <= 1]
+    cp.Problem(objective, constraints).solve()
+
+    return _normalize_nonneg(np.asarray(w.value, dtype=float).ravel())
+
+
+class EpiDishDeconvolver(BaselineDeconvolver):
+    """EpiDISH reference-based deconvolution baseline (RPC / CBS / CP)."""
+
+    name = "epidish"
+    _METHODS = {"RPC", "CBS", "CP"}
+    _CONSTRAINTS = {"inequality", "equality"}
+
+    def __init__(
+        self,
+        atlas,
+        method: str = "RPC",
+        maxit: int = 50,
+        nu_v: Sequence[float] = (0.25, 0.5, 0.75),
+        constraint: str = "inequality",
+    ) -> None:
+        if method not in self._METHODS:
+            raise ValueError(f"method must be one of {self._METHODS}; got {method!r}.")
+        if constraint not in self._CONSTRAINTS:
+            raise ValueError(
+                f"constraint must be one of {self._CONSTRAINTS}; got {constraint!r}."
+            )
+        self._atlas = atlas
+        self.method = method
+        self.maxit = maxit
+        self.nu_v = tuple(nu_v)
+        self.constraint = constraint
+
+    @property
+    def atlas(self):
+        return self._atlas
+
+    def prepare_reads(self, reads: pd.DataFrame, **kwargs) -> pd.DataFrame:
+        return self._atlas.prepare_reads(reads, trim=True)
+
+    def build_input(self, reads: pd.DataFrame) -> Optional[dict]:
+        meth_col = resolve_column(reads.columns, "methylation_ids")
+        region_names: List[str] = []
+        mixtures: List[np.ndarray] = []
+
+        for region_name, group in reads.groupby("name", sort=False):
+            if region_name not in self._atlas:
+                _module_logger.warning("Region %s not in atlas; skipping.", region_name)
+                continue
+            cpg_lookup = self._atlas.get_cpg_lookup(region_name)
+            n_cpgs = self._atlas.get_n_cpgs(region_name)
+            meth_counts = np.zeros(n_cpgs)
+            tot_counts = np.zeros(n_cpgs)
+
+            for pattern, rs in zip(
+                group[meth_col].tolist(), group["read_start"].tolist()
+            ):
+                arr = np.frombuffer(pattern.encode("ascii"), dtype=np.uint8)
+                cpg_mask = (arr == 48) | (arr == 49)  # '0' / '1'
+                offsets = np.where(cpg_mask)[0]
+                if offsets.size == 0:
+                    continue
+                abs_pos = int(rs) + offsets
+                meths = (arr[cpg_mask] == 49).astype(float)
+                col = pd.Series(abs_pos).map(cpg_lookup)
+                valid = col.notna().values
+                if not valid.any():
+                    continue
+                cols = col[valid].astype(int).values
+                np.add.at(tot_counts, cols, 1.0)
+                np.add.at(meth_counts, cols, meths[valid])
+
+            with np.errstate(invalid="ignore", divide="ignore"):
+                beta = np.where(tot_counts > 0, meth_counts / tot_counts, np.nan)
+            region_names.append(region_name)
+            mixtures.append(beta)
+
+        if not region_names:
+            return None
+
+        mixture = np.concatenate(mixtures)
+        ref_list = self._atlas.get_beta_for_regions(region_names)  # (T, n_cpgs) each
+        ref = np.concatenate([np.asarray(m, dtype=float).T for m in ref_list], axis=0)
+
+        keep = ~np.isnan(mixture) & ~np.isnan(ref).any(axis=1)
+        return {
+            "mixture": mixture[keep],
+            "ref": ref[keep],
+            "ref_cells": list(self._atlas.ref_cells),
+        }
+
+    def deconvolute_reads(
+        self,
+        reads: pd.DataFrame,
+        labels_dict_reversed: Dict[str, int],
+        n_labels: Optional[int] = None,
+        prepare: bool = True,
+    ) -> Optional[List[float]]:
+        reads_sorted = self._sort_reads(reads)
+        prepared = self.prepare_reads(reads_sorted) if prepare else reads_sorted
+        epi_in = self.build_input(prepared)
+        if epi_in is None or epi_in["ref"].shape[0] == 0:
+            return None
+
+        mixture, ref = epi_in["mixture"], epi_in["ref"]
+        if self.method == "RPC":
+            fracs = _do_rpc(mixture, ref, self.maxit)
+        elif self.method == "CBS":
+            fracs = _do_cbs(mixture, ref, self.nu_v)
+        else:  # "CP"
+            fracs = _do_cp(mixture, ref, self.constraint)
+
+        return rearange_deconvolution_results(
+            labels_dict_reversed, fracs, epi_in["ref_cells"], n_labels=n_labels
+        )
