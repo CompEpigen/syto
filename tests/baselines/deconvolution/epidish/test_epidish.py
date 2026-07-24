@@ -63,3 +63,28 @@ class TestDoCBS(unittest.TestCase):
         frac = _do_cbs(mixture, ref)
         self.assertEqual(int(frac.argmax()), int(true.argmax()))
         np.testing.assert_allclose(frac, true, atol=0.2)
+
+
+from baselines.deconvolution.epidish.epidish import _do_cp
+
+
+class TestDoCP(unittest.TestCase):
+    def _synthetic(self, seed=3, n=150):
+        rng = np.random.default_rng(seed)
+        ref = rng.uniform(0.0, 1.0, size=(n, 3))
+        true = np.array([0.5, 0.3, 0.2])
+        mixture = ref @ true  # noise-free: QP recovers exactly
+        return mixture, ref, true
+
+    def test_inequality_recovers_fractions(self):
+        mixture, ref, true = self._synthetic()
+        frac = _do_cp(mixture, ref, constraint="inequality")
+        self.assertEqual(frac.shape, (3,))
+        self.assertTrue((frac >= -1e-8).all())
+        np.testing.assert_allclose(frac, true, atol=1e-3)
+
+    def test_equality_sums_to_one(self):
+        mixture, ref, true = self._synthetic()
+        frac = _do_cp(mixture, ref, constraint="equality")
+        self.assertAlmostEqual(float(frac.sum()), 1.0, places=6)
+        np.testing.assert_allclose(frac, true, atol=1e-3)

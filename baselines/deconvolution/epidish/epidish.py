@@ -5,6 +5,7 @@ Ports the RPC, CBS, and CP estimators from the EpiDISH R package
 (https://github.com/sjczheng/EpiDISH, GPL-2). See LICENSE.md.
 """
 
+import cvxpy as cp
 import numpy as np
 import statsmodels.api as sm
 from sklearn.svm import NuSVR
@@ -65,3 +66,26 @@ def _do_cbs(mixture: np.ndarray, ref: np.ndarray, nu_v=(0.25, 0.5, 0.75)) -> np.
             best_rmse = rmse
             best_coef = coef
     return best_coef
+
+
+def _do_cp(mixture: np.ndarray, ref: np.ndarray, constraint: str = "inequality") -> np.ndarray:
+    """Constrained Projection (EpiDISH CP, Houseman): quadratic program.
+
+    Minimizes ||ref @ w - mixture||^2 subject to w >= 0 and either sum(w) <= 1
+    (``inequality``) or sum(w) == 1 (``equality``). EpiDISH's inequality mode
+    does not renormalize; here the result is normalized to sum 1 for
+    consistency with the other baselines (a no-op under a perfect fit).
+    """
+    mixture = np.asarray(mixture, dtype=float)
+    ref = np.asarray(ref, dtype=float)
+    n_ct = ref.shape[1]
+
+    w = cp.Variable(n_ct)
+    objective = cp.Minimize(cp.sum_squares(ref @ w - mixture))
+    if constraint == "equality":
+        constraints = [w >= 0, cp.sum(w) == 1]
+    else:
+        constraints = [w >= 0, cp.sum(w) <= 1]
+    cp.Problem(objective, constraints).solve()
+
+    return _normalize_nonneg(np.asarray(w.value, dtype=float).ravel())
