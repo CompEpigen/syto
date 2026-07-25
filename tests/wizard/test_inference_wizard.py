@@ -253,5 +253,71 @@ class TestInferenceBuildConfig(unittest.TestCase):
         self.assertNotIn("bam_processing", cfg)
 
 
+class _StubEngine:
+    """Engine stub for section handlers: scripted ask_checkbox + ask_one."""
+
+    def __init__(self, checkbox_return, answers_by_key):
+        self._checkbox = checkbox_return
+        self._by_key = answers_by_key
+
+    def ask_checkbox(self, label, choices):
+        return self._checkbox
+
+    def ask_one(self, spec, answers):
+        return self._by_key.get(spec.key, spec.default)
+
+
+class TestEpidishBaselineSection(unittest.TestCase):
+    def test_epidish_in_baselines_list(self):
+        from App.wizard.tasks.inference import BASELINES
+
+        self.assertIn("epidish", BASELINES)
+
+    def test_rpc_entry_auto_named(self):
+        from App.wizard.tasks.inference import _deconv_baselines_section
+
+        eng = _StubEngine(
+            ["epidish"],
+            {
+                "_epidish_atlas": "/tmp/atlas.csv",
+                "_epidish_ref": "hg38",
+                "_epidish_method": "RPC",
+                "_epidish_maxit": 50,
+                "_epidish_name": "",
+            },
+        )
+        answers = {}
+        _deconv_baselines_section(eng, answers)
+        entry = answers["deconvolution.baselines"][0]
+        self.assertEqual(entry["model"], "epidish")
+        self.assertEqual(entry["method"], "RPC")
+        self.assertEqual(entry["maxit"], 50)
+        self.assertEqual(entry["reference_genome"], "hg38")
+        self.assertEqual(entry["atlas_path"], "/tmp/atlas.csv")
+        self.assertNotIn("name", entry)  # blank override -> auto-named downstream
+        self.assertNotIn("constraint", entry)
+
+    def test_cp_entry_with_name_override(self):
+        from App.wizard.tasks.inference import _deconv_baselines_section
+
+        eng = _StubEngine(
+            ["epidish"],
+            {
+                "_epidish_atlas": "/tmp/atlas.csv",
+                "_epidish_ref": "hg19",
+                "_epidish_method": "CP",
+                "_epidish_constraint": "inequality",
+                "_epidish_name": "epidish_houseman",
+            },
+        )
+        answers = {}
+        _deconv_baselines_section(eng, answers)
+        entry = answers["deconvolution.baselines"][0]
+        self.assertEqual(entry["method"], "CP")
+        self.assertEqual(entry["constraint"], "inequality")
+        self.assertEqual(entry["name"], "epidish_houseman")
+        self.assertNotIn("maxit", entry)
+
+
 if __name__ == "__main__":
     unittest.main()

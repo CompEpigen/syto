@@ -21,7 +21,7 @@ SYTO_METHOD_DISPATCH = {
     "nnls": {"name": "ls", "flavor": "nnls"},
     "psls": {"name": "ls", "flavor": "psls"},
 }
-BASELINES = ["uxm", "celfieish", "celfie"]
+BASELINES = ["uxm", "celfieish", "celfie", "epidish"]
 LABELING_SCHEMES = ["Soft Labels", "Hard Labels"]
 DEFAULT_LABELS_DICT = "App/labels_dict.json"
 
@@ -113,6 +113,63 @@ def _deconv_baselines_section(engine, answers):
                 answers,
             )
             entry["ignore_cells"] = [c.strip() for c in ignore.split(",") if c.strip()]
+        elif model == "epidish":
+            entry["reference_genome"] = engine.ask_one(
+                FieldSpec(
+                    key="_epidish_ref",
+                    label="[epidish] reference_genome",
+                    kind="select",
+                    choices=["hg38", "hg19"],
+                    default="hg38",
+                ),
+                answers,
+            )
+            method = engine.ask_one(
+                FieldSpec(
+                    key="_epidish_method",
+                    label="[epidish] method",
+                    kind="select",
+                    choices=["RPC", "CBS", "CP"],
+                    default="RPC",
+                ),
+                answers,
+            )
+            entry["method"] = method
+            if method == "RPC":
+                entry["maxit"] = engine.ask_one(
+                    FieldSpec(
+                        key="_epidish_maxit",
+                        label="[epidish] maxit (robust-regression iterations)",
+                        kind="int",
+                        default=50,
+                        validate=v.positive_int,
+                    ),
+                    answers,
+                )
+            elif method == "CP":
+                entry["constraint"] = engine.ask_one(
+                    FieldSpec(
+                        key="_epidish_constraint",
+                        label="[epidish] constraint",
+                        kind="select",
+                        choices=["inequality", "equality"],
+                        default="inequality",
+                    ),
+                    answers,
+                )
+            # Optional result-label override (blank -> auto: RPC='epidish',
+            # CBS='epidish_cbs', CP='epidish_cp').
+            name = engine.ask_one(
+                FieldSpec(
+                    key="_epidish_name",
+                    label="[epidish] result name (blank = auto by method)",
+                    kind="text",
+                    default="",
+                ),
+                answers,
+            )
+            if name and name.strip():
+                entry["name"] = name.strip()
         else:  # celfieish / celfie
             entry["reference_genome"] = engine.ask_one(
                 FieldSpec(
