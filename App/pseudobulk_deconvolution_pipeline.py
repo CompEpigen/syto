@@ -5,7 +5,7 @@ Runs one or more baseline deconvolution models on a pre-generated pseudobulk
 HDF5 file and saves predicted cell-type proportions as parquet files for
 downstream comparison.
 
-Supported models: uxm, celfieish, celfie
+Supported models: uxm, celfieish, celfie, epidish
 
 Output schema (one row per pseudobulk × cell type):
   pb_index          - pseudobulk identifier (position within the split)
@@ -150,13 +150,13 @@ def _baselines_worker(
 
     results: Dict[str, List[Dict[str, Any]]] = {}
     for deconvolver in s["models"]:
-        model_name = deconvolver.name
-        if model_name in ("uxm", "celfieish", "celfie"):
-            model_results = _run_baseline_on_reads(
-                reads, deconvolver, s, pb_index, target_proportions
-            )
-        else:
-            model_results = {}
+        # Every entry is a baseline deconvolver instantiated by
+        # ``_load_model_state``; run it through the unified helper.  (Matching on
+        # ``deconvolver.name`` would miss EpiDISH, whose name is set per method,
+        # e.g. 'epidish_cp' or a custom label.)
+        model_results = _run_baseline_on_reads(
+            reads, deconvolver, s, pb_index, target_proportions
+        )
         results.update(model_results)
 
     return pb_index, results
@@ -281,8 +281,42 @@ class PseudobulkDeconvolutionPipeline:
                 em_checkpoints=em_checkpoints,
             )
 
+        if model_name == "epidish":
+            from syto.data.atlases.celfieish_atlases import (
+                CpGBetaCountsMethylationAtlas,
+            )
+            from baselines.deconvolution.epidish.epidish import (
+                EpiDishDeconvolver,
+                epidish_result_name,
+            )
+
+            atlas_path = model_cfg["atlas_path"]
+            atlas = CpGBetaCountsMethylationAtlas(
+                atlas_name=model_cfg.get("atlas_name", Path(atlas_path).stem),
+                reference_genome=model_cfg.get("reference_genome", "hg38"),
+                atlas_path=atlas_path,
+            )
+            method = model_cfg.get("method", "RPC")
+            deconvolver = EpiDishDeconvolver(
+                atlas,
+                method=method,
+                maxit=model_cfg.get("maxit", 50),
+                nu_v=model_cfg.get("nu_v", (0.25, 0.5, 0.75)),
+                constraint=model_cfg.get("constraint", "inequality"),
+            )
+            # Disambiguate the output key by method (RPC->'epidish',
+            # CBS->'epidish_cbs', CP->'epidish_cp'); config ``name`` overrides.
+            deconvolver.name = epidish_result_name(method, model_cfg.get("name"))
+            self.logger.info(
+                "EpiDISH (%s): %d reference cell types -> output '%s'",
+                method,
+                len(atlas.ref_cells),
+                deconvolver.name,
+            )
+            return deconvolver
+
         raise ValueError(
-            f"Unknown model: {model_name!r}. Supported: uxm, celfieish, celfie"
+            f"Unknown model: {model_name!r}. Supported: uxm, celfieish, celfie, epidish"
         )
 
     # ------------------------------------------------------------------
