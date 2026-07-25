@@ -90,5 +90,69 @@ class TestBuildReportModel(unittest.TestCase):
             build_report_model(df)
 
 
+class TestEpidishAttributedToBaselines(unittest.TestCase):
+    """EpiDISH results must land in the baseline group, not syto."""
+
+    def _df(self, deconvolver):
+        rows = [
+            {
+                "FileName": "s.bam",
+                "CellType": ct,
+                "Classifier": "None",
+                "Deconvolver": deconvolver,
+                "Calibrator": "None",
+                "PredictedProportion": p,
+            }
+            for ct, p in {"A": 0.7, "B": 0.3}.items()
+        ]
+        return pd.DataFrame(rows)
+
+    def test_default_epidish_labels_are_baseline(self):
+        for label in ("epidish", "epidish_cbs", "epidish_cp"):
+            model = build_report_model(self._df(label), top_n=10)
+            info = next(m for m in model.methods if m.deconvolver == label)
+            self.assertTrue(info.is_baseline, msg=label)
+
+    def test_custom_name_baseline_via_config(self):
+        # A custom EpiDISH label is baseline only when passed in the set.
+        df = self._df("epidish_houseman")
+        model = build_report_model(
+            df, top_n=10, baseline_deconvolvers=["epidish_houseman"]
+        )
+        info = next(m for m in model.methods if m.deconvolver == "epidish_houseman")
+        self.assertTrue(info.is_baseline)
+
+
+class TestCollectBaselineLabels(unittest.TestCase):
+    class _FakeDec:
+        def __init__(self, name, em_checkpoints=None):
+            self.name = name
+            self.em_checkpoints = em_checkpoints
+
+    def test_appends_custom_names_after_defaults(self):
+        from syto.visualization.inference.deconvolution_data import (
+            collect_baseline_labels,
+        )
+
+        labels = collect_baseline_labels(
+            [self._FakeDec("epidish_houseman"), self._FakeDec("uxm")]
+        )
+        self.assertIn("epidish_houseman", labels)
+        self.assertIn("uxm", labels)  # default, not duplicated
+        self.assertEqual(labels[:3], ["uxm", "celfie", "celfieish"])
+        self.assertEqual(labels.count("uxm"), 1)
+
+    def test_expands_em_checkpoints(self):
+        from syto.visualization.inference.deconvolution_data import (
+            collect_baseline_labels,
+        )
+
+        labels = collect_baseline_labels(
+            [self._FakeDec("celfieish", em_checkpoints=[10, 50])]
+        )
+        self.assertIn("celfieish_10_steps", labels)
+        self.assertIn("celfieish_50_steps", labels)
+
+
 if __name__ == "__main__":
     unittest.main()

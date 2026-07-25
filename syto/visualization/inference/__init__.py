@@ -9,7 +9,11 @@ from typing import Any, Dict, Optional
 import pandas as pd
 from rich.console import Console
 
-from .deconvolution_data import BASELINE_DECONVOLVERS, build_report_model
+from .deconvolution_data import (
+    BASELINE_DECONVOLVERS,
+    build_report_model,
+    collect_baseline_labels,
+)
 from .deconvolution_cli import render_cli
 from .deconvolution_pdf import render_pdf
 

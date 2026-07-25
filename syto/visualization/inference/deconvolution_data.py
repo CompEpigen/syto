@@ -9,7 +9,40 @@ from typing import Optional, Sequence
 import numpy as np
 import pandas as pd
 
-BASELINE_DECONVOLVERS: tuple[str, ...] = ("uxm", "celfie", "celfieish")
+BASELINE_DECONVOLVERS: tuple[str, ...] = (
+    "uxm",
+    "celfie",
+    "celfieish",
+    "epidish",
+    "epidish_cbs",
+    "epidish_cp",
+)
+
+
+def collect_baseline_labels(deconvolvers, defaults: Sequence[str] = BASELINE_DECONVOLVERS):
+    """Ordered baseline result labels: defaults first, then the actual labels
+    produced by ``deconvolvers``.
+
+    Handles custom result names (e.g. an EpiDISH entry labelled
+    ``epidish_houseman``) and EM-checkpoint suffixes (``celfieish_10_steps``),
+    which a static list cannot know in advance.  Each deconvolver contributes
+    ``f"{name}_{n}_steps"`` per checkpoint when ``em_checkpoints`` is set, else
+    its ``name``.
+    """
+    labels = list(defaults)
+    seen = set(labels)
+    for d in deconvolvers:
+        checkpoints = getattr(d, "em_checkpoints", None)
+        names = (
+            [f"{d.name}_{n}_steps" for n in checkpoints]
+            if checkpoints
+            else [d.name]
+        )
+        for name in names:
+            if name not in seen:
+                labels.append(name)
+                seen.add(name)
+    return labels
 
 REQUIRED_COLUMNS = (
     "CellType",
