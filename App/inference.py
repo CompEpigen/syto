@@ -951,12 +951,21 @@ class InferencePipeline:
             )
 
             # ── Optional visualization report (opt-in) ─────────────────
-            viz_cfg = output_cfg.get("visualization", {})
+            viz_cfg = dict(output_cfg.get("visualization", {}))
             if viz_cfg.get("enabled", False):
                 try:
                     from syto.visualization.inference import (
                         render_deconvolution_report,
+                        collect_baseline_labels,
                     )
+
+                    # Attribute every configured baseline (incl. custom result
+                    # names like 'epidish_houseman' and EM-checkpoint suffixes)
+                    # to the baseline group, unless the user set it explicitly.
+                    if "baseline_deconvolvers" not in viz_cfg:
+                        viz_cfg["baseline_deconvolvers"] = collect_baseline_labels(
+                            self._baseline_deconvolvers
+                        )
 
                     render_deconvolution_report(
                         results_df, output_dir, viz_cfg, logger=self.logger
