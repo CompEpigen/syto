@@ -226,3 +226,5 @@ slurm-*.out
 
 # Local .sh
 run_multiple_jobs.sh
+# Local-only brainstorming specs & implementation plans
+docs/superpowers/
