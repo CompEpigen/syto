@@ -158,6 +158,22 @@ def _do_cp(mixture: np.ndarray, ref: np.ndarray, constraint: str = "inequality")
     return _normalize_nonneg(x)
 
 
+_METHOD_RESULT_NAME = {"RPC": "epidish", "CBS": "epidish_cbs", "CP": "epidish_cp"}
+
+
+def epidish_result_name(method: str, name: Optional[str] = None) -> str:
+    """Result label for an EpiDISH baseline entry.
+
+    An explicit ``name`` always wins.  Otherwise the label is derived from the
+    method so multiple EpiDISH entries (e.g. RPC + CP) don't collide under the
+    same key: ``RPC -> 'epidish'``, ``CBS -> 'epidish_cbs'``, ``CP ->
+    'epidish_cp'``.
+    """
+    if name:
+        return name
+    return _METHOD_RESULT_NAME.get(method, f"epidish_{method.lower()}")
+
+
 class EpiDishDeconvolver(BaselineDeconvolver):
     """EpiDISH reference-based deconvolution baseline (RPC / CBS / CP)."""
 

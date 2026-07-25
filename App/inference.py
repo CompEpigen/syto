@@ -23,6 +23,10 @@ from syto.data.atlases.uxm_atlases import mark_records_methyl_state
 from baselines.deconvolution.uxm.uxm import UXMDeconvolver
 from baselines.deconvolution.celfie.celfie import CelFiEDeconvolver
 from baselines.deconvolution.celfieish.celfieish import CelFiEISHDeconvolver
+from baselines.deconvolution.epidish.epidish import (
+    EpiDishDeconvolver,
+    epidish_result_name,
+)
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -812,6 +816,37 @@ class InferencePipeline:
                             em_checkpoints=em_checkpoints,
                         )
                     )
+
+            elif model == "epidish":
+                from syto.data.atlases.celfieish_atlases import (
+                    CpGBetaCountsMethylationAtlas,
+                )
+
+                atlas_path = cfg["atlas_path"]
+                atlas = CpGBetaCountsMethylationAtlas(
+                    atlas_name=cfg.get("atlas_name", Path(atlas_path).stem),
+                    reference_genome=cfg.get("reference_genome", "hg38"),
+                    atlas_path=atlas_path,
+                )
+                method = cfg.get("method", "RPC")
+                deconvolver = EpiDishDeconvolver(
+                    atlas,
+                    method=method,
+                    maxit=cfg.get("maxit", 50),
+                    nu_v=cfg.get("nu_v", (0.25, 0.5, 0.75)),
+                    constraint=cfg.get("constraint", "inequality"),
+                )
+                # Disambiguate the result label by method (RPC->'epidish',
+                # CBS->'epidish_cbs', CP->'epidish_cp'); an explicit config
+                # ``name`` overrides it.
+                deconvolver.name = epidish_result_name(method, cfg.get("name"))
+                self.logger.info(
+                    "EpiDISH baseline (%s): %d reference cell types -> result '%s'",
+                    method,
+                    len(atlas.ref_cells),
+                    deconvolver.name,
+                )
+                deconvolvers.append(deconvolver)
 
             else:
                 self.logger.warning(

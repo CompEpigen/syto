@@ -2,7 +2,25 @@ import unittest
 
 import numpy as np
 
-from baselines.deconvolution.epidish.epidish import _do_rpc, _normalize_nonneg
+from baselines.deconvolution.epidish.epidish import (
+    _do_rpc,
+    _normalize_nonneg,
+    epidish_result_name,
+)
+
+
+class TestEpidishResultName(unittest.TestCase):
+    def test_auto_names_by_method(self):
+        self.assertEqual(epidish_result_name("RPC"), "epidish")
+        self.assertEqual(epidish_result_name("CBS"), "epidish_cbs")
+        self.assertEqual(epidish_result_name("CP"), "epidish_cp")
+
+    def test_explicit_name_overrides(self):
+        self.assertEqual(epidish_result_name("CP", "epidish_houseman"), "epidish_houseman")
+
+    def test_blank_name_falls_back_to_auto(self):
+        self.assertEqual(epidish_result_name("RPC", ""), "epidish")
+        self.assertEqual(epidish_result_name("RPC", None), "epidish")
 
 
 class TestNormalizeNonneg(unittest.TestCase):
