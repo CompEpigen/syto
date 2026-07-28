@@ -16,7 +16,7 @@ from syto.deconvolution.evaluation import compute_deconvolution_metrics
 
 CALIBRATION_METHODS = [
     "uncalibrated",
-    "linear_clip0_normalize",
+    "linear_clip_normalize",
     "linear_simplex_projection",
     "vector_scaling",
 ]
@@ -40,7 +40,7 @@ class ConfidenceIntervalPipeline:
           sub-directories).
         * ``output_dir`` - where the summary CSV will be saved.
         * ``labels_dict_path`` - path to a JSON label dictionary.
-        * ``deconvolvers`` - list of dicts, each with a ``name`` key.
+        * ``deconvolver_names`` - list of deconvolver names.
         * ``calibration_methods`` (optional) - list of method names to
           evaluate.  Defaults to :data:`CALIBRATION_METHODS`.
         * ``n_resamples`` (optional) - bootstrap resamples (default 10 000).
@@ -87,8 +87,7 @@ class ConfidenceIntervalPipeline:
         dict
             ``{deconv_name: {method: metrics_dict}}``
         """
-        deconvolvers_cfg = self.config.get("deconvolvers", [])
-        deconv_names = [cfg["name"] for cfg in deconvolvers_cfg]
+        deconv_names = self.config.get("deconvolver_names", [])
 
         # ── Stage 1: Load predictions ─────────────────────────────
         predictions, target_proportions = self._load_predictions(deconv_names)
@@ -172,7 +171,7 @@ class ConfidenceIntervalPipeline:
                         deconv_dir, "vector_scaling_predictions.npz"
                     )
                 else:
-                    # e.g. "linear_clip0_normalize" -> "linear_clip0_normalize_predictions.npz"
+                    # e.g. "linear_clip_normalize" -> "linear_clip_normalize_predictions.npz"
                     pred_path = os.path.join(deconv_dir, f"{method}_predictions.npz")
 
                 if not os.path.exists(pred_path):
