@@ -19,7 +19,9 @@ BASELINE_DECONVOLVERS: tuple[str, ...] = (
 )
 
 
-def collect_baseline_labels(deconvolvers, defaults: Sequence[str] = BASELINE_DECONVOLVERS):
+def collect_baseline_labels(
+    deconvolvers, defaults: Sequence[str] = BASELINE_DECONVOLVERS
+):
     """Ordered baseline result labels: defaults first, then the actual labels
     produced by ``deconvolvers``.
 
@@ -34,15 +36,14 @@ def collect_baseline_labels(deconvolvers, defaults: Sequence[str] = BASELINE_DEC
     for d in deconvolvers:
         checkpoints = getattr(d, "em_checkpoints", None)
         names = (
-            [f"{d.name}_{n}_steps" for n in checkpoints]
-            if checkpoints
-            else [d.name]
+            [f"{d.name}_{n}_steps" for n in checkpoints] if checkpoints else [d.name]
         )
         for name in names:
             if name not in seen:
                 labels.append(name)
                 seen.add(name)
     return labels
+
 
 REQUIRED_COLUMNS = (
     "CellType",
@@ -65,11 +66,11 @@ class MethodInfo:
 
 @dataclass
 class ReportModel:
-    cell_types: list[str]           # ordered by consensus desc
-    methods: list[MethodInfo]       # ordered baseline | syto(hierarchy)
-    matrix: np.ndarray              # (n_cell_types, n_methods), aligned to the orders above
-    consensus: np.ndarray           # median per cell type
-    mean: np.ndarray                # mean per cell type
+    cell_types: list[str]  # ordered by consensus desc
+    methods: list[MethodInfo]  # ordered baseline | syto(hierarchy)
+    matrix: np.ndarray  # (n_cell_types, n_methods), aligned to the orders above
+    consensus: np.ndarray  # median per cell type
+    mean: np.ndarray  # mean per cell type
     spread_min: np.ndarray
     spread_max: np.ndarray
     q25: np.ndarray
@@ -144,16 +145,25 @@ def build_report_model(
     def sort_key(key: str):
         row = meta.loc[key]
         if _is_baseline(row["Deconvolver"], baseline_deconvolvers):
-            return (0, baseline_rank.get(row["Deconvolver"], 99), str(row["Calibrator"]), "")
-        return (1, str(row["Classifier"]), str(row["Deconvolver"]), str(row["Calibrator"]))
+            return (
+                0,
+                baseline_rank.get(row["Deconvolver"], 99),
+                str(row["Calibrator"]),
+                "",
+            )
+        return (
+            1,
+            str(row["Classifier"]),
+            str(row["Deconvolver"]),
+            str(row["Calibrator"]),
+        )
 
     ordered_keys = sorted(pivot.columns, key=sort_key)
 
     # reindex matrix to (cell_type order, method order)
-    matrix = (
-        pivot.reindex(index=[pivot.index[i] for i in ct_order], columns=ordered_keys)
-        .to_numpy(dtype=float)
-    )
+    matrix = pivot.reindex(
+        index=[pivot.index[i] for i in ct_order], columns=ordered_keys
+    ).to_numpy(dtype=float)
     consensus_ordered = consensus[ct_order]
 
     methods: list[MethodInfo] = []
@@ -173,7 +183,9 @@ def build_report_model(
         )
 
     file_name = (
-        str(df["FileName"].iloc[0]) if "FileName" in df.columns and len(df) else "unknown"
+        str(df["FileName"].iloc[0])
+        if "FileName" in df.columns and len(df)
+        else "unknown"
     )
 
     return ReportModel(

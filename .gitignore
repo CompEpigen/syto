@@ -203,6 +203,7 @@ output/*
 poetry.toml
 tmp_*
 *.pdf
+*.gif
 
 # Singularity/Docker artifacts
 *.sif

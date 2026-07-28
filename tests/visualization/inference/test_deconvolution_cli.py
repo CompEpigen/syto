@@ -18,10 +18,10 @@ class TestRenderCli(unittest.TestCase):
 
     def test_renders_without_error_and_includes_key_content(self):
         out = self._render()
-        self.assertIn("Deconvolution", out)   # rule title
-        self.assertIn("uxm", out)             # a method key fragment
-        self.assertIn("baseline", out)        # group label
-        self.assertIn("syto", out)            # group label
+        self.assertIn("Deconvolution", out)  # rule title
+        self.assertIn("uxm", out)  # a method key fragment
+        self.assertIn("baseline", out)  # group label
+        self.assertIn("syto", out)  # group label
 
     def test_known_truth_line_present(self):
         out = self._render(known_truth="A")

@@ -16,7 +16,9 @@ class TestEpidishResultName(unittest.TestCase):
         self.assertEqual(epidish_result_name("CP"), "epidish_cp")
 
     def test_explicit_name_overrides(self):
-        self.assertEqual(epidish_result_name("CP", "epidish_houseman"), "epidish_houseman")
+        self.assertEqual(
+            epidish_result_name("CP", "epidish_houseman"), "epidish_houseman"
+        )
 
     def test_blank_name_falls_back_to_auto(self):
         self.assertEqual(epidish_result_name("RPC", ""), "epidish")
@@ -115,8 +117,9 @@ import pandas as pd
 from baselines.deconvolution.epidish.epidish import EpiDishDeconvolver
 
 
-def _make_atlas_mock(beta, cpg_lookup=None, n_cpgs=3, ref_cells=("ct1", "ct2"),
-                     in_atlas=True):
+def _make_atlas_mock(
+    beta, cpg_lookup=None, n_cpgs=3, ref_cells=("ct1", "ct2"), in_atlas=True
+):
     atlas = MagicMock()
     atlas.__contains__ = MagicMock(return_value=in_atlas)
     atlas.get_cpg_lookup.return_value = cpg_lookup or {10: 0, 11: 1, 12: 2}

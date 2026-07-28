@@ -84,9 +84,7 @@ class _CelfieISHModel:
         # roughly halves it.  The M-step reduction is still accumulated in
         # float64 (see two_step) to keep the proportion estimates precise.
         self.log_term1_cat = (
-            np.hstack(self.log_term1)
-            if self.log_term1
-            else np.zeros((self.t, 0))
+            np.hstack(self.log_term1) if self.log_term1 else np.zeros((self.t, 0))
         ).astype(np.float32)
 
     # ------------------------------------------------------------------
