@@ -183,7 +183,7 @@ def prepare_methylbert_list(
             else:
                 label = row["soft_label"] if soft_labels else row["label"]
 
-            o_label = row["original_label"]
+            o_label = row.get("original_label", None)
             grg_label = row[grg_label_column]
             grg_ctype = row[grg_ctype_label]
 
