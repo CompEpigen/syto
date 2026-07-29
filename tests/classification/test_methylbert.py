@@ -482,7 +482,9 @@ class TestLabelFreeInferencePath(unittest.TestCase):
 
         def fake_predict(dataset, batch_size=None):
             # Every item must be collatable without a label, as at real inference.
-            batch = methylbert_finetune_collator([dataset[i] for i in range(len(dataset))])
+            batch = methylbert_finetune_collator(
+                [dataset[i] for i in range(len(dataset))]
+            )
             captured["has_labels"] = "labels" in batch
             return (np.tile([0.25, 0.75], (len(dataset), 1)),)
 

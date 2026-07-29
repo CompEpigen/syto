@@ -115,7 +115,9 @@ def _do_cbs(mixture: np.ndarray, ref: np.ndarray, nu_v=(0.25, 0.5, 0.75)) -> np.
     return best_coef
 
 
-def _do_cp(mixture: np.ndarray, ref: np.ndarray, constraint: str = "inequality") -> np.ndarray:
+def _do_cp(
+    mixture: np.ndarray, ref: np.ndarray, constraint: str = "inequality"
+) -> np.ndarray:
     """Constrained Projection (EpiDISH CP, Houseman): quadratic program via OSQP.
 
     Minimizes ``||ref @ w - mixture||^2`` subject to ``w >= 0`` and either
@@ -143,8 +145,15 @@ def _do_cp(mixture: np.ndarray, ref: np.ndarray, constraint: str = "inequality")
 
     solver = osqp.OSQP()
     solver.setup(
-        P, q, A, lower, upper,
-        verbose=False, eps_abs=1e-8, eps_rel=1e-8, max_iter=20000,
+        P,
+        q,
+        A,
+        lower,
+        upper,
+        verbose=False,
+        eps_abs=1e-8,
+        eps_rel=1e-8,
+        max_iter=20000,
     )
     res = solver.solve()
 

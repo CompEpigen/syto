@@ -689,9 +689,7 @@ class TestDnabert2OnTargetMask(unittest.TestCase):
             lazy_tokenization=True,
             grg_label_column="dmr_ctype_label",
         )
-        np.testing.assert_array_equal(
-            ds.on_target_mask, np.array([True, False, True])
-        )
+        np.testing.assert_array_equal(ds.on_target_mask, np.array([True, False, True]))
 
     def test_on_target_mask_none_when_columns_missing(self):
         frame = self._frame([0, 1], [0, 1]).drop(columns=["original_label"])

@@ -310,6 +310,7 @@ class DNABERT2FineTuneDataset(Dataset):
             )
         return item
 
+
 @dataclass
 class DataCollatorForFineTunedDataset:
     """Collate examples for supervised fine-tuning."""

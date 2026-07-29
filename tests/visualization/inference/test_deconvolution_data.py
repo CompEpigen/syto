@@ -9,8 +9,8 @@ from syto.visualization.inference.deconvolution_data import build_report_model
 def synthetic_df():
     """3 cell types (A>B>C by consensus), 3 methods: 1 baseline + 2 syto."""
     data = {
-        ("methylbert", "uxm", "None"):       {"A": 0.6, "B": 0.3, "C": 0.1},
-        ("methylbert", "xgboost", "None"):   {"A": 0.5, "B": 0.4, "C": 0.1},
+        ("methylbert", "uxm", "None"): {"A": 0.6, "B": 0.3, "C": 0.1},
+        ("methylbert", "xgboost", "None"): {"A": 0.5, "B": 0.4, "C": 0.1},
         ("methylbert", "xgboost", "linear"): {"A": 0.4, "B": 0.5, "C": 0.1},
     }
     rows = []

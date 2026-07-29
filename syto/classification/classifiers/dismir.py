@@ -547,7 +547,6 @@ class Dismir(AbstractReadClassifier):
             dtype=int,
         )
 
-        
         onehot = np.zeros((len(dna_seq), self.max_sequence_length, 5), dtype=np.float32)
 
         for i, tmp_seq in enumerate(dna_seq):

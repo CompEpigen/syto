@@ -21,7 +21,9 @@ def _sparkline(values: np.ndarray) -> str:
     vmax = np.nanmax(v)
     if not np.isfinite(vmax) or vmax <= 0:
         return _SPARK[0] * v.size
-    idx = np.clip(np.round(v / vmax * (len(_SPARK) - 1)).astype(int), 0, len(_SPARK) - 1)
+    idx = np.clip(
+        np.round(v / vmax * (len(_SPARK) - 1)).astype(int), 0, len(_SPARK) - 1
+    )
     return "".join(_SPARK[i] for i in idx)
 
 

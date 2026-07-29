@@ -91,8 +91,6 @@ def apply_splits(df, plan, *, remap=None):
         df.loc[idx, "split"] = assign
 
     if remap:
-        df["split"] = df["split"].map(
-            lambda s: remap.get(s, s) if pd.notna(s) else s
-        )
+        df["split"] = df["split"].map(lambda s: remap.get(s, s) if pd.notna(s) else s)
 
     return df
