@@ -61,10 +61,10 @@ def validate_config(config: Dict[str, Any], task: str) -> None:
             "output_dir",
             "labels_dict_path",
         ],
+        # pseudobulk_h5_path / features_mask_path / deconvolvers_dir are only
+        # required for deconvolvers that must be loaded and evaluated; see the
+        # conditional check below.
         "fit_calibration": [
-            "pseudobulk_h5_path",
-            "features_mask_path",
-            "deconvolvers_dir",
             "output_dir",
             "labels_dict_path",
         ],
@@ -95,6 +95,28 @@ def validate_config(config: Dict[str, Any], task: str) -> None:
     for field in required_fields[task]:
         if field not in config:
             raise ValueError(f"Missing required field '{field}' for task '{task}'")
+
+    # Calibrating deconvolvers whose predictions are already stored on disk
+    # (the baselines) needs no pseudobulk file, feature mask, or saved model.
+    if task == "fit_calibration":
+        model_backed = [
+            cfg
+            for cfg in config.get("deconvolvers", [])
+            if not cfg.get("predictions_dir")
+        ]
+        if model_backed:
+            for field in (
+                "pseudobulk_h5_path",
+                "features_mask_path",
+                "deconvolvers_dir",
+            ):
+                if field not in config:
+                    names = [cfg.get("name") for cfg in model_backed]
+                    raise ValueError(
+                        f"Missing required field '{field}' for task '{task}': "
+                        f"deconvolver(s) {names} have no 'predictions_dir' and "
+                        "must be loaded and evaluated"
+                    )
 
     # Validate model-specific configuration
     # (not needed for generate_pseudobulk or fit_deconvolution)

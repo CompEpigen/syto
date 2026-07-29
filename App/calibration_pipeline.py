@@ -8,6 +8,14 @@ This pipeline takes as input:
 - path to folder with saved deconvolvers (named expected to match the output of
 the deconvolution pipeline)
 
+A deconvolver may instead declare ``predictions_dir``, pointing at a directory
+of already-computed long-format parquets written by the pseudobulk
+deconvolution pipeline (see ``App/pseudobulk_deconvolution_pipeline.py``).  This
+is how the baselines are calibrated: their predictions and targets are read
+straight off disk, so no HDF5 file, feature mask, or saved model is needed.
+Those three inputs become optional whenever every configured deconvolver is
+prediction-backed.
+
 and outputs for each deconvolver:
 - the weights of the linear calibrators and the weights of the VectorScalingCalibrator with CV
 - the predictions of the deconvolver (on test and val set) without calibration,
@@ -16,10 +24,12 @@ and with VectorScalingCalibrator with CV calibration
 
 
 The pipeline proceeds in the following steps:
-1. Read the pseudobulk feature matrices from the HDF5 file, apply the feature
-   mask, and load the deconvolvers
+1. Read the pseudobulk feature matrices from the HDF5 file and apply the feature
+   mask (skipped when every deconvolver is prediction-backed)
 2. For each deconvolver:
-    a. evaluate the deconvolver on the validation set and test set, saving the predictions
+    a. obtain validation and test predictions - either by loading the model and
+    evaluating it on the feature matrices, or by reading a stored parquet -
+    and save them
     b. fit a linear calibrator on the validation set
         i. save the predictions of the linear calibrator on the validation set and test set
         for both normalization methods (clip0-norm, simplex projection)
@@ -54,6 +64,129 @@ from syto.deconvolution.deep_deconvolvers.mlp import MLPDeconvolver
 
 LINEAR_NORM_METHODS = ["clip-normalize", "simplex-projection"]
 
+# Columns every stored deconvolution parquet carries; the remaining column
+# holds the model's predictions and is named after the model/checkpoint.
+BASELINE_KEY_COLUMNS = ("pb_index", "cell_type", "target_proportion")
+
+
+def load_predictions_from_parquet(
+    predictions_dir: str,
+    labels_dict: Dict[int, str],
+    splits: Tuple[str, ...] = ("valid", "test"),
+    prediction_column: str | None = None,
+    num_output_labels: int | None = None,
+    logger: logging.Logger | None = None,
+) -> Dict[str, Tuple[np.ndarray, np.ndarray]]:
+    """Read stored deconvolution results into prediction/target matrices.
+
+    Reads ``{predictions_dir}/{split}_deconvolution_results.parquet`` - the
+    long-format output of the pseudobulk deconvolution pipeline, one row per
+    (pseudobulk, cell type) - and pivots it into the dense ``(n_samples,
+    n_classes)`` layout the calibrators expect.
+
+    Rows are ordered by ``pb_index`` and columns by ``labels_dict`` key, which
+    reproduces the ordering of the corresponding HDF5 split (``pb_index`` is the
+    position within the split), so the resulting matrices are row-aligned with
+    those of the model-backed deconvolvers.
+
+    Parameters
+    ----------
+    predictions_dir : str
+        Directory holding the per-split parquets.
+    labels_dict : dict
+        ``{index: cell_type_name}`` mapping defining the column order.
+    splits : tuple of str
+        Splits to read.  All of them must be present.
+    prediction_column : str, optional
+        Name of the prediction column.  Inferred when the parquet has exactly
+        one non-key column.
+    num_output_labels : int, optional
+        Keep only the first ``num_output_labels`` labels, matching the
+        truncation applied to the HDF5 proportions.
+    logger : logging.Logger, optional
+
+    Returns
+    -------
+    dict
+        ``{split: (predictions, targets)}``, both ``(n_samples, n_classes)``.
+    """
+    class_names = [labels_dict[i] for i in sorted(labels_dict)]
+    if num_output_labels is not None:
+        class_names = class_names[:num_output_labels]
+
+    out: Dict[str, Tuple[np.ndarray, np.ndarray]] = {}
+    for split in splits:
+        path = os.path.join(predictions_dir, f"{split}_deconvolution_results.parquet")
+        if not os.path.exists(path):
+            raise FileNotFoundError(
+                f"No stored deconvolution results for split '{split}': {path}"
+            )
+
+        df = pd.read_parquet(path)
+
+        missing_cols = [c for c in BASELINE_KEY_COLUMNS if c not in df.columns]
+        if missing_cols:
+            raise ValueError(
+                f"{path} is missing required column(s) {missing_cols}; "
+                f"found {list(df.columns)}"
+            )
+
+        column = prediction_column
+        if column is None:
+            candidates = [c for c in df.columns if c not in BASELINE_KEY_COLUMNS]
+            if len(candidates) != 1:
+                raise ValueError(
+                    f"Cannot infer the prediction column of {path}: expected exactly "
+                    f"one non-key column but found {candidates}. Set "
+                    "'prediction_column' on the deconvolver config to disambiguate."
+                )
+            column = candidates[0]
+        elif column not in df.columns:
+            raise ValueError(
+                f"prediction_column '{column}' not in {path}; "
+                f"found {list(df.columns)}"
+            )
+
+        if df.duplicated(subset=["pb_index", "cell_type"]).any():
+            n_dup = int(df.duplicated(subset=["pb_index", "cell_type"]).sum())
+            raise ValueError(
+                f"{path} has {n_dup} duplicate (pb_index, cell_type) row(s); "
+                "the file is not a well-formed deconvolution result."
+            )
+
+        wide = df.pivot(
+            index="pb_index",
+            columns="cell_type",
+            values=[column, "target_proportion"],
+        ).sort_index()
+
+        absent = [c for c in class_names if c not in wide[column].columns]
+        if absent:
+            raise ValueError(
+                f"{path} has no rows for cell type(s) {absent}; expected all of "
+                f"{class_names}"
+            )
+
+        predictions = wide[column].reindex(columns=class_names).to_numpy(np.float64)
+        targets = (
+            wide["target_proportion"].reindex(columns=class_names).to_numpy(np.float64)
+        )
+
+        if np.isnan(predictions).any() or np.isnan(targets).any():
+            raise ValueError(
+                f"{path} does not cover every (pb_index, cell_type) pair; "
+                "the pivoted matrices contain missing entries."
+            )
+
+        out[split] = (predictions, targets)
+        if logger is not None:
+            logger.info(
+                f"    {split}: predictions={predictions.shape} "
+                f"from column '{column}' of {path}"
+            )
+
+    return out
+
 
 class CalibratorFittingPipeline:
     """Orchestrate calibrators fitting end-to-end.
@@ -78,12 +211,31 @@ class CalibratorFittingPipeline:
         self.num_output_labels = config.get("num_output_labels", len(self.labels_dict))
         self.num_input_labels = config.get("num_input_labels", self.num_output_labels)
 
+        self.deconvolvers_cfg: List[dict] = config.get("deconvolvers", [])
+        self._check_unique_names()
+
+        # Deconvolvers reading their predictions off disk need none of the
+        # model-evaluation inputs below, so those are only required when at
+        # least one deconvolver has to be loaded and run.
+        self.model_backed_cfgs = [
+            cfg for cfg in self.deconvolvers_cfg if not cfg.get("predictions_dir")
+        ]
+        required_for_models = bool(self.model_backed_cfgs)
+
         # Input: consolidated pseudobulk HDF5 file (pseudobulks + proportions)
-        self.pseudobulk_h5_path = config["pseudobulk_h5_path"]
-        self.reader = PseudobulkHDF5Reader(self.pseudobulk_h5_path, logger=self.logger)
+        self.pseudobulk_h5_path = self._get_model_input(
+            "pseudobulk_h5_path", required_for_models
+        )
+        self.reader = (
+            PseudobulkHDF5Reader(self.pseudobulk_h5_path, logger=self.logger)
+            if self.pseudobulk_h5_path
+            else None
+        )
 
         # Feature-selection mask (produced by the deconvolution pipeline)
-        self.features_mask_path = config["features_mask_path"]
+        self.features_mask_path = self._get_model_input(
+            "features_mask_path", required_for_models
+        )
 
         # Splits to load from the HDF5 file
         self.splits = config.get("splits", ["train", "valid", "test"])
@@ -93,7 +245,41 @@ class CalibratorFittingPipeline:
         os.makedirs(self.output_dir, exist_ok=True)
 
         # Deconvolver directory (where saved models live)
-        self.deconvolvers_dir = config["deconvolvers_dir"]
+        self.deconvolvers_dir = self._get_model_input(
+            "deconvolvers_dir", required_for_models
+        )
+
+    def _get_model_input(self, key: str, required: bool) -> Any:
+        """Fetch a config key needed only for model-backed deconvolvers."""
+        if key in self.config:
+            return self.config[key]
+        if required:
+            names = [cfg.get("name") for cfg in self.model_backed_cfgs]
+            raise ValueError(
+                f"Missing '{key}', required because deconvolver(s) {names} have no "
+                "'predictions_dir' and must be loaded and evaluated."
+            )
+        return None
+
+    def _check_unique_names(self) -> None:
+        """Reject duplicate deconvolver names.
+
+        Each name becomes an output sub-directory, so duplicates would silently
+        overwrite one another.  This bites in practice because the same model
+        appears under several atlases (e.g. ``uxm`` and
+        ``uxm_trainonly_atlas/uxm``) and must be given distinct names.
+        """
+        seen, duplicates = set(), []
+        for cfg in self.deconvolvers_cfg:
+            name = cfg["name"]
+            if name in seen:
+                duplicates.append(name)
+            seen.add(name)
+        if duplicates:
+            raise ValueError(
+                f"Duplicate deconvolver name(s) {sorted(set(duplicates))} in config; "
+                "names must be unique because each one names an output directory."
+            )
 
     # ═══════════════════════════════════════════════════════════════
     #  Public API
@@ -107,30 +293,28 @@ class CalibratorFittingPipeline:
         dict
             Summary of calibration results per deconvolver.
         """
-        # ── Stage 1: Load data and deconvolvers ───────────────────
-        features_dict, proportions_dict = self._stage1_load_features()
-        deconvolvers = self._stage1_load_deconvolvers()
-
-        features_valid = features_dict["valid"]
-        y_valid = proportions_dict["valid"]
-
-        features_test = features_dict.get("test", features_valid)
-        y_test = proportions_dict.get("test", y_valid)
+        # ── Stage 1: Load data ────────────────────────────────────
+        if self.model_backed_cfgs:
+            features_dict, proportions_dict = self._stage1_load_features()
+        else:
+            self.logger.info(
+                "Stage 1: every deconvolver is prediction-backed, skipping the "
+                "pseudobulk HDF5 and feature-mask load"
+            )
+            features_dict, proportions_dict = {}, {}
 
         results: Dict[str, Any] = {}
 
         # ── Stage 2: For each deconvolver, calibrate ─────────────
-        for deconv_name, deconv_cfg, model in deconvolvers:
+        for deconv_cfg in self.deconvolvers_cfg:
+            deconv_name = deconv_cfg["name"]
             self.logger.info(f"Processing deconvolver: {deconv_name}")
             try:
                 deconv_results = self._process_deconvolver(
                     deconv_name,
                     deconv_cfg,
-                    model,
-                    features_valid,
-                    y_valid,
-                    features_test,
-                    y_test,
+                    features_dict,
+                    proportions_dict,
                 )
                 results[deconv_name] = deconv_results
             except Exception as e:  # pylint: disable=broad-exception-caught
@@ -198,79 +382,150 @@ class CalibratorFittingPipeline:
 
         return features_dict, proportions_dict
 
-    def _stage1_load_deconvolvers(
-        self,
-    ) -> List[Tuple[str, dict, Any]]:
-        """Load all configured deconvolvers from disk.
+    def _load_deconvolver(self, name: str) -> Any:
+        """Load a single saved deconvolver from ``deconvolvers_dir``."""
+        self.logger.info(f"  Loading deconvolver '{name}' from {self.deconvolvers_dir}")
 
-        Returns list of (name, config_dict, loaded_model) tuples.
-        """
-        self.logger.info(f"Stage 1b: Loading deconvolvers from {self.deconvolvers_dir}")
-
-        deconvolvers_cfg = self.config.get("deconvolvers", [])
-        loaded: List[Tuple[str, dict, Any]] = []
-
-        for cfg in deconvolvers_cfg:
-            name = cfg["name"]
-            self.logger.info(f"  Loading deconvolver: {name}")
-
-            if name == "xgb":
-                model = XGBoostDeconvolver.load(
-                    os.path.join(self.deconvolvers_dir, "xgb_deconvolver.joblib")
-                )
-            elif name == "swn":
-                weights_path = Path(self.deconvolvers_dir) / "swn_best_deconvolver.pt"
-                metadata_path = (
-                    Path(self.deconvolvers_dir) / "swn_architecture_meta.json"
-                )
-                model = SWNDeconvolver.load(
-                    path=weights_path,
-                    metadata_path=metadata_path,
-                )
-            elif name == "mlp":
-                weights_path = Path(self.deconvolvers_dir) / "mlp_best_deconvolver.pt"
-                metadata_path = (
-                    Path(self.deconvolvers_dir) / "mlp_architecture_meta.json"
-                )
-                model = MLPDeconvolver.load(
-                    path=weights_path,
-                    metadata_path=metadata_path,
-                )
-            elif name == "nnls":
-                model = NNLSDeconvolver.load(
-                    os.path.join(self.deconvolvers_dir, "nnls_deconvolver.joblib")
-                )
-            elif name == "psls":
-                model = PSLSDeconvolver.load(
-                    os.path.join(self.deconvolvers_dir, "psls_deconvolver.joblib")
-                )
-            else:
-                self.logger.warning(f"  Unknown deconvolver '{name}', skipping")
-                continue
-
-            loaded.append((name, cfg, model))
-
-        self.logger.info(f"  Loaded {len(loaded)} deconvolvers")
-        return loaded
+        if name == "xgb":
+            return XGBoostDeconvolver.load(
+                os.path.join(self.deconvolvers_dir, "xgb_deconvolver.joblib")
+            )
+        if name == "swn":
+            return SWNDeconvolver.load(
+                path=Path(self.deconvolvers_dir) / "swn_best_deconvolver.pt",
+                metadata_path=Path(self.deconvolvers_dir)
+                / "swn_architecture_meta.json",
+            )
+        if name == "mlp":
+            return MLPDeconvolver.load(
+                path=Path(self.deconvolvers_dir) / "mlp_best_deconvolver.pt",
+                metadata_path=Path(self.deconvolvers_dir)
+                / "mlp_architecture_meta.json",
+            )
+        if name == "nnls":
+            return NNLSDeconvolver.load(
+                os.path.join(self.deconvolvers_dir, "nnls_deconvolver.joblib")
+            )
+        if name == "psls":
+            return PSLSDeconvolver.load(
+                os.path.join(self.deconvolvers_dir, "psls_deconvolver.joblib")
+            )
+        raise ValueError(
+            f"Unknown deconvolver '{name}' with no 'predictions_dir'; expected one of "
+            "xgb, swn, mlp, nnls, psls, or a config pointing at stored predictions."
+        )
 
     # ═══════════════════════════════════════════════════════════════
     #  Stage 2: Per-deconvolver calibration
     # ═══════════════════════════════════════════════════════════════
 
+    def _load_uncalibrated(
+        self,
+        name: str,
+        cfg: dict,
+        deconv_out: str,
+        features_dict: Dict[str, np.ndarray],
+        proportions_dict: Dict[str, np.ndarray],
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Obtain uncalibrated val/test predictions and their targets.
+
+        Resolution order:
+          1. a cached ``uncalibrated_predictions.npz`` from a previous run
+          2. stored parquet results, when the config gives ``predictions_dir``
+          3. loading the saved model and evaluating it on the feature matrices
+
+        Returns ``(val_pred, y_valid, test_pred, y_test)``.
+        """
+        uncalibrated_predictions_path = os.path.join(
+            deconv_out, "uncalibrated_predictions.npz"
+        )
+        if os.path.exists(uncalibrated_predictions_path):
+            self.logger.info(
+                f"    Found existing uncalibrated predictions at {uncalibrated_predictions_path},"
+                " loading instead of re-evaluating"
+            )
+            data = np.load(uncalibrated_predictions_path)
+            return (
+                data["val_pred"],
+                data["val_target"],
+                data["test_pred"],
+                data["test_target"],
+            )
+
+        predictions_dir = cfg.get("predictions_dir")
+        if predictions_dir:
+            self.logger.info(f"    Reading stored predictions from {predictions_dir}")
+            per_split = load_predictions_from_parquet(
+                predictions_dir,
+                self.labels_dict,
+                splits=self.splits,
+                prediction_column=cfg.get("prediction_column"),
+                num_output_labels=self.num_output_labels,
+                logger=self.logger,
+            )
+            val_pred, y_valid = per_split["valid"]
+            test_pred, y_test = per_split.get("test", per_split["valid"])
+            self._check_targets_match_hdf5(name, y_valid, y_test, proportions_dict)
+        else:
+            model = self._load_deconvolver(name)
+            features_valid = features_dict["valid"]
+            y_valid = proportions_dict["valid"]
+            features_test = features_dict.get("test", features_valid)
+            y_test = proportions_dict.get("test", y_valid)
+            val_pred = model.predict(features_valid, **cfg.get("params", {}))
+            test_pred = model.predict(features_test, **cfg.get("params", {}))
+
+        np.savez_compressed(
+            uncalibrated_predictions_path,
+            val_pred=val_pred,
+            test_pred=test_pred,
+            val_target=y_valid,
+            test_target=y_test,
+        )
+        return val_pred, y_valid, test_pred, y_test
+
+    def _check_targets_match_hdf5(
+        self,
+        name: str,
+        y_valid: np.ndarray,
+        y_test: np.ndarray,
+        proportions_dict: Dict[str, np.ndarray],
+    ) -> None:
+        """Verify parquet targets agree with the HDF5 ones, when both are loaded.
+
+        Only applies to mixed configs.  A mismatch means the stored predictions
+        were produced from a different pseudobulk file than the one being
+        calibrated against, which would make the comparison meaningless.
+        """
+        for split, y_parquet in (("valid", y_valid), ("test", y_test)):
+            y_hdf5 = proportions_dict.get(split)
+            if y_hdf5 is None:
+                continue
+            if y_hdf5.shape != y_parquet.shape:
+                raise ValueError(
+                    f"[{name}] stored {split} targets have shape {y_parquet.shape} but "
+                    f"the pseudobulk HDF5 gives {y_hdf5.shape}; the stored predictions "
+                    "were computed from a different pseudobulk file."
+                )
+            if not np.allclose(y_hdf5, y_parquet):
+                max_diff = float(np.abs(y_hdf5 - y_parquet).max())
+                raise ValueError(
+                    f"[{name}] stored {split} target proportions disagree with the "
+                    f"pseudobulk HDF5 (max abs diff {max_diff:.6g}); the stored "
+                    "predictions were computed from a different pseudobulk file."
+                )
+
     def _process_deconvolver(
         self,
         name: str,
         cfg: dict,
-        model: Any,
-        features_valid: np.ndarray,
-        y_valid: np.ndarray,
-        features_test: np.ndarray,
-        y_test: np.ndarray,
+        features_dict: Dict[str, np.ndarray],
+        proportions_dict: Dict[str, np.ndarray],
     ) -> Dict[str, Any]:
         """Run the full calibration workflow for a single deconvolver.
 
         Steps:
-          a. Evaluate uncalibrated predictions on val and test
+          a. Obtain uncalibrated predictions on val and test
           b. Fit LinearCalibrator on val, evaluate with 2 normalisation methods
           c. Fit VectorScalingCalibrator with CV on val, evaluate on val and test
         """
@@ -281,28 +536,9 @@ class CalibratorFittingPipeline:
 
         # ── 2a: Uncalibrated evaluation ───────────────────────────
         self.logger.info(f"  [{name}] Evaluating uncalibrated predictions ...")
-        uncalibrated_predictions_path = os.path.join(
-            deconv_out, "uncalibrated_predictions.npz"
+        val_pred, y_valid, test_pred, y_test = self._load_uncalibrated(
+            name, cfg, deconv_out, features_dict, proportions_dict
         )
-        if os.path.exists(uncalibrated_predictions_path):
-            self.logger.info(
-                f"    Found existing uncalibrated predictions at {uncalibrated_predictions_path},"
-                " loading instead of re-evaluating"
-            )
-            data = np.load(uncalibrated_predictions_path)
-            val_pred = data["val_pred"]
-            test_pred = data["test_pred"]
-        else:
-            val_pred = model.predict(features_valid, **cfg.get("params", {}))
-            test_pred = model.predict(features_test, **cfg.get("params", {}))
-
-            np.savez_compressed(
-                os.path.join(deconv_out, "uncalibrated_predictions.npz"),
-                val_pred=val_pred,
-                test_pred=test_pred,
-                val_target=y_valid,
-                test_target=y_test,
-            )
 
         val_metrics = compute_deconvolution_metrics(val_pred, y_valid)
         test_metrics = compute_deconvolution_metrics(test_pred, y_test)
