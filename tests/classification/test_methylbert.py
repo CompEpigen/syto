@@ -1,6 +1,7 @@
 import unittest
 import tempfile
 import os
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 from parameterized import parameterized
@@ -23,9 +24,11 @@ from syto.classification.classifiers.methylbert import (
     _line2tokens_finetune,
     _line2tokens_pretrain,
     prepare_methylbert_list,
+    build_on_target_recorder,
     _chunk_tokens,
     _generate_valid_tokens,
 )
+from syto.classification.fit_diagnostics import data_list_column
 
 
 class TestChunkTokens(unittest.TestCase):
@@ -1482,3 +1485,62 @@ class TestMethylBertUseBalancedTrainer(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestBuildOnTargetRecorder(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.out = Path(self._tmp.name)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_none_config_enables_with_defaults(self):
+        recorder = build_on_target_recorder(None, self.out)
+        self.assertIsNotNone(recorder)
+        self.assertEqual(recorder.plot_dir, self.out / "on_target_score_plots")
+        self.assertEqual(recorder.bw_adjust, 0.01)
+
+    def test_disabled_config_returns_none(self):
+        self.assertIsNone(build_on_target_recorder({"enabled": False}, self.out))
+        self.assertFalse((self.out / "on_target_score_plots").exists())
+
+    def test_respects_dirname_and_bw_adjust(self):
+        recorder = build_on_target_recorder(
+            {"enabled": True, "dirname": "plots", "bw_adjust": 0.5}, self.out
+        )
+        self.assertEqual(recorder.plot_dir, self.out / "plots")
+        self.assertEqual(recorder.bw_adjust, 0.5)
+
+    def test_dirname_dot_puts_plots_flat_in_output_dir(self):
+        recorder = build_on_target_recorder({"dirname": "."}, self.out)
+        self.assertEqual(recorder.plot_dir.resolve(), self.out.resolve())
+
+
+class TestOnTargetMetadataFromDataList(unittest.TestCase):
+    def test_prepare_methylbert_list_carries_the_plot_metadata(self):
+        # The two columns the recorder needs must exist, and on_target_mask
+        # must equal (original_label == dmr_ctype_label).
+        df = pd.DataFrame(
+            {
+                "input_ids": ["ACGACGACG", "ACGACGACG"],
+                "methylation_ids": ["012012012", "012012012"],
+                "label": [1, 1],
+                "original_label": [1, 0],
+                "dmr_ctype_label": [1, 1],
+            }
+        )
+        data_list = prepare_methylbert_list(
+            df, grg_label_column="dmr_ctype_label", seq_length=4, stride=2
+        )
+        header = data_list[0]
+        self.assertIn("grg_ctype", header)
+        self.assertIn("on_target_mask", header)
+
+        dmr_labels = data_list_column(data_list, "grg_ctype")
+        mask = data_list_column(data_list, "on_target_mask").astype(bool)
+        self.assertEqual(len(dmr_labels), len(data_list) - 1)
+        # Read 0 is on target (1 == 1), read 1 is not (0 != 1); every chunk of
+        # a read inherits its read's mask value.
+        self.assertTrue(mask.any())
+        self.assertFalse(mask.all())

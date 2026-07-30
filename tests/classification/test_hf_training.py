@@ -7,7 +7,7 @@ from unittest import mock
 
 import numpy as np
 
-from transformers import EarlyStoppingCallback
+from transformers import EarlyStoppingCallback, Trainer
 
 from syto.classification.hf_training import (
     AuxLossLoggingTrainer,
@@ -16,6 +16,7 @@ from syto.classification.hf_training import (
     apply_early_stopping,
     evaluate_train_metrics,
     log_fit_completion,
+    record_eval_diagnostics,
     validate_signal_mask,
 )
 
@@ -242,3 +243,114 @@ class TestValidateSignalMask(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class _RecordingRecorder:
+    def __init__(self, raises=False):
+        self.calls = []
+        self.raises = raises
+
+    def on_eval(self, dataset, predictions, *, step, prefix):
+        self.calls.append(
+            {
+                "dataset": dataset,
+                "predictions": predictions,
+                "step": step,
+                "prefix": prefix,
+            }
+        )
+        if self.raises:
+            raise RuntimeError("boom")
+        return "/tmp/plot.png"
+
+
+class TestRecordEvalDiagnostics(unittest.TestCase):
+    def _dataloader(self, dataset):
+        return SimpleNamespace(dataset=dataset)
+
+    def test_forwards_dataset_predictions_step_and_prefix(self):
+        recorder = _RecordingRecorder()
+        dataset = object()
+        preds = np.array([[0.2, 0.8]])
+        record_eval_diagnostics(
+            recorder,
+            self._dataloader(dataset),
+            SimpleNamespace(predictions=preds),
+            step=400,
+            prefix="eval",
+        )
+        self.assertEqual(len(recorder.calls), 1)
+        call = recorder.calls[0]
+        self.assertIs(call["dataset"], dataset)
+        self.assertIs(call["predictions"], preds)
+        self.assertEqual(call["step"], 400)
+        self.assertEqual(call["prefix"], "eval")
+
+    def test_no_op_when_recorder_is_none(self):
+        # Must not raise: this is the default for every fit that opts out.
+        record_eval_diagnostics(
+            None,
+            self._dataloader(object()),
+            SimpleNamespace(predictions=None),
+            step=1,
+            prefix="eval",
+        )
+
+    def test_swallows_and_logs_recorder_failure(self):
+        recorder = _RecordingRecorder(raises=True)
+        with self.assertLogs("syto.classification.hf_training", "WARNING") as cm:
+            record_eval_diagnostics(
+                recorder,
+                self._dataloader(object()),
+                SimpleNamespace(predictions=np.array([[0.5, 0.5]])),
+                step=2,
+                prefix="train",
+            )
+        self.assertIn("diagnostic", "\n".join(cm.output).lower())
+
+    def test_swallows_missing_dataset_attribute(self):
+        recorder = _RecordingRecorder()
+        with self.assertLogs("syto.classification.hf_training", "WARNING"):
+            record_eval_diagnostics(
+                recorder,
+                None,  # no dataloader at all
+                SimpleNamespace(predictions=np.array([[0.5, 0.5]])),
+                step=3,
+                prefix="eval",
+            )
+        self.assertEqual(recorder.calls, [])
+
+
+class TestAuxLossLoggingTrainerDiagnosticsWiring(unittest.TestCase):
+    def test_evaluation_loop_invokes_the_recorder(self):
+        recorder = _RecordingRecorder()
+        dataset = object()
+
+        # Exercise the override without paying for a real Trainer.__init__.
+        # __new__ (not SimpleNamespace) is required: the method's zero-arg
+        # super() raises "obj must be an instance or subtype of type" unless
+        # self really is an AuxLossLoggingTrainer. Stub the
+        # transformers.Trainer.evaluation_loop that super() then reaches.
+        trainer = AuxLossLoggingTrainer.__new__(AuxLossLoggingTrainer)
+        trainer.eval_diagnostics = recorder
+        trainer.state = SimpleNamespace(global_step=600)
+        trainer._custom_loss_ce_eval = 0.0
+        trainer._custom_loss_ce_eval_steps = 0
+
+        output = SimpleNamespace(
+            predictions=np.array([[0.3, 0.7]]), metrics={"eval_loss": 0.5}
+        )
+        with mock.patch.object(Trainer, "evaluation_loop", return_value=output):
+            AuxLossLoggingTrainer.evaluation_loop(
+                trainer,
+                SimpleNamespace(dataset=dataset),
+                "Evaluation",
+                None,
+                None,
+                "eval",
+            )
+
+        self.assertEqual(len(recorder.calls), 1)
+        self.assertIs(recorder.calls[0]["dataset"], dataset)
+        self.assertEqual(recorder.calls[0]["step"], 600)
+        self.assertEqual(recorder.calls[0]["prefix"], "eval")

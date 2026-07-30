@@ -109,6 +109,31 @@ class LookupClassifier(AbstractReadClassifier):
         """Number of unique (region, signature) keys in the lookup table."""
         return len(self._lookup)
 
+    def _align_label_column(
+        self, df: Optional[pd.DataFrame]
+    ) -> Optional[pd.DataFrame]:
+        """Return *df* with its label column named ``config.label_col``.
+
+        The fitting pipeline renames the configured label column to a canonical
+        name ('label'/'soft_label') before fit — the exact target depends on
+        ``model.soft_labels``, so it may not match ``label_mode``. When the
+        configured column is absent, map whichever canonical column is present
+        back to ``config.label_col`` (on a copy). No-op when the configured
+        column is already there (standalone use). ``self.config`` is left
+        untouched so the persisted config keeps the source column name."""
+        if df is None or self.config.label_col in df.columns:
+            return df
+        canonical = next(
+            (c for c in ("label", "soft_label") if c in df.columns), None
+        )
+        if canonical is None:
+            raise KeyError(
+                f"Label column {self.config.label_col!r} is absent and no "
+                f"canonical label column ('label'/'soft_label') was found; "
+                f"available columns: {list(df.columns)}"
+            )
+        return df.rename(columns={canonical: self.config.label_col})
+
     def _resolve_signature_column(self, df: pd.DataFrame) -> None:
         """Point the signature handler at whichever methylation-pattern column
         this frame actually carries (``methylation_ids``, ``pattern``, …)."""
@@ -150,14 +175,13 @@ class LookupClassifier(AbstractReadClassifier):
         self
         """
         self._resolve_signature_column(df)
-        # The fitting pipeline renames the configured label column to its
-        # canonical name ('label' for hard, 'soft_label' for soft) before fit;
-        # adopt whichever the frame actually carries so downstream reads work
-        # both standalone (no rename) and pipeline-driven (renamed).
-        if self.config.label_col not in df.columns:
-            self.config.label_col = (
-                "soft_label" if self.config.label_mode == "soft" else "label"
-            )
+        # The fitting pipeline renames the configured label column to a canonical
+        # name ('label'/'soft_label') before fit. Map it back on local copies so
+        # downstream reads find config.label_col, WITHOUT mutating self.config:
+        # save() persists it and required_fit_columns projects by it, so it must
+        # keep the source column name that raw datasets carry.
+        df = self._align_label_column(df)
+        val_data = self._align_label_column(val_data)
         t_start = time.time()
         self._lookup = self._build_mapping(df)
 
@@ -388,7 +412,9 @@ class LookupClassifier(AbstractReadClassifier):
         """Raw DataFrame → {(region, cpg_sig): {label_vector, counts}}."""
         cfg = self.config
         df = df.copy()
-
+        # print(cfg.label_mode)
+        # print(df[cfg.label_col].unique())
+        # print(cfg.label_col)
         if cfg.label_mode != "hard":
             return self._build_soft_mapping(df)
 
