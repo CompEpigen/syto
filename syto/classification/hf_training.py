@@ -129,6 +129,31 @@ def log_fit_completion(trainer, logger=None):
     log.info(msg)
 
 
+def record_eval_diagnostics(recorder, dataloader, output, *, step, prefix, logger=None):
+    """Hand one evaluation pass's predictions to a diagnostics recorder.
+
+    Deliberately failure-tolerant: diagnostics are a side artifact of a fit
+    that can run for hours, so a plotting or metadata problem is logged and
+    swallowed rather than allowed to abort training. Duck-typed on
+    ``recorder.on_eval(dataset, predictions, *, step, prefix)`` so this module
+    stays free of any dependency on the plotting stack.
+    """
+    if recorder is None:
+        return
+    log = logger or _module_logger
+    try:
+        dataset = dataloader.dataset
+        recorder.on_eval(dataset, output.predictions, step=step, prefix=prefix)
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        log.warning(
+            "Failed to record eval diagnostic for prefix %r at step %s: %s",
+            prefix,
+            step,
+            exc,
+            exc_info=True,
+        )
+
+
 class BalancedBackgroundBatchSampler(Sampler):
     """
     Yields batches where background reads are capped at bg_ratio of the batch.
@@ -188,10 +213,16 @@ class AuxLossLoggingTrainer(Trainer):
     Custom Trainer that optionally logs an additional loss_ce metric if provided
     by the model output (via a ``loss_ce`` attribute). Architecture-neutral: if
     the model output has no ``loss_ce``, this is a silent no-op.
+
+    Also forwards each evaluation pass's predictions to an optional
+    ``eval_diagnostics`` recorder (see ``syto.classification.fit_diagnostics``),
+    reusing predictions the eval already computed rather than re-running the
+    model.
     """
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, eval_diagnostics=None, **kwargs):
         super().__init__(*args, **kwargs)
+        self.eval_diagnostics = eval_diagnostics
         self._custom_loss_ce_train = 0.0
         self._custom_loss_ce_train_steps = 0
         self._custom_loss_ce_eval = 0.0
@@ -240,6 +271,14 @@ class AuxLossLoggingTrainer(Trainer):
             )
             self._custom_loss_ce_eval = 0.0
             self._custom_loss_ce_eval_steps = 0
+
+        record_eval_diagnostics(
+            getattr(self, "eval_diagnostics", None),
+            args[0] if args else kwargs.get("dataloader"),
+            output,
+            step=getattr(getattr(self, "state", None), "global_step", 0),
+            prefix=metric_key_prefix,
+        )
 
         return output
 
