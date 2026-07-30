@@ -987,14 +987,16 @@ class MethylBert(AbstractReadClassifier):
         Args:
             path:
         """
+        loss = kwargs.get("loss")
         soft_labels: bool = kwargs.get("soft_labels", True)
         num_labels: int = kwargs.get("num_labels", 2)
-        if soft_labels:
-            loss = "cwce"
-        elif num_labels == 2:
-            loss = "bce"
-        else:
-            loss = "ce"
+        if loss is None:
+            if soft_labels:
+                loss = "cwce"
+            elif num_labels == 2:
+                loss = "bce"
+            else:
+                loss = "ce"
 
         instance = cls(
             foundation_model_path=kwargs.get(
