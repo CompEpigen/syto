@@ -11,7 +11,13 @@ from baselines.deconvolution.epidish.epidish import EpiDishDeconvolver
 def _mock_atlas(beta, cpg_lookup=None, n_cpgs=5, ref_cells=("ct1", "ct2")):
     atlas = MagicMock()
     atlas.__contains__ = MagicMock(return_value=True)
-    atlas.get_cpg_lookup.return_value = cpg_lookup or {10: 0, 11: 1, 12: 2, 13: 3, 14: 4}
+    atlas.get_cpg_lookup.return_value = cpg_lookup or {
+        10: 0,
+        11: 1,
+        12: 2,
+        13: 3,
+        14: 4,
+    }
     atlas.get_n_cpgs.return_value = n_cpgs
     atlas.get_beta_for_regions.return_value = beta
     atlas.ref_cells = list(ref_cells)
@@ -47,7 +53,10 @@ class TestEpidishInPseudobulkWorker(unittest.TestCase):
         dec.name = "epidish_cp"  # as set by the pipeline loader
 
         out = _run_baseline_on_reads(
-            _reads(), dec, self._state(), pb_index=0,
+            _reads(),
+            dec,
+            self._state(),
+            pb_index=0,
             target_proportions=np.array([0.7, 0.3]),
         )
 
@@ -65,7 +74,10 @@ class TestEpidishInPseudobulkWorker(unittest.TestCase):
         dec.name = "epidish"
 
         out = _run_baseline_on_reads(
-            _reads(), dec, self._state(), pb_index=3,
+            _reads(),
+            dec,
+            self._state(),
+            pb_index=3,
             target_proportions=np.array([0.7, 0.3]),
         )
         self.assertIn("epidish", out)

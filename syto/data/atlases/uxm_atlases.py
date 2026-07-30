@@ -159,7 +159,9 @@ class UXMMethylationAtlas(AbstractMethylationAtlas):
         if include:
             all_cells = [c for c in all_cells if c in include]
         self._ref_cells: List[str] = all_cells
-        self._atlas = self._atlas[self._atlas["target"].apply(lambda x: x in self._ref_cells)]
+        self._atlas = self._atlas[
+            self._atlas["target"].apply(lambda x: x in self._ref_cells)
+        ]
 
     # ------------------------------------------------------------------
     # Factory: build atlas from labeled reads
@@ -319,9 +321,9 @@ class UXMMethylationAtlas(AbstractMethylationAtlas):
         )
         # inner-join drops reads whose region is not part of the marker set
         agg = agg.merge(region_df[["name", "direction"]], on="name", how="inner")
-        total = (
-            agg["record_U"] + agg["record_X"] + agg["record_M"]
-        ).to_numpy(dtype=float)
+        total = (agg["record_U"] + agg["record_X"] + agg["record_M"]).to_numpy(
+            dtype=float
+        )
         matching = np.where(
             agg["direction"].to_numpy() == "U",
             agg["record_U"].to_numpy(),

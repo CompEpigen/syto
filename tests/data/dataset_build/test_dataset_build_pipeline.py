@@ -126,9 +126,7 @@ class TestDatasetBuildSplitRemap(unittest.TestCase):
             DatasetBuildPipeline(cfg, logging.getLogger("t")).run()
             finals = list((d / "out" / "final").rglob("*.parquet"))
             self.assertTrue(finals)
-            out = pd.concat(
-                [pd.read_parquet(p) for p in finals], ignore_index=True
-            )
+            out = pd.concat([pd.read_parquet(p) for p in finals], ignore_index=True)
             self.assertTrue(set(out["split"]).issubset({"train", "valid"}))
             self.assertNotIn("test", set(out["split"]))
 

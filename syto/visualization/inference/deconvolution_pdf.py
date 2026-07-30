@@ -50,8 +50,12 @@ def _page_report(model: ReportModel, colors: Dict[str, tuple], pdf: PdfPages) ->
     n_m = len(model.methods)
     fig = plt.figure(figsize=(14, max(7.0, n_ct * 0.3)))
     gs = fig.add_gridspec(
-        2, 2, width_ratios=[1.0, 2.2], height_ratios=[max(4, n_ct), max(3, n_m * 0.5)],
-        hspace=0.25, wspace=0.06,
+        2,
+        2,
+        width_ratios=[1.0, 2.2],
+        height_ratios=[max(4, n_ct), max(3, n_m * 0.5)],
+        hspace=0.25,
+        wspace=0.06,
     )
     y = np.arange(n_ct)
 
@@ -59,9 +63,13 @@ def _page_report(model: ReportModel, colors: Dict[str, tuple], pdf: PdfPages) ->
     ax0 = fig.add_subplot(gs[0, 0])
     ax0.barh(y, model.consensus, color="#3b6ea5", height=0.7)
     ax0.errorbar(
-        model.consensus, y,
+        model.consensus,
+        y,
         xerr=[model.consensus - model.spread_min, model.spread_max - model.consensus],
-        fmt="none", ecolor="#b03a2e", elinewidth=1.0, capsize=2.0,
+        fmt="none",
+        ecolor="#b03a2e",
+        elinewidth=1.0,
+        capsize=2.0,
     )
     ax0.set_yticks(y)
     ax0.set_yticklabels(model.cell_types, fontsize=7)
@@ -90,8 +98,11 @@ def _page_report(model: ReportModel, colors: Dict[str, tuple], pdf: PdfPages) ->
     # method divergence bar (full width)
     ax2 = fig.add_subplot(gs[1, :])
     xs = np.arange(n_m)
-    ax2.bar(xs, [m.divergence for m in model.methods],
-            color=[colors[m.key] for m in model.methods])
+    ax2.bar(
+        xs,
+        [m.divergence for m in model.methods],
+        color=[colors[m.key] for m in model.methods],
+    )
     ax2.set_xticks(xs)
     ax2.set_xticklabels([m.key for m in model.methods], rotation=90, fontsize=6)
     ax2.set_ylabel("L1 divergence\nfrom consensus", fontsize=8)
@@ -112,10 +123,21 @@ def _page_focus(model: ReportModel, colors: Dict[str, tuple], pdf: PdfPages) -> 
     width = 0.8 / max(1, n_m)
     for j, m in enumerate(methods):
         vals = model.matrix[:top, j]
-        ax.bar(x + j * width - 0.4 + width / 2.0, vals, width=width,
-               color=colors[m.key], label=m.key)
-    ax.plot(x, model.consensus[:top], "k_", markersize=18, markeredgewidth=2,
-            label="consensus")
+        ax.bar(
+            x + j * width - 0.4 + width / 2.0,
+            vals,
+            width=width,
+            color=colors[m.key],
+            label=m.key,
+        )
+    ax.plot(
+        x,
+        model.consensus[:top],
+        "k_",
+        markersize=18,
+        markeredgewidth=2,
+        label="consensus",
+    )
     if model.known_truth in cts:
         ti = cts.index(model.known_truth)
         ax.axvspan(ti - 0.5, ti + 0.5, color="gold", alpha=0.15)
