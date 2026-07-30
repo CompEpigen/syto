@@ -1,8 +1,11 @@
+import tempfile
 import unittest
+from pathlib import Path
 
 import numpy as np
 
 from syto.classification.fit_diagnostics import (
+    OnTargetScoreRecorder,
     data_list_column,
     on_target_scores,
 )
@@ -66,3 +69,113 @@ class TestOnTargetScores(unittest.TestCase):
         predictions = np.array([[0.4, 0.6], [0.7, 0.3]])
         got = on_target_scores(predictions, np.array([1, 0]), np.array([0, 1]))
         np.testing.assert_allclose(got, np.array([0.7]))
+
+
+class _FakeDataset:
+    """Stand-in for MethylBertFinetuneDataset: identity is all that matters."""
+
+    def __init__(self, n):
+        self.n = n
+
+    def __len__(self):
+        return self.n
+
+
+class TestOnTargetScoreRecorder(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.plot_dir = Path(self._tmp.name) / "on_target_score_plots"
+        self.recorder = OnTargetScoreRecorder(self.plot_dir)
+        self.dataset = _FakeDataset(4)
+        self.predictions = np.array(
+            [
+                [0.10, 0.70, 0.20],
+                [0.60, 0.30, 0.10],
+                [0.05, 0.15, 0.80],
+                [0.90, 0.05, 0.05],
+            ]
+        )
+        self.recorder.register(
+            self.dataset,
+            dmr_labels=np.array([1, 0, 2, 0]),
+            on_target_mask=np.array([True, False, True, True]),
+        )
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_creates_plot_dir_on_construction(self):
+        self.assertTrue(self.plot_dir.is_dir())
+
+    def test_writes_png_named_by_prefix_and_step(self):
+        path = self.recorder.on_eval(
+            self.dataset, self.predictions, step=200, prefix="eval"
+        )
+        self.assertEqual(path, self.plot_dir / "eval_step_0000200.png")
+        self.assertTrue(path.exists())
+        self.assertGreater(path.stat().st_size, 0)
+
+    def test_train_prefix_writes_a_separate_file(self):
+        self.recorder.on_eval(self.dataset, self.predictions, step=7, prefix="eval")
+        path = self.recorder.on_eval(
+            self.dataset, self.predictions, step=7, prefix="train"
+        )
+        self.assertEqual(path, self.plot_dir / "train_step_0000007.png")
+        self.assertTrue((self.plot_dir / "eval_step_0000007.png").exists())
+
+    def test_unwraps_tuple_predictions(self):
+        path = self.recorder.on_eval(
+            self.dataset, (self.predictions, None), step=1, prefix="eval"
+        )
+        self.assertIsNotNone(path)
+
+    def test_no_op_for_unregistered_dataset(self):
+        other = _FakeDataset(4)
+        with self.assertLogs("syto.classification.fit_diagnostics", "WARNING"):
+            result = self.recorder.on_eval(
+                other, self.predictions, step=1, prefix="eval"
+            )
+        self.assertIsNone(result)
+        self.assertEqual(list(self.plot_dir.iterdir()), [])
+
+    def test_no_op_when_predictions_are_none(self):
+        with self.assertLogs("syto.classification.fit_diagnostics", "WARNING"):
+            result = self.recorder.on_eval(self.dataset, None, step=1, prefix="eval")
+        self.assertIsNone(result)
+        self.assertEqual(list(self.plot_dir.iterdir()), [])
+
+    def test_no_op_on_length_mismatch(self):
+        with self.assertLogs("syto.classification.fit_diagnostics", "WARNING"):
+            result = self.recorder.on_eval(
+                self.dataset, self.predictions[:2], step=1, prefix="eval"
+            )
+        self.assertIsNone(result)
+        self.assertEqual(list(self.plot_dir.iterdir()), [])
+
+    def test_no_op_when_no_on_target_rows(self):
+        dataset = _FakeDataset(2)
+        self.recorder.register(
+            dataset,
+            dmr_labels=np.array([0, 1]),
+            on_target_mask=np.array([False, False]),
+        )
+        with self.assertLogs("syto.classification.fit_diagnostics", "WARNING"):
+            result = self.recorder.on_eval(
+                dataset, np.array([[0.4, 0.6], [0.7, 0.3]]), step=1, prefix="eval"
+            )
+        self.assertIsNone(result)
+        self.assertEqual(list(self.plot_dir.iterdir()), [])
+
+    def test_same_dataset_object_registered_once_serves_both_prefixes(self):
+        # fit_classificaton falls back to val_dataset is train_dataset when
+        # val_df is None; a single registration must still work.
+        self.recorder.register(
+            self.dataset,
+            dmr_labels=np.array([1, 0, 2, 0]),
+            on_target_mask=np.array([True, False, True, True]),
+        )
+        self.assertIsNotNone(
+            self.recorder.on_eval(
+                self.dataset, self.predictions, step=3, prefix="train"
+            )
+        )
