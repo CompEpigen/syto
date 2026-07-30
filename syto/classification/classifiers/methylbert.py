@@ -44,6 +44,10 @@ from syto.classification.training_progress import use_table_progress_callback
 from syto.classification.prediction_aggregation import (
     aggregate_chuncked_predictions_weighted,
 )
+from syto.classification.fit_diagnostics import (
+    OnTargetScoreRecorder,
+    data_list_column,
+)
 
 from syto.data.dataset import resolve_column
 
@@ -589,6 +593,28 @@ class MethylBertEmbeddedGRG(BertPreTrainedModel):
         )
 
 
+def build_on_target_recorder(config, output_dir, logger=None):
+    """Build the per-evaluation on-target score plot recorder, or None.
+
+    ``config`` is the ``training.on_target_score_plots`` block. A missing block
+    (``None``) means enabled with defaults; ``enabled: false`` disables the
+    diagnostic entirely, in which case no directory is created and the trainer
+    hook reduces to one ``is None`` check per evaluation.
+
+    Plots land in a subdirectory of the training output dir (where checkpoints
+    are written) rather than inside ``checkpoint-N/``, which ``save_total_limit``
+    prunes. Pass ``dirname: "."`` to write them flat instead.
+    """
+    cfg = dict(config or {})
+    if not cfg.pop("enabled", True):
+        return None
+    return OnTargetScoreRecorder(
+        Path(output_dir) / cfg.get("dirname", "on_target_score_plots"),
+        bw_adjust=cfg.get("bw_adjust", 0.01),
+        logger=logger or _module_logger,
+    )
+
+
 class MethylBert(AbstractReadClassifier):
     """
     High-level wrapper class for MethylBERT with support for classifier selection.
@@ -787,6 +813,7 @@ class MethylBert(AbstractReadClassifier):
         batch_size=None,
         signal_mask=None,
         bg_ratio=0.3,
+        eval_diagnostics=None,
     ):
         """
         Internal method to build a HF Trainer.
@@ -826,6 +853,7 @@ class MethylBert(AbstractReadClassifier):
                     else compute_metrics_soft_labels
                 ),
                 callbacks=callbacks,
+                eval_diagnostics=eval_diagnostics,
             )
 
         else:
@@ -845,6 +873,7 @@ class MethylBert(AbstractReadClassifier):
                 callbacks=callbacks,
                 signal_mask=signal_mask,
                 bg_ratio=bg_ratio,
+                eval_diagnostics=eval_diagnostics,
             )
 
         use_table_progress_callback(trainer)
@@ -861,6 +890,7 @@ class MethylBert(AbstractReadClassifier):
         resume_from_checkpoint: Optional[Union[bool, str]] = None,
         signal_mask=None,
         bg_ratio=0.3,
+        eval_diagnostics=None,
     ):
         """
         Fine-tune your model on a training set, optional validation set, etc.
@@ -892,6 +922,7 @@ class MethylBert(AbstractReadClassifier):
             callbacks=callbacks,
             signal_mask=signal_mask,
             bg_ratio=bg_ratio,
+            eval_diagnostics=eval_diagnostics,
         )
         checkpoint_path = None
         if resume_from_checkpoint is not None:
@@ -1141,6 +1172,29 @@ class MethylBert(AbstractReadClassifier):
             signal_mask = extract_signal_mask(train_dataset)
             validate_signal_mask(signal_mask, architecture="methylbert")
 
+        # Per-evaluation on-target score plots. Registered against both
+        # datasets by object identity: the periodic evaluations run on
+        # val_dataset, and evaluate_train_metrics runs one final pass over
+        # train_dataset with the "train" prefix. When val_df is None the two
+        # are the same object and one registration serves both.
+        eval_diagnostics = build_on_target_recorder(
+            kwargs.get("on_target_score_plots"),
+            training_args.output_dir,
+            logger=_module_logger,
+        )
+        if eval_diagnostics is not None:
+            for dataset, data_list in (
+                (train_dataset, train_data_list),
+                (val_dataset, val_data_list if val_df is not None else train_data_list),
+            ):
+                eval_diagnostics.register(
+                    dataset,
+                    dmr_labels=data_list_column(data_list, "grg_ctype"),
+                    on_target_mask=data_list_column(
+                        data_list, "on_target_mask"
+                    ).astype(bool),
+                )
+
         self.fine_tune(
             data_path=None,
             train_dataset=train_dataset,
@@ -1150,6 +1204,7 @@ class MethylBert(AbstractReadClassifier):
             resume_from_checkpoint=kwargs.get("resume_from_checkpoint", None),
             signal_mask=signal_mask,
             bg_ratio=kwargs.get("bg_ratio", 0.3),
+            eval_diagnostics=eval_diagnostics,
         )
 
         # Optionally compute train-set metrics with a final evaluation pass
