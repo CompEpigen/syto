@@ -85,6 +85,15 @@ class TestBuildTemplateAllTasks(unittest.TestCase):
                 config = templates.build_template(TASK_REGISTRY[task](), "methylbert")
                 validate_config(config, task)
 
+    def test_every_task_writes_output_dir_at_the_root(self):
+        # App/main.py reads config["output_dir"] for every task before dispatch,
+        # so a nested-only output dir (e.g. under an `output:` section) fails
+        # before the pipeline is even constructed.
+        for task in templates.ordered_tasks():
+            with self.subTest(task=task):
+                config = templates.build_template(TASK_REGISTRY[task](), "methylbert")
+                self.assertIn("output_dir", config)
+
     def test_has_something_to_fill_in(self):
         for task in templates.ordered_tasks():
             with self.subTest(task=task):

@@ -150,7 +150,7 @@ class TestClassifierFitBuildConfig(unittest.TestCase):
             "datasets": "all",
             "max_sequence_length": 150,
             "prediction_batch_size": 128,
-            "output.output_dir": "tmp/out",
+            "output_dir": "tmp/out",
             "mlflow.enabled": True,
             "mlflow.experiment_name": "exp",
             "mlflow.tracking_uri": "",  # blank -> omitted

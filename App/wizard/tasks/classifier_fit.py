@@ -206,8 +206,12 @@ class ClassifierFitWizard:
                 default=128,
                 validate=v.positive_int,
             ),
+            # Top level, not nested under ``output:``. ClassifierFittingPipeline
+            # accepts either, but App/main.py reads config["output_dir"] for every
+            # task before dispatching (to create the dir and copy the config into
+            # it), so a nested-only output_dir fails before the pipeline starts.
             FieldSpec(
-                key="output.output_dir",
+                key="output_dir",
                 label="Output directory",
                 kind="text",
                 validate=v.non_empty,
