@@ -1,0 +1,32 @@
+\begin{table}[t]
+\centering
+\footnotesize
+\setlength{\tabcolsep}{4pt}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{llllllll}
+\toprule
+Tissue & Tabula Sapiens & Baselines & Cancer Detector & HL & Canonical SL & DD SL w/o pool & DD SL w/ pool \\
+\midrule
+adipose tissue & Dermal-Fibro & \cellcolor{blue!12}$\ast$\,Adipocytes (4/4) & \cellcolor{blue!12}$\ast$\,Endothel (37/40) & \cellcolor{blue!12}$\ast$\,Adipocytes (24/40) & \cellcolor{blue!12}$\ast$\,Adipocytes (28/40) & \cellcolor{blue!12}$\ast$\,Endothel (47/60) & \cellcolor{blue!12}$\ast$\,Adipocytes (40/60) \\
+bladder & Bladder-Ep & \cellcolor{teal!15}Bladder-Ep (3/4) & \cellcolor{teal!15}Bladder-Ep (40/40) & \cellcolor{teal!15}Bladder-Ep (24/40) & \cellcolor{teal!15}Bladder-Ep (20/40) & \cellcolor{teal!15}Bladder-Ep (51/60) & \cellcolor{teal!15}Bladder-Ep (46/60) \\
+blood vessel & Dermal-Fibro & \cellcolor{magenta!15}$\dagger$\,Heart-Fibro (2/4) & \cellcolor{blue!12}$\ast$\,Endothel (28/40) & \cellcolor{blue!12}$\ast$\,Blood-Mono+Macro (19/40) & \cellcolor{magenta!15}$\dagger$\,Heart-Fibro (20/40) & \cellcolor{blue!12}$\ast$\,Endothel (30/60) & \cellcolor{blue!12}$\ast$\,Blood-Mono+Macro (24/60) \\
+heart & Endothel & \cellcolor{teal!15}Endothel (4/4) & \cellcolor{teal!15}Endothel (40/40) & \cellcolor{teal!15}Endothel (21/40) & \cellcolor{teal!15}Endothel (34/40) & \cellcolor{teal!15}Endothel (60/60) & \cellcolor{teal!15}Endothel (59/60) \\
+kidney & Kidney-Ep & \cellcolor{teal!15}Kidney-Ep (4/4) & \cellcolor{teal!15}Kidney-Ep (40/40) & \cellcolor{teal!15}Kidney-Ep (36/40) & \cellcolor{teal!15}Kidney-Ep (40/40) & \cellcolor{teal!15}Kidney-Ep (60/60) & \cellcolor{teal!15}Kidney-Ep (60/60) \\
+liver & Liver-Hep & \cellcolor{teal!15}Liver-Hep (4/4) & \cellcolor{teal!15}Liver-Hep (39/40) & \cellcolor{teal!15}Liver-Hep (40/40) & \cellcolor{teal!15}Liver-Hep (40/40) & \cellcolor{teal!15}Liver-Hep (60/60) & \cellcolor{teal!15}Liver-Hep (57/60) \\
+lung & Blood-Mono+Macro & \cellcolor{blue!12}$\ast$\,Endothel (4/4) & \cellcolor{blue!12}$\ast$\,Endothel (39/40) & \cellcolor{magenta!15}$\dagger$\,Fallopian-Ep (13/40) & \cellcolor{blue!12}$\ast$\,Endothel (24/40) & \cellcolor{blue!12}$\ast$\,Endothel (56/60) & \cellcolor{blue!12}$\ast$\,Endothel (42/60) \\
+ovary & Ovary-Ep & \cellcolor{olive!18}$\circ$\,Smooth-Musc (2/4) & \cellcolor{olive!18}$\circ$\,Smooth-Musc (33/40) & \cellcolor{olive!18}$\circ$\,Smooth-Musc (39/40) & \cellcolor{olive!18}$\circ$\,Smooth-Musc (40/40) & \cellcolor{olive!18}$\circ$\,Smooth-Musc (49/60) & \cellcolor{olive!18}$\circ$\,Smooth-Musc (60/60) \\
+pancreas & Pancreas-Acinar & \cellcolor{teal!15}Pancreas-Acinar (4/4) & \cellcolor{teal!15}Pancreas-Acinar (40/40) & \cellcolor{teal!15}Pancreas-Acinar (38/40) & \cellcolor{teal!15}Pancreas-Acinar (40/40) & \cellcolor{teal!15}Pancreas-Acinar (60/60) & \cellcolor{teal!15}Pancreas-Acinar (60/60) \\
+prostate & Prostate-Ep & \cellcolor{teal!15}Prostate-Ep (4/4) & \cellcolor{teal!15}Prostate-Ep (40/40) & \cellcolor{teal!15}Prostate-Ep (40/40) & \cellcolor{teal!15}Prostate-Ep (40/40) & \cellcolor{teal!15}Prostate-Ep (60/60) & \cellcolor{teal!15}Prostate-Ep (60/60) \\
+salivary gland & Head-Neck-Ep & \cellcolor{teal!15}Head-Neck-Ep (4/4) & \cellcolor{blue!12}$\ast$\,Endothel (16/40) & \cellcolor{magenta!15}$\dagger$\,Fallopian-Ep (13/40) & \cellcolor{magenta!15}$\dagger$\,Adipocytes (16/40) & \cellcolor{blue!12}$\ast$\,Endothel (39/60) & \cellcolor{teal!15}Head-Neck-Ep (35/60) \\
+skin & Blood-T & \cellcolor{magenta!15}$\dagger$\,Epid-Kerat (4/4) & \cellcolor{magenta!15}$\dagger$\,Epid-Kerat (40/40) & \cellcolor{magenta!15}$\dagger$\,Epid-Kerat (39/40) & \cellcolor{magenta!15}$\dagger$\,Epid-Kerat (40/40) & \cellcolor{magenta!15}$\dagger$\,Epid-Kerat (60/60) & \cellcolor{magenta!15}$\dagger$\,Epid-Kerat (60/60) \\
+small intestine & Small-Int-Ep & \cellcolor{blue!12}$\ast$\,Blood-B (4/4) & \cellcolor{blue!12}$\ast$\,Blood-B (40/40) & \cellcolor{blue!12}$\ast$\,Blood-B (33/40) & \cellcolor{blue!12}$\ast$\,Blood-B (36/40) & \cellcolor{blue!12}$\ast$\,Blood-B (60/60) & \cellcolor{blue!12}$\ast$\,Blood-B (60/60) \\
+spleen & Blood-B & \cellcolor{blue!12}$\ast$\,Endothel (3/4) & \cellcolor{teal!15}Blood-B (25/40) & \cellcolor{blue!12}$\ast$\,Endothel (16/40) & \cellcolor{teal!15}Blood-B (24/40) & \cellcolor{teal!15}Blood-B (31/60) & \cellcolor{teal!15}Blood-B (41/60) \\
+stomach & Blood-Mono+Macro & \cellcolor{blue!12}$\ast$\,Gastric-Ep (4/4) & \cellcolor{blue!12}$\ast$\,Gastric-Ep (40/40) & \cellcolor{blue!12}$\ast$\,Gastric-Ep (36/40) & \cellcolor{blue!12}$\ast$\,Gastric-Ep (36/40) & \cellcolor{blue!12}$\ast$\,Gastric-Ep (60/60) & \cellcolor{blue!12}$\ast$\,Gastric-Ep (60/60) \\
+uterus & Dermal-Fibro & \cellcolor{olive!18}$\circ$\,Endothel (2/4) & \cellcolor{magenta!15}$\dagger$\,Adipocytes (31/40) & \cellcolor{magenta!15}$\dagger$\,Adipocytes (39/40) & \cellcolor{magenta!15}$\dagger$\,Adipocytes (32/40) & \cellcolor{magenta!15}$\dagger$\,Adipocytes (47/60) & \cellcolor{magenta!15}$\dagger$\,Adipocytes (46/60) \\
+\bottomrule
+\end{tabular}
+}
+\par\smallskip{\footnotesize Cell type most configurations in each group call dominant, with the number that agree. \colorbox{teal!15}{matches Tabula Sapiens}; \colorbox{olive!18}{$\circ$ the reference's second most abundant type, and in the expected set}; \colorbox{blue!12}{$\ast$ differs, but the called type is in the expected set, so TCS is unaffected}; \colorbox{magenta!15}{$\dagger$ differs and lies outside the expected set}.}
+\caption{Dominant cell type called per tissue by each labelling scheme, against the Tabula Sapiens reference.}
+\label{tab:dominance_ranked}
+\end{table}

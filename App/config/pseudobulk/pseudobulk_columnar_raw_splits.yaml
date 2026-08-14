@@ -9,15 +9,15 @@
 input_type: raw_splits
 
 # Shared columnar (or legacy-dir) dataset directory for all splits.
-data_path: /mnt/data/loyfer/parsed_dataset/U25.l4.hg38/labelers_on_train_no_pattern_len_filter/final
+data_path: /mnt/data/loyfer/parsed_dataset/U25.l4.hg19/labelers_on_train_no_pattern_len_filter/final
 data_format: auto        # auto | legacy | columnar
 split_column: split
 
 # Optional: drop reads with fewer than N marked CpGs (match training-data prep).
 min_pattern_length: 4
 
-atlas_path: ../UXM_deconv/supplemental/Atlas.U25.l4.hg38.full.tsv
-atlas_name: U25.l4.hg38
+atlas_path: ../UXM_deconv/supplemental/Atlas.U25.l4.hg19.full.tsv
+atlas_name: U25.l4.hg19
 
 
 # Which splits to load + each split's target-proportions file. For raw_splits the
@@ -27,24 +27,17 @@ split_information:
     target_proportions_path: /data/dmytro/Experiments/target_proportions_train.npz
   valid:
     target_proportions_path: /data/dmytro/Experiments/target_proportions_valid.npz
-  test:
-    target_proportions_path: /data/dmytro/Experiments/target_proportions_test.npz
 
-classifier_type: dismir
-classifier_checkpoint: /mnt/data/syto_experiments/mlflow/198121009408531961/b69bdf5991494cc399e95c12f79dafe1/artifacts/weight.pt
+
+classifier_type: lookup
+classifier_checkpoint: /mnt/data/syto_experiments/mlflow/437308559251151883/94677c7dcdd1448b8074af78f599b2c2/artifacts/lookup_classifier.joblib
 classifier_config:
-  seq_length: 160
-  soft_labels: true
-  num_labels: 39
-  batch_size: 2200
-  classifier_head_implementation: grg_attention_based
-  num_grg_labels: 39
-  grg_label_column: dmr_ctype_label
-  dismir_flavor: lstm
+    col_label: hard_label_with_background
+    num_prediction_classes: 40
 
 labels_dict_path: App/labels_dict.json
 num_labels: 39
-labeling_scheme: soft_labels
+labeling_scheme: hard_labels
 
 n_reads_to_sample: 475000
 class_label_column: original_label
@@ -52,6 +45,8 @@ grg_label_column: dmr_ctype_label
 grg_sampling_method: uniform_multinomial
 substitution_method: uniform_number
 
-n_workers: 10
-batch_size: 100
-output_dir: /mnt/data/syto_experiments/mlflow/198121009408531961/b69bdf5991494cc399e95c12f79dafe1/artifacts/
+n_workers: 1
+batch_size: 10
+# output_dir: /mnt/data/syto_experiments/mlflow/198121009408531961/627979e8835a4facb55b4185f6cdf3c2/artifacts/
+output_dir: tmp/
+n_pseudobulks_to_sample: 10

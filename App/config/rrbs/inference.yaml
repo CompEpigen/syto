@@ -125,9 +125,9 @@ deconvolution:
       enabled: true
       atlas_path: /home/luna.kuleuven.be/u0169940/Repos/syto/baselines/deconvolution/celfieish/UXMU25_hg38_l1.txt      # same format as celfieish
       reference_genome: hg38
-      num_iterations: 400
+      num_iterations: 1000
       convergence_criteria: 0.001
-      random_restarts: 1
+      random_restarts: 10
       # em_checkpoints: [10, 50]
 
 

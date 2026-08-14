@@ -12,11 +12,13 @@ set -euo pipefail
 # per-sample temp config from the template, and runs inference.
 # ============================================================
 
-CONFIG_TEMPLATE="App/config/inference/inference_20260623_150304.yaml"
+CONFIG_TEMPLATE="/home/luna.kuleuven.be/u0169940/Repos/syto/App/config/inference/inference_20260623_150304.yaml"
 TEMP_CONFIG_DIR="App/config/inference/tmp_configs"
 
 INPUT_DIR="/mnt/data/cfsort/recovered_reads/U250.l4.hg19"
-OUTPUT_BASE_DIR="/mnt/data/cfsort/deconvolution_results/U25.l4.hg19"
+#OUTPUT_BASE_DIR="/mnt/data/cfsort/deconvolution_results/U25.l4.hg19/celfieish_30000" 
+OUTPUT_BASE_DIR="/mnt/data/cfsort/deconvolution_results/U25.l4.hg19/uxm/"
+#OUTPUT_BASE_DIR="/mnt/data/syto_experiments/mlflow/198121009408531961/1f0aaa3947bb4732a945e76aed3a5864/artifacts/cfsort_deconvolution_results_after_chuncking/"
 
 # Set to 1 to skip samples whose output already has deconvolution results.
 SKIP_IF_DONE=1

@@ -11,9 +11,6 @@ from matplotlib.gridspec import GridSpec
 from scipy import stats
 from sklearn.metrics import confusion_matrix, r2_score
 
-from syto.deconvolution.deep_deconvolvers.diagonal_aware_deconvolver import (
-    DiagonalAwareDeconvolver,
-)
 
 
 def print_deconvolution_metrics_summary(metrics: dict):
@@ -1020,7 +1017,7 @@ class DeconvolverVisualizer:
 
     def __init__(
         self,
-        model: DiagonalAwareDeconvolver,
+        model,
         cell_type_names: Optional[List[str]] = None,
         dmr_names: Optional[List[str]] = None,
     ):
