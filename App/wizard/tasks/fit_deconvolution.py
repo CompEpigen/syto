@@ -17,6 +17,7 @@ from App.wizard.tasks.deconvolver_common import (
     DECONVOLVER_ORDER,
     DEFAULT_SPLITS,
     list_splits as _list_splits,
+    template_deconvolver_entries,
 )
 
 # Splits the fitting pipeline requires when present in the file: 'valid' for the
@@ -208,6 +209,13 @@ class FitDeconvolutionWizard:
                 validate=v.non_empty,
             ),
         ]
+
+    def template_overrides(self, classifier: str | None = None) -> dict:
+        """Template mode: all splits and every deconvolver (no file to read yet)."""
+        return {
+            "splits": list(DEFAULT_SPLITS),
+            "deconvolvers": template_deconvolver_entries(),
+        }
 
     def build_config(self, answers: dict) -> dict:
         """Assemble flat answers into the nested config.

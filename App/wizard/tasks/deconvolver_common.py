@@ -28,6 +28,18 @@ DECONVOLVER_DEFAULT_PARAMS = {
 }
 
 
+def template_deconvolver_entries() -> list[dict]:
+    """Every known deconvolver with its default params, for template mode."""
+    entries: list[dict] = []
+    for name in DECONVOLVER_ORDER:
+        entry: dict = {"name": name}
+        params = DECONVOLVER_DEFAULT_PARAMS.get(name)
+        if params is not None:
+            entry["params"] = dict(params)
+        entries.append(entry)
+    return entries
+
+
 def list_splits(pseudobulk_h5_path: str) -> list[str]:
     """Return the split names present in a pseudobulk HDF5 file (``[]`` on error)."""
     try:

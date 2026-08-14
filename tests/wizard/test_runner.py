@@ -73,6 +73,7 @@ class TestRunner(unittest.TestCase):
             out_path = os.path.join(d, "generated.yaml")
 
             saved = runner.run_wizard(
+                select_mode=lambda: runner.MODE_FINE,
                 engine=ScriptedEngine(raw),
                 select_task=lambda: "inference",
                 confirm_save=lambda: True,
@@ -92,12 +93,84 @@ class TestRunner(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             raw, _ = _raw_with_real_paths(d)
             saved = runner.run_wizard(
+                select_mode=lambda: runner.MODE_FINE,
                 engine=ScriptedEngine(raw),
                 select_task=lambda: "inference",
                 confirm_save=lambda: False,
                 ask_path=lambda default: os.path.join(d, "unused.yaml"),
             )
         self.assertIsNone(saved)
+
+
+class TestTemplateMode(unittest.TestCase):
+    def _run(self, tasks, d, classifier="dismir", confirm_overwrite=lambda p: False):
+        self.classifier_asked = False
+
+        def select_classifier(choices):
+            self.classifier_asked = True
+            return classifier
+
+        return runner.run_wizard(
+            select_mode=lambda: runner.MODE_TEMPLATE,
+            select_tasks=lambda choices: tasks,
+            select_classifier=select_classifier,
+            ask_dir=lambda default: d,
+            confirm_overwrite=confirm_overwrite,
+        )
+
+    def test_writes_one_file_per_selected_task(self):
+        with tempfile.TemporaryDirectory() as d:
+            paths = self._run(["fit_deconvolution", "inference"], d)
+            self.assertEqual(
+                [os.path.basename(p) for p in paths],
+                ["fit_deconvolution.yaml", "inference.yaml"],
+            )
+            for path in paths:
+                cfg = yaml.safe_load(open(path, encoding="utf-8"))
+                self.assertIsInstance(cfg, dict)
+
+    def test_file_carries_the_header_comment(self):
+        with tempfile.TemporaryDirectory() as d:
+            (path,) = self._run(["inference"], d)
+            text = open(path, encoding="utf-8").read()
+            self.assertTrue(text.startswith("# ---"))
+            self.assertIn("Target classifier: dismir", text)
+            self.assertIn("--task inference", text)
+
+    def test_classifier_not_asked_when_no_task_needs_it(self):
+        with tempfile.TemporaryDirectory() as d:
+            self._run(["fit_calibration"], d)
+            self.assertFalse(self.classifier_asked)
+
+    def test_no_selection_writes_nothing(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(self._run([], d), [])
+            self.assertEqual(os.listdir(d), [])
+
+    def test_existing_file_is_kept_when_overwrite_declined(self):
+        with tempfile.TemporaryDirectory() as d:
+            existing = os.path.join(d, "fit_calibration.yaml")
+            with open(existing, "w", encoding="utf-8") as f:
+                f.write("hand written\n")
+
+            paths = self._run(["fit_calibration", "fit_deconvolution"], d)
+
+            self.assertEqual(
+                [os.path.basename(p) for p in paths], ["fit_deconvolution.yaml"]
+            )
+            self.assertEqual(open(existing, encoding="utf-8").read(), "hand written\n")
+
+    def test_existing_file_is_replaced_when_overwrite_confirmed(self):
+        with tempfile.TemporaryDirectory() as d:
+            existing = os.path.join(d, "fit_calibration.yaml")
+            with open(existing, "w", encoding="utf-8") as f:
+                f.write("hand written\n")
+
+            paths = self._run(["fit_calibration"], d, confirm_overwrite=lambda p: True)
+
+            self.assertEqual(paths, [existing])
+            cfg = yaml.safe_load(open(existing, encoding="utf-8"))
+            self.assertIn("deconvolvers", cfg)
 
 
 if __name__ == "__main__":

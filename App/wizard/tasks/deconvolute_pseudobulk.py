@@ -16,8 +16,14 @@ from App.wizard import validators as v
 from App.wizard.config_utils import set_nested as _set_nested
 from App.wizard.fields import FieldSpec
 from App.wizard.tasks import TASK_REGISTRY
-from App.wizard.tasks.baselines_common import ask_baseline_entries
-from App.wizard.tasks.deconvolver_common import list_splits as _list_splits
+from App.wizard.tasks.baselines_common import (
+    ask_baseline_entries,
+    template_baseline_entries,
+)
+from App.wizard.tasks.deconvolver_common import (
+    DEFAULT_SPLITS,
+    list_splits as _list_splits,
+)
 
 
 def _splits_section(engine, answers) -> None:
@@ -117,6 +123,13 @@ class DeconvolutePseudobulkWizard:
                 tier="expert",
             ),
         ]
+
+    def template_overrides(self, classifier: str | None = None) -> dict:
+        """Template mode: all splits and every baseline (nothing to discover yet)."""
+        return {
+            "splits": list(DEFAULT_SPLITS),
+            "baselines": template_baseline_entries(),
+        }
 
     def build_config(self, answers: dict) -> dict:
         """Assemble flat answers into the nested config, dropping None/blank.

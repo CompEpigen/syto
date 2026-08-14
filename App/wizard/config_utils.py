@@ -12,3 +12,17 @@ def set_nested(config: dict, dotted_key: str, value) -> None:
     for part in parts[:-1]:
         node = node.setdefault(part, {})
     node[parts[-1]] = value
+
+
+def placeholder(name: str) -> str:
+    """Return the marker written into a template for a value the user must supply.
+
+    Angle brackets are the single convention for "fill this in": template mode
+    counts them, and the generated file's header tells the reader to grep for
+    them. Keep them free of ``:`` so the YAML stays unquoted and readable.
+    """
+    return f"<{name}>"
+
+
+def is_placeholder(value) -> bool:
+    return isinstance(value, str) and value.startswith("<") and value.endswith(">")

@@ -9,9 +9,47 @@ pseudobulk deconvolution).
 """
 
 from App.wizard import validators as v
+from App.wizard.config_utils import placeholder
 from App.wizard.fields import FieldSpec
 
 BASELINES = ["uxm", "celfieish", "celfie", "epidish"]
+
+
+def template_baseline_entries() -> list[dict]:
+    """Every supported baseline, pre-populated for template mode.
+
+    Values match the defaults the interactive sub-flow offers (convergence mode
+    for the EM models, RPC for EpiDISH); only the atlas paths are placeholders.
+    """
+    entries: list[dict] = []
+    for model in BASELINES:
+        entry: dict = {
+            "model": model,
+            "enabled": True,
+            "atlas_path": placeholder(f"{model}_atlas_path"),
+        }
+        if model == "uxm":
+            entry["ignore_cells"] = ["Megakaryocytes"]
+        elif model == "epidish":
+            entry.update({"reference_genome": "hg38", "method": "RPC", "maxit": 50})
+        else:  # celfieish / celfie
+            entry.update(
+                {
+                    "reference_genome": "hg38",
+                    "num_iterations": 400,
+                    "convergence_criteria": 0.001,
+                }
+            )
+            if model == "celfie":
+                entry.update(
+                    {
+                        "random_restarts": 1,
+                        "sum_by_region": False,
+                        "freeze_gamma": False,
+                    }
+                )
+        entries.append(entry)
+    return entries
 
 
 def ask_baseline_entries(engine, answers, label: str) -> list[dict]:

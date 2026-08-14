@@ -522,6 +522,12 @@ class ClassifierFitWizard:
             ),
         ]
 
+    def template_overrides(self, classifier: str | None = None) -> dict:
+        """Pin the architecture in template mode so its branch is materialised."""
+        if classifier in ARCHITECTURES:
+            return {"model.architecture": classifier}
+        return {}
+
     def build_config(self, answers: dict) -> dict:
         """Assemble the flat dot-notation answers into the nested config.
 

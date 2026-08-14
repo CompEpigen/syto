@@ -1,12 +1,13 @@
 """Inference task wizard: field schema, deconvolution sub-flows, and assembler."""
 
 from App.wizard import validators as v
-from App.wizard.config_utils import set_nested as _set_nested
+from App.wizard.config_utils import placeholder, set_nested as _set_nested
 from App.wizard.fields import FieldSpec
 from App.wizard.tasks import TASK_REGISTRY
 from App.wizard.tasks.baselines_common import (
     BASELINES,  # noqa: F401 - re-exported for callers/tests of this task module
     ask_baseline_entries,
+    template_baseline_entries,
 )
 
 CLASSIFIER_TYPES = ["dismir", "methylbert", "cancer_detector", "lookup", "epigenbert2"]
@@ -86,6 +87,23 @@ def _deconv_methods_section(engine, answers):
         )
         methods.append(entry)
     answers["deconvolution.syto.methods"] = methods
+
+
+def template_syto_methods() -> list[dict]:
+    """Every syto deconvolver, enabled, with placeholder checkpoint/calibrator paths."""
+    methods: list[dict] = []
+    for label in SYTO_DECONVOLVERS:
+        entry = dict(SYTO_METHOD_DISPATCH[label])  # name (+ flavor for ls)
+        entry.update(
+            {
+                "enabled": True,
+                "use_callibration": True,
+                "checkpoint_path": placeholder(f"{label}_checkpoint_path"),
+                "calibrators_dir": placeholder(f"{label}_calibrators_dir"),
+            }
+        )
+        methods.append(entry)
+    return methods
 
 
 def _deconv_baselines_section(engine, answers):
@@ -369,6 +387,17 @@ class InferenceWizard:
                 when=_run_syto,
             ),
         ]
+
+    def template_overrides(self, classifier: str | None = None) -> dict:
+        """Template mode: enable syto and pre-populate every method and baseline."""
+        overrides: dict = {
+            "run_syto": True,
+            "deconvolution.syto.methods": template_syto_methods(),
+            "deconvolution.baselines": template_baseline_entries(),
+        }
+        if classifier in CLASSIFIER_TYPES:
+            overrides["classifier.classifier_type"] = classifier
+        return overrides
 
     def build_config(self, answers: dict) -> dict:
         run_syto = bool(answers.get("run_syto"))
