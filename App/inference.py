@@ -320,8 +320,13 @@ class InferencePipeline:
         """Load pre-parsed reads from a pickle file."""
         path = self.config["input"]["data_path"]
         self.logger.info(f"Loading pre-parsed reads from {path}")
-        if ".csv" in path:
-            df = pd.read_csv(path, sep="\t")
+        if ".csv" in path or path.endswith(".parquet"):
+            # The published read tables carry the same columns in either
+            # format; only the container differs.
+            if path.endswith(".parquet"):
+                df = pd.read_parquet(path)
+            else:
+                df = pd.read_csv(path, sep="\t")
             df.rename(columns={"ref_name": "chromosome"}, inplace=True)
             df.rename(columns={"ref_pos": "read_start"}, inplace=True)
             df.rename(columns={"methyl_seq": "methylation_encoding"}, inplace=True)
@@ -442,7 +447,7 @@ class InferencePipeline:
 
         Config keys
         -----------
-        pseudobulk_h5_path : str
+        pseudobulk_path : str
             Path to the pseudobulk HDF5 file containing pure profiles.
         pure_profiles_split : str, optional
             Split name from which to read the prior (default ``"train"``).
@@ -450,25 +455,25 @@ class InferencePipeline:
         Raises
         ------
         ValueError
-            If ``pseudobulk_h5_path`` is not configured.
+            If ``pseudobulk_path`` is not configured.
         KeyError
             If the HDF5 file has no pure profiles for the requested split.
         """
-        from syto.data.pseudobulk_hdf5_utils import PseudobulkHDF5Reader
+        from syto.data.pseudobulk_store import open_pseudobulk_store
 
-        h5_path = self.config.get("pseudobulk_h5_path")
-        if not h5_path:
+        pseudobulk_path = self.config.get("pseudobulk_path")
+        if not pseudobulk_path:
             raise ValueError(
                 f"missing_label_strategy='{self.missing_label_strategy}' requires "
-                "'pseudobulk_h5_path' in config pointing to a pseudobulk HDF5 file "
+                "'pseudobulk_path' in config pointing to a pseudobulk store "
                 "with pre-computed pure profiles."
             )
 
         split = self.config.get("pure_profiles_split", "train")
         self.logger.info(
-            "Loading uniform prior from pseudobulk HDF5 (split=%r): %s", split, h5_path
+            "Loading uniform prior from pseudobulk store (split=%r): %s", split, pseudobulk_path
         )
-        reader = PseudobulkHDF5Reader(h5_path, logger=self.logger)
+        reader = open_pseudobulk_store(pseudobulk_path, logger=self.logger)
         return reader.read_uniform_prior(split)
 
     # ═════════════════════════════════════════════════════════════════
