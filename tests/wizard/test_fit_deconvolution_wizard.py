@@ -50,7 +50,7 @@ class TestSplitsSection(unittest.TestCase):
             fd, "_list_splits", return_value=["train", "valid", "test"]
         ):
             eng = _StubEngine(checkbox=[["train", "valid"]])
-            answers = {"pseudobulk_h5_path": "x.h5"}
+            answers = {"pseudobulk_path": "x.h5"}
             fd._splits_section(eng, answers)
         self.assertEqual(answers["splits"], ["train", "valid"])
         self.assertEqual(eng.calls[0], ["train", "valid", "test"])
@@ -58,7 +58,7 @@ class TestSplitsSection(unittest.TestCase):
     def test_fallback_when_unreadable(self):
         with mock.patch.object(fd, "_list_splits", return_value=[]):
             eng = _StubEngine(checkbox=[])  # ask_checkbox must NOT be called
-            answers = {"pseudobulk_h5_path": "x.h5"}
+            answers = {"pseudobulk_path": "x.h5"}
             fd._splits_section(eng, answers)
         self.assertEqual(answers["splits"], ["train", "valid", "test"])
         self.assertEqual(eng.calls, [])
@@ -70,7 +70,7 @@ class TestSplitsSection(unittest.TestCase):
             eng = _StubEngine(
                 checkbox=[["valid"], ["train", "valid"]]
             )  # 1st omits train
-            answers = {"pseudobulk_h5_path": "x.h5"}
+            answers = {"pseudobulk_path": "x.h5"}
             fd._splits_section(eng, answers)
         self.assertEqual(answers["splits"], ["train", "valid"])
         self.assertEqual(len(eng.calls), 2)
@@ -78,7 +78,7 @@ class TestSplitsSection(unittest.TestCase):
     def test_accepts_selection_when_file_lacks_required(self):
         with mock.patch.object(fd, "_list_splits", return_value=["train", "test"]):
             eng = _StubEngine(checkbox=[["train", "test"]])
-            answers = {"pseudobulk_h5_path": "x.h5"}
+            answers = {"pseudobulk_path": "x.h5"}
             fd._splits_section(eng, answers)
         self.assertEqual(answers["splits"], ["train", "test"])
         self.assertEqual(len(eng.calls), 1)  # no reprompt for absent 'valid'
@@ -134,7 +134,7 @@ class TestSchema(unittest.TestCase):
 
     def test_pseudobulk_before_splits(self):
         self.assertLess(
-            self.keys.index("pseudobulk_h5_path"), self.keys.index("splits")
+            self.keys.index("pseudobulk_path"), self.keys.index("splits")
         )
 
     def test_feature_selection_mode_is_select(self):
@@ -169,7 +169,7 @@ class TestBuildConfig(unittest.TestCase):
             "labels_dict_path": "App/labels_dict.json",
             "num_input_labels": 39,
             "num_output_labels": 39,
-            "pseudobulk_h5_path": "/tmp/pb.h5",
+            "pseudobulk_path": "/tmp/pb.h5",
             "splits": ["train", "valid", "test"],
             "feature_selection_mode": "top_features",
             "top_features": 156,
@@ -183,7 +183,7 @@ class TestBuildConfig(unittest.TestCase):
             "output_dir": "/tmp/out",
         }
         cfg = self.wiz.build_config(answers)
-        self.assertEqual(cfg["pseudobulk_h5_path"], "/tmp/pb.h5")
+        self.assertEqual(cfg["pseudobulk_path"], "/tmp/pb.h5")
         self.assertEqual(cfg["splits"], ["train", "valid", "test"])
         self.assertEqual(cfg["top_features"], 156)
         self.assertEqual(cfg["guarantee_columns_selection"], [38])
@@ -211,7 +211,7 @@ class TestGeneratedConfigSatisfiesValidator(unittest.TestCase):
             "labels_dict_path": "App/labels_dict.json",
             "num_input_labels": 39,
             "num_output_labels": 39,
-            "pseudobulk_h5_path": "/tmp/pb.h5",
+            "pseudobulk_path": "/tmp/pb.h5",
             "splits": ["train", "valid"],
             "feature_selection_mode": "cutoff",
             "feature_cutoff": 1.1,
@@ -221,7 +221,7 @@ class TestGeneratedConfigSatisfiesValidator(unittest.TestCase):
             "output_dir": "/tmp/out",
         }
         cfg = FitDeconvolutionWizard().build_config(answers)
-        for field in ("pseudobulk_h5_path", "output_dir", "labels_dict_path"):
+        for field in ("pseudobulk_path", "output_dir", "labels_dict_path"):
             self.assertIn(field, cfg)
 
 

@@ -40,7 +40,7 @@ class TestSplitsSection(unittest.TestCase):
             fc, "_list_splits", return_value=["train", "valid", "test"]
         ):
             eng = _StubEngine([["train", "valid"]])
-            answers = {"pseudobulk_h5_path": "x.h5"}
+            answers = {"pseudobulk_path": "x.h5"}
             fc._splits_section(eng, answers)
         self.assertEqual(answers["splits"], ["train", "valid"])
         self.assertEqual(eng.calls[0], ["train", "valid", "test"])
@@ -48,7 +48,7 @@ class TestSplitsSection(unittest.TestCase):
     def test_splits_fallback_when_unreadable(self):
         with mock.patch.object(fc, "_list_splits", return_value=[]):
             eng = _StubEngine([])  # ask_checkbox must NOT be called
-            answers = {"pseudobulk_h5_path": "x.h5"}
+            answers = {"pseudobulk_path": "x.h5"}
             fc._splits_section(eng, answers)
         self.assertEqual(answers["splits"], ["train", "valid", "test"])
         self.assertEqual(eng.calls, [])
@@ -58,7 +58,7 @@ class TestSplitsSection(unittest.TestCase):
             fc, "_list_splits", return_value=["train", "valid", "test"]
         ):
             eng = _StubEngine([["train"], ["train", "valid"]])  # 1st omits valid
-            answers = {"pseudobulk_h5_path": "x.h5"}
+            answers = {"pseudobulk_path": "x.h5"}
             fc._splits_section(eng, answers)
         self.assertEqual(answers["splits"], ["train", "valid"])
         self.assertEqual(len(eng.calls), 2)
@@ -66,7 +66,7 @@ class TestSplitsSection(unittest.TestCase):
     def test_splits_no_valid_in_file_accepts_single_selection(self):
         with mock.patch.object(fc, "_list_splits", return_value=["train", "test"]):
             eng = _StubEngine([["train", "test"]])
-            answers = {"pseudobulk_h5_path": "x.h5"}
+            answers = {"pseudobulk_path": "x.h5"}
             fc._splits_section(eng, answers)
         self.assertEqual(answers["splits"], ["train", "test"])
         self.assertEqual(len(eng.calls), 1)  # no reprompt when file has no 'valid'
@@ -131,7 +131,7 @@ class TestFitCalibrationSchema(unittest.TestCase):
 
     def test_pseudobulk_asked_before_splits(self):
         self.assertLess(
-            self.keys.index("pseudobulk_h5_path"), self.keys.index("splits")
+            self.keys.index("pseudobulk_path"), self.keys.index("splits")
         )
 
     def test_deconvolvers_dir_before_deconvolvers(self):
@@ -156,7 +156,7 @@ class TestFitCalibrationBuildConfig(unittest.TestCase):
             "labels_dict_path": "App/labels_dict.json",
             "num_output_labels": 39,
             "num_input_labels": 39,
-            "pseudobulk_h5_path": "/tmp/pb.h5",
+            "pseudobulk_path": "/tmp/pb.h5",
             "splits": ["train", "valid", "test"],
             "features_mask_path": "/tmp/mask.npz",
             "deconvolvers_dir": "/tmp/deconv/",
@@ -167,7 +167,7 @@ class TestFitCalibrationBuildConfig(unittest.TestCase):
             "output_dir": "/tmp/out",
         }
         cfg = self.wiz.build_config(answers)
-        self.assertEqual(cfg["pseudobulk_h5_path"], "/tmp/pb.h5")
+        self.assertEqual(cfg["pseudobulk_path"], "/tmp/pb.h5")
         self.assertEqual(cfg["splits"], ["train", "valid", "test"])
         self.assertEqual(cfg["deconvolvers"][0]["params"]["device"], "cuda")
         self.assertNotIn("params", cfg["deconvolvers"][1])

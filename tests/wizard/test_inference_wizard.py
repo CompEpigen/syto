@@ -69,7 +69,7 @@ class TestInferenceWizardSchema(unittest.TestCase):
         self.assertFalse(section.when({"run_syto": False}))
 
     def test_pseudobulk_only_for_prior_strategies(self):
-        spec = self.by_key["pseudobulk_h5_path"]
+        spec = self.by_key["pseudobulk_path"]
         self.assertTrue(
             spec.when(
                 {
@@ -110,7 +110,7 @@ class TestInferenceBuildConfig(unittest.TestCase):
             "input.chromosomes": "all",
             "fill_in_missing_labels": True,
             "missing_label_strategy": "prior_blending",
-            "pseudobulk_h5_path": "/tmp/pb.h5",
+            "pseudobulk_path": "/tmp/pb.h5",
             "deconvolution.syto.methods": [],
             "deconvolution.baselines": [],
             "output_dir": "/tmp/out",

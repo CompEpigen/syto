@@ -56,7 +56,7 @@ def _raw_with_real_paths(tmpdir):
         "input.chromosomes": "all",
         "fill_in_missing_labels": True,
         "missing_label_strategy": "prior_blending",
-        "pseudobulk_h5_path": pb,
+        "pseudobulk_path": pb,
         "output_dir": "/tmp/out",
         "output.save_processed_reads": False,
         "output.save_predictions": True,

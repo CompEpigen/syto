@@ -30,7 +30,7 @@ class TestSplitsSection(unittest.TestCase):
             dp, "_list_splits", return_value=["train", "valid", "test"]
         ):
             eng = _StubEngine(checkbox=[["train", "test"]])
-            answers = {"pseudobulk_h5_path": "x.h5"}
+            answers = {"pseudobulk_path": "x.h5"}
             dp._splits_section(eng, answers)
         self.assertEqual(answers["splits"], ["train", "test"])
         self.assertEqual(eng.calls[0], ["train", "valid", "test"])
@@ -38,7 +38,7 @@ class TestSplitsSection(unittest.TestCase):
     def test_key_omitted_when_file_unreadable(self):
         with mock.patch.object(dp, "_list_splits", return_value=[]):
             eng = _StubEngine(checkbox=[])  # ask_checkbox must NOT be called
-            answers = {"pseudobulk_h5_path": "x.h5"}
+            answers = {"pseudobulk_path": "x.h5"}
             dp._splits_section(eng, answers)
         self.assertNotIn("splits", answers)
         self.assertEqual(eng.calls, [])
@@ -46,7 +46,7 @@ class TestSplitsSection(unittest.TestCase):
     def test_key_omitted_when_nothing_selected(self):
         with mock.patch.object(dp, "_list_splits", return_value=["train", "valid"]):
             eng = _StubEngine(checkbox=[[]])
-            answers = {"pseudobulk_h5_path": "x.h5"}
+            answers = {"pseudobulk_path": "x.h5"}
             dp._splits_section(eng, answers)
         self.assertNotIn("splits", answers)
 
@@ -113,7 +113,7 @@ class TestSchema(unittest.TestCase):
 
     def test_pseudobulk_before_splits(self):
         self.assertLess(
-            self.keys.index("pseudobulk_h5_path"), self.keys.index("splits")
+            self.keys.index("pseudobulk_path"), self.keys.index("splits")
         )
 
     def test_sections_are_list_sections(self):
@@ -140,7 +140,7 @@ class TestBuildConfig(unittest.TestCase):
     def test_lists_passthrough(self):
         answers = {
             "labels_dict_path": "App/labels_dict.json",
-            "pseudobulk_h5_path": "/tmp/pb.h5",
+            "pseudobulk_path": "/tmp/pb.h5",
             "splits": ["train", "test"],
             "baselines": [
                 {"model": "uxm", "enabled": True, "atlas_path": "/tmp/atlas.tsv"}
@@ -173,7 +173,7 @@ class TestGeneratedConfigSatisfiesValidator(unittest.TestCase):
         # required_fields["deconvolute_pseudobulk"].
         answers = {
             "labels_dict_path": "App/labels_dict.json",
-            "pseudobulk_h5_path": "/tmp/pb.h5",
+            "pseudobulk_path": "/tmp/pb.h5",
             "baselines": [{"model": "celfie", "enabled": True, "atlas_path": "/a.csv"}],
             "output_dir": "/tmp/out",
             "n_workers": 1,
@@ -181,7 +181,7 @@ class TestGeneratedConfigSatisfiesValidator(unittest.TestCase):
             "class_label_column": "original_label",
         }
         cfg = DeconvolutePseudobulkWizard().build_config(answers)
-        for field in ("pseudobulk_h5_path", "output_dir", "labels_dict_path"):
+        for field in ("pseudobulk_path", "output_dir", "labels_dict_path"):
             self.assertIn(field, cfg)
 
 
