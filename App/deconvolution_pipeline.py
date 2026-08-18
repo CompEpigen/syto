@@ -23,7 +23,7 @@ import numpy as np
 import pandas as pd
 import torch
 
-from syto.data.pseudobulk_hdf5_utils import PseudobulkHDF5Reader
+from syto.data.pseudobulk_store import open_pseudobulk_store
 from syto.deconvolution.evaluation import compute_deconvolution_metrics
 from syto.deconvolution.feature_selection import (
     apply_feature_mask,
@@ -66,9 +66,10 @@ class DeconvolutionFittingPipeline:
         self.num_output_labels = config.get("num_output_labels", len(self.labels_dict))
         self.num_input_labels = config.get("num_input_labels", self.num_output_labels)
 
-        # Input: consolidated pseudobulk HDF5 file (pure profiles + pseudobulks)
-        self.pseudobulk_h5_path = config["pseudobulk_h5_path"]
-        self.reader = PseudobulkHDF5Reader(self.pseudobulk_h5_path, logger=self.logger)
+        # Input: a pseudobulk store (pure profiles + pseudobulks), in either the
+        # consolidated HDF5 or the columnar layout.
+        self.pseudobulk_path = config["pseudobulk_path"]
+        self.reader = open_pseudobulk_store(self.pseudobulk_path, logger=self.logger)
 
         # Output
         self.output_dir = config["output_dir"]
@@ -119,7 +120,7 @@ class DeconvolutionFittingPipeline:
             ``prediction_{i}_wavg`` columns.
         """
         self.logger.info(
-            f"Stage 1: Loading pure cell-type profiles from {self.pseudobulk_h5_path}"
+            f"Stage 1: Loading pure cell-type profiles from {self.pseudobulk_path}"
         )
 
         pure_profiles: Dict[str, np.ndarray] = {}

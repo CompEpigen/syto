@@ -48,7 +48,7 @@ from typing import Any, Dict, List, Tuple
 import numpy as np
 import pandas as pd
 
-from syto.data.pseudobulk_hdf5_utils import PseudobulkHDF5Reader
+from syto.data.pseudobulk_store import open_pseudobulk_store
 from syto.deconvolution.evaluation import compute_deconvolution_metrics
 from syto.deconvolution.feature_selection import apply_feature_mask
 from syto.calibration.linear_calibrator import LinearCalibrator
@@ -222,13 +222,14 @@ class CalibratorFittingPipeline:
         ]
         required_for_models = bool(self.model_backed_cfgs)
 
-        # Input: consolidated pseudobulk HDF5 file (pseudobulks + proportions)
-        self.pseudobulk_h5_path = self._get_model_input(
-            "pseudobulk_h5_path", required_for_models
+        # Input: a pseudobulk store (pseudobulks + proportions), in either the
+        # consolidated HDF5 or the columnar layout.
+        self.pseudobulk_path = self._get_model_input(
+            "pseudobulk_path", required_for_models
         )
         self.reader = (
-            PseudobulkHDF5Reader(self.pseudobulk_h5_path, logger=self.logger)
-            if self.pseudobulk_h5_path
+            open_pseudobulk_store(self.pseudobulk_path, logger=self.logger)
+            if self.pseudobulk_path
             else None
         )
 
@@ -358,7 +359,7 @@ class CalibratorFittingPipeline:
         self.logger.info(f"  Mask shape={mask.shape}, selected={int(mask.sum())}")
 
         self.logger.info(
-            f"Stage 1a: Reading pseudobulk matrices from {self.pseudobulk_h5_path}"
+            f"Stage 1a: Reading pseudobulk matrices from {self.pseudobulk_path}"
         )
         features_dict: Dict[str, np.ndarray] = {}
         proportions_dict: Dict[str, np.ndarray] = {}

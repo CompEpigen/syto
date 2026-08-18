@@ -31,7 +31,7 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
-from syto.data.pseudobulk_hdf5_utils import PseudobulkHDF5Reader, PseudobulkHDF5Schema
+from syto.data.pseudobulk_store import PseudobulkStore, open_pseudobulk_store
 
 # ---------------------------------------------------------------------------
 # Module-level worker state — populated in the parent and inherited by
@@ -191,7 +191,7 @@ class PseudobulkDeconvolutionPipeline:
         self.config = config
         self.logger = logger
         self.output_dir = Path(config["output_dir"])
-        self.h5_path = config["pseudobulk_h5_path"]
+        self.pseudobulk_path = config["pseudobulk_path"]
         self.class_label_column = config.get("class_label_column", "original_label")
 
         with open(config["labels_dict_path"], "r", encoding="utf-8") as f:
@@ -206,20 +206,21 @@ class PseudobulkDeconvolutionPipeline:
     # Config helpers
     # ------------------------------------------------------------------
 
-    def _resolve_splits(self, reader: PseudobulkHDF5Reader) -> List[str]:
+    def _resolve_splits(self, reader: PseudobulkStore) -> List[str]:
         configured = self.config.get("splits")
         if configured:
             return configured
         return reader.list_splits()
 
-    def _count_split_pseudobulks(self, split: str) -> Optional[int]:
-        import h5py
+    @staticmethod
+    def _count_split_pseudobulks(reader: PseudobulkStore, split: str) -> Optional[int]:
+        """Return the split's pseudobulk count, or ``None`` if unavailable.
 
-        pbs_group = PseudobulkHDF5Schema.pseudobulks_group(split)
+        Only used to size a progress bar, so an unreadable count is not fatal.
+        """
         try:
-            with h5py.File(self.h5_path, "r") as f:
-                return len(f[pbs_group]) if pbs_group in f else None
-        except Exception:
+            return reader.count_pseudobulks(split)
+        except (KeyError, OSError, ValueError):
             return None
 
     # ------------------------------------------------------------------
@@ -332,12 +333,12 @@ class PseudobulkDeconvolutionPipeline:
         baseline_cfgs = self.config["baselines"]
         model_states = [self._load_model_state(cfg) for cfg in baseline_cfgs]
 
-        reader = PseudobulkHDF5Reader(self.h5_path, logger=self.logger)
+        reader = open_pseudobulk_store(self.pseudobulk_path, logger=self.logger)
         splits = self._resolve_splits(reader)
 
         for split in splits:
             self.logger.info("Processing split: %s", split)
-            total = self._count_split_pseudobulks(split)
+            total = self._count_split_pseudobulks(reader, split)
 
             self.logger.info("  Loading shared reconstruction state…")
             input_df, indices_per_class_and_grg = reader.build_reconstruction_state(
