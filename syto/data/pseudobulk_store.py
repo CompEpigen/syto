@@ -1,22 +1,4 @@
 """Format-independent access to generated pseudobulks.
-
-Pseudobulks are produced once and then read by several pipelines
-(deconvolution fitting, calibration, baseline deconvolution, inference and the
-wizard).  Those consumers only ever need a handful of operations, listed here
-as :class:`PseudobulkStore`.  Keeping that contract explicit lets the same
-pipelines run against more than one on-disk layout: the consolidated
-``pseudobulk.h5`` written by
-:class:`~syto.data.pseudobulk_hdf5_utils.PseudobulkHDF5ConsolidationWriter`, and
-the columnar store used for publication.
-
-Use :func:`open_pseudobulk_store` rather than constructing a reader directly;
-it inspects the path and returns the right backend.
-
-Backends share more than they differ.  Everything that is genuinely
-format-specific reduces to six primitives, and :class:`BasePseudobulkReader`
-derives the rest -- notably the read-level reconstruction, which is subtle
-enough that having one implementation matters more than the small amount of
-code it saves.
 """
 
 from __future__ import annotations
