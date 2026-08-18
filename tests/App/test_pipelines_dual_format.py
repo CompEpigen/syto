@@ -1,11 +1,4 @@
 """Every consumer of a pseudobulk store works against both on-disk layouts.
-
-Phase D swapped five construction sites from the HDF5 reader to
-:func:`~syto.data.pseudobulk_store.open_pseudobulk_store`.  The risk that
-introduces is a site that still assumes HDF5 semantics somewhere below the
-constructor, so each one is exercised here against an HDF5 store *and* a
-columnar store built from the same generation batches, and the results are
-required to match.
 """
 
 import json
