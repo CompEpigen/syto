@@ -259,10 +259,10 @@ class InferenceWizard:
                 when=lambda a: a.get("fill_in_missing_labels"),
             ),
             FieldSpec(
-                key="pseudobulk_h5_path",
-                label="Pseudobulk HDF5 path",
+                key="pseudobulk_path",
+                label="Pseudobulk store path (.h5 file or columnar dir)",
                 kind="path",
-                validate=v.path_exists,
+                validate=v.pseudobulk_store,
                 when=lambda a: a.get("fill_in_missing_labels")
                 and a.get("missing_label_strategy")
                 in {"prior_blending", "prior_imputation"},

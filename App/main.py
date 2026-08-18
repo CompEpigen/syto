@@ -57,11 +57,11 @@ def validate_config(config: Dict[str, Any], task: str) -> None:
             "labels_dict_path",
         ],
         "fit_deconvolution": [
-            "pseudobulk_h5_path",
+            "pseudobulk_path",
             "output_dir",
             "labels_dict_path",
         ],
-        # pseudobulk_h5_path / features_mask_path / deconvolvers_dir are only
+        # pseudobulk_path / features_mask_path / deconvolvers_dir are only
         # required for deconvolvers that must be loaded and evaluated; see the
         # conditional check below.
         "fit_calibration": [
@@ -73,7 +73,7 @@ def validate_config(config: Dict[str, Any], task: str) -> None:
             "labels_dict_path",
         ],
         "deconvolute_pseudobulk": [
-            "pseudobulk_h5_path",
+            "pseudobulk_path",
             "output_dir",
             "labels_dict_path",
         ],
@@ -106,7 +106,7 @@ def validate_config(config: Dict[str, Any], task: str) -> None:
         ]
         if model_backed:
             for field in (
-                "pseudobulk_h5_path",
+                "pseudobulk_path",
                 "features_mask_path",
                 "deconvolvers_dir",
             ):

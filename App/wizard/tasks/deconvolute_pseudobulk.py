@@ -33,7 +33,7 @@ def _splits_section(engine, answers) -> None:
     an empty selection simply leaves ``splits`` out of the config and lets the
     pipeline auto-discover them at run time.
     """
-    available = _list_splits(answers.get("pseudobulk_h5_path", ""))
+    available = _list_splits(answers.get("pseudobulk_path", ""))
     if not available:
         print(
             "  ! Could not read splits from the pseudobulk file; "
@@ -76,10 +76,10 @@ class DeconvolutePseudobulkWizard:
                 validate=v.path_exists,
             ),
             FieldSpec(
-                key="pseudobulk_h5_path",
-                label="Pseudobulk HDF5 path",
+                key="pseudobulk_path",
+                label="Pseudobulk store path (.h5 file or columnar dir)",
                 kind="path",
-                validate=v.path_exists,
+                validate=v.pseudobulk_store,
             ),
             FieldSpec(
                 key="splits",

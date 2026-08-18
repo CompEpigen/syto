@@ -20,6 +20,17 @@ def path_exists_or_blank(value: str) -> str | None:
     return path_exists(value)
 
 
+def pseudobulk_store(value: str) -> str | None:
+    """Accept either a consolidated ``.h5`` file or a columnar store directory."""
+    from syto.data.pseudobulk_store import detect_store_format
+
+    try:
+        detect_store_format(value)
+    except (FileNotFoundError, ValueError) as exc:
+        return str(exc)
+    return None
+
+
 def positive_int(value: int) -> str | None:
     if value <= 0:
         return "Value must be a positive integer."

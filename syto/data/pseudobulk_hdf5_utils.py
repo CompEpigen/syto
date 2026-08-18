@@ -4,6 +4,7 @@ This module provides:
 - HDF5 schema constants defining the structure of pseudobulk output files
 - HDF5Writer class for atomic batch file writing
 - Checkpoint management for crash-resilient generation
+- The HDF5 backend of the :mod:`syto.data.pseudobulk_store` contract
 """
 
 import shutil
@@ -20,6 +21,8 @@ import tempfile
 import h5py
 import numpy as np
 import pandas as pd
+
+from syto.data.pseudobulk_store import BasePseudobulkReader
 
 _module_logger = logging.getLogger(__name__)
 
@@ -867,7 +870,7 @@ class PseudobulkHDF5ConsolidationWriter:
 # =============================================================================
 
 
-class PseudobulkHDF5Reader:
+class PseudobulkHDF5Reader(BasePseudobulkReader):
     """Read pseudobulk and pure-profile data from a consolidated HDF5 file.
 
     This is the counterpart of :class:`PseudobulkHDF5ConsolidationWriter`.
@@ -875,6 +878,12 @@ class PseudobulkHDF5Reader:
     downstream consumers (e.g. the deconvolution fitting pipeline) directly
     from the single ``pseudobulk.h5`` file produced by
     :class:`~syto.data.pseudobulk_generator.PseudobulkGenerator`.
+
+    Reconstruction of read subsets, column selection and label decoding are
+    inherited from :class:`~syto.data.pseudobulk_store.BasePseudobulkReader`;
+    only the HDF5-specific reads live here.  Prefer
+    :func:`~syto.data.pseudobulk_store.open_pseudobulk_store` over constructing
+    this class directly.
     """
 
     def __init__(
@@ -891,37 +900,6 @@ class PseudobulkHDF5Reader:
         self.path = Path(path)
         self.logger = logger
 
-    # --- Low level helpers ---
-
-    @staticmethod
-    def _decode_columns(raw: Any) -> List[str]:
-        """Decode an HDF5 column-name attribute into a list of ``str``."""
-        return [
-            c.decode() if isinstance(c, (bytes, bytearray)) else str(c) for c in raw
-        ]
-
-    @staticmethod
-    def _prediction_indices(columns: List[str], num_pred_classes: int) -> List[int]:
-        """Return the column indices of the ``prediction_{i}_wavg`` features.
-
-        Args:
-            columns: Ordered list of feature-column names.
-            num_pred_classes: Number of prediction classes to extract.
-
-        Returns:
-            List of indices (length ``num_pred_classes``) into ``columns``.
-        """
-        indices: List[int] = []
-        for i in range(num_pred_classes):
-            name = f"prediction_{i}_wavg"
-            if name not in columns:
-                raise KeyError(
-                    f"Expected feature column '{name}' not found in HDF5 file "
-                    f"(available columns: {columns})."
-                )
-            indices.append(columns.index(name))
-        return indices
-
     # --- Public API ---
 
     def list_splits(self) -> List[str]:
@@ -930,6 +908,27 @@ class PseudobulkHDF5Reader:
             if PseudobulkHDF5Schema.OUTPUTS not in f:
                 return []
             return list(f[PseudobulkHDF5Schema.OUTPUTS].keys())
+
+    def count_pseudobulks(self, split_name: str) -> int:
+        """Return how many pseudobulks are stored for a split.
+
+        Args:
+            split_name: Name of the split (e.g. ``"train"``).
+
+        Returns:
+            The number of pseudobulk groups under the split.
+
+        Raises:
+            KeyError: If no pseudobulks are found for *split_name*.
+        """
+        pbs_group = PseudobulkHDF5Schema.pseudobulks_group(split_name)
+        with h5py.File(self.path, "r") as f:
+            if pbs_group not in f:
+                raise KeyError(
+                    f"No pseudobulks found for split '{split_name}' at "
+                    f"'{pbs_group}' in {self.path}."
+                )
+            return len(f[pbs_group])
 
     def read_pure_feature_matrix(
         self, split_name: str, num_pred_classes: int
@@ -1092,150 +1091,6 @@ class PseudobulkHDF5Reader:
                 PseudobulkHDF5Schema.ATTR_GR_ID_COLUMN
             ]
         return raw.decode() if isinstance(raw, (bytes, bytearray)) else str(raw)
-
-    @staticmethod
-    def _build_indices_per_class_and_grg(
-        df: pd.DataFrame,
-        class_label_column: str,
-        grg_label_column: str,
-        gr_groups_mapping: Dict[str, int],
-    ) -> Dict[tuple[int, int], np.ndarray]:
-        """Group row positions of ``df`` by ``(class_index, grg_index)``.
-
-        Mirrors
-        :meth:`~syto.data.pseudobulk_generator.PseudobulkGenerator._precompute_group_indices`
-        so that the resulting dictionary matches the one used at generation
-        time (required for the sampling RNG to reproduce the same draws).
-
-        Args:
-            df: Input DataFrame for the split (as returned by
-                :meth:`_read_input_dataframe`).
-            class_label_column: Column holding the (integer) class index.
-            grg_label_column: Column holding the GR-group label or index.
-            gr_groups_mapping: Mapping from GR-group label to GR-group index.
-
-        Returns:
-            Dictionary mapping ``(class_index, grg_index)`` to arrays of row
-            positions (suitable for ``DataFrame.iloc``).
-        """
-        for col in (class_label_column, grg_label_column):
-            if col not in df.columns:
-                raise KeyError(
-                    f"Column '{col}' not found in the reconstructed input "
-                    f"DataFrame (available columns: {list(df.columns)})."
-                )
-
-        grouped = df.groupby([class_label_column, grg_label_column], sort=False)
-        indices_dict: Dict[tuple[int, int], np.ndarray] = {}
-        for (class_label, grg_label), row_indices in grouped.indices.items():
-            class_index = int(class_label)
-            grg_key = (
-                str(grg_label) if str(grg_label) in gr_groups_mapping else grg_label
-            )
-            if grg_key in gr_groups_mapping:
-                grg_index = gr_groups_mapping[grg_key]
-            else:
-                grg_index = int(grg_label)
-            indices_dict[(class_index, grg_index)] = row_indices
-
-        return indices_dict
-
-    def iter_pseudobulk_read_subsets(
-        self,
-        split_name: str,
-        class_label_column: str = "original_label",
-    ) -> Iterator[tuple[pd.DataFrame, np.ndarray]]:
-        """Reconstruct the read-level subset sampled for each pseudobulk.
-
-        For every pseudobulk stored under
-        ``outputs/<split_name>/pseudobulks``, re-derives the exact rows of
-        the input DataFrame that were sampled (with replacement) to build
-        it, using the stored ``seed`` and ``n_reads_per_gr`` together with
-        :func:`syto.data.pseudobulk_generator._sample_read_ids_from_grouped_dataframe`.
-        This is the inverse of
-        :meth:`~syto.data.pseudobulk_generator.PseudobulkGenerator.generate_single_pseudobulk`.
-
-        Args:
-            split_name: Name of the split (e.g. ``"train"``).
-            class_label_column: Column in the input DataFrame holding the
-                (integer) class index of each read. Must match the
-                ``class_label_column`` used by
-                :class:`~syto.data.pseudobulk_generator.PseudobulkGenerator`
-                during generation (default: ``"original_label"``).
-
-        Yields:
-            Tuples ``(reads, target_proportions)`` in order of pseudobulk
-            index, where ``reads`` is the DataFrame subset of sampled reads
-            (rows may repeat, since sampling is performed with replacement)
-            and ``target_proportions`` has shape ``(n_classes,)``.
-        """
-        from syto.data.pseudobulk_generator import (
-            _sample_read_ids_from_grouped_dataframe,
-        )
-
-        input_df = self._read_input_dataframe(split_name)
-        grg_label_column = self._read_grg_label_column()
-        gr_groups_mapping = self._read_gr_groups_mapping()
-        indices_per_class_and_grg = self._build_indices_per_class_and_grg(
-            input_df, class_label_column, grg_label_column, gr_groups_mapping
-        )
-
-        pbs_group = PseudobulkHDF5Schema.pseudobulks_group(split_name)
-        with h5py.File(self.path, "r") as f:
-            if pbs_group not in f:
-                raise KeyError(
-                    f"No pseudobulks found for split '{split_name}' at "
-                    f"'{pbs_group}' in {self.path}."
-                )
-            pbs = f[pbs_group]
-            keys = sorted(pbs.keys(), key=lambda k: int(k.split("_")[1]))
-            for key in keys:
-                grp = pbs[key]
-                seed = int(grp.attrs[PseudobulkHDF5Schema.ATTR_SEED])
-                n_samples_per_class_per_grg = grp[
-                    PseudobulkHDF5Schema.DATASET_N_READS_PER_GR
-                ][...]
-                target_proportions = grp[
-                    PseudobulkHDF5Schema.DATASET_TARGET_PROPORTIONS
-                ][...]
-
-                read_ids = _sample_read_ids_from_grouped_dataframe(
-                    n_samples_per_class_per_grg,
-                    indices_per_class_and_grg,
-                    seed=seed,
-                )
-                reads = input_df.iloc[read_ids].reset_index(drop=True)
-                yield reads, target_proportions
-
-    def build_reconstruction_state(
-        self,
-        split_name: str,
-        class_label_column: str = "original_label",
-    ) -> "tuple[pd.DataFrame, Dict[tuple, np.ndarray]]":
-        """Load the shared state required to reconstruct pseudobulk read subsets.
-
-        Call this once per split before iterating with
-        :meth:`iter_pseudobulk_params`.  The returned objects are read-only and
-        safe to share across threads.
-
-        Args:
-            split_name: Name of the split (e.g. ``"train"``).
-            class_label_column: Column in the input DataFrame holding the
-                (integer) class index of each read.
-
-        Returns:
-            ``(input_df, indices_per_class_and_grg)`` where ``input_df`` is the
-            full per-split read DataFrame and ``indices_per_class_and_grg`` maps
-            ``(class_index, grg_index)`` to arrays of row positions for
-            ``DataFrame.iloc``.
-        """
-        input_df = self._read_input_dataframe(split_name)
-        grg_label_column = self._read_grg_label_column()
-        gr_groups_mapping = self._read_gr_groups_mapping()
-        indices_per_class_and_grg = self._build_indices_per_class_and_grg(
-            input_df, class_label_column, grg_label_column, gr_groups_mapping
-        )
-        return input_df, indices_per_class_and_grg
 
     def iter_pseudobulk_params(
         self,

@@ -27,7 +27,7 @@ REQUIRED_SPLITS = ["train", "valid"]
 
 def _splits_section(engine, answers) -> None:
     """Resolve fitting splits from the pseudobulk HDF5, enforcing train+valid."""
-    available = _list_splits(answers.get("pseudobulk_h5_path", ""))
+    available = _list_splits(answers.get("pseudobulk_path", ""))
     if not available:
         print(
             "  ! Could not read splits from the pseudobulk file; "
@@ -143,10 +143,10 @@ class FitDeconvolutionWizard:
                 validate=v.positive_int,
             ),
             FieldSpec(
-                key="pseudobulk_h5_path",
-                label="Pseudobulk HDF5 path",
+                key="pseudobulk_path",
+                label="Pseudobulk store path (.h5 file or columnar dir)",
                 kind="path",
-                validate=v.path_exists,
+                validate=v.pseudobulk_store,
             ),
             FieldSpec(
                 key="splits",

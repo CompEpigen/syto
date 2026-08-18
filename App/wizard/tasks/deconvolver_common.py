@@ -40,11 +40,11 @@ def template_deconvolver_entries() -> list[dict]:
     return entries
 
 
-def list_splits(pseudobulk_h5_path: str) -> list[str]:
-    """Return the split names present in a pseudobulk HDF5 file (``[]`` on error)."""
+def list_splits(pseudobulk_path: str) -> list[str]:
+    """Return the split names present in a pseudobulk store (``[]`` on error)."""
     try:
-        from syto.data.pseudobulk_hdf5_utils import PseudobulkHDF5Reader
+        from syto.data.pseudobulk_store import open_pseudobulk_store
 
-        return list(PseudobulkHDF5Reader(pseudobulk_h5_path).list_splits())
+        return list(open_pseudobulk_store(pseudobulk_path).list_splits())
     except Exception:  # pragma: no cover - defensive; any read failure -> fallback
         return []

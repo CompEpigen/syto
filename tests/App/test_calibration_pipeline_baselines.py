@@ -180,7 +180,7 @@ class TestCalibrationPipelineFromStoredPredictions(unittest.TestCase):
 
         pipeline = CalibratorFittingPipeline(self._config(baseline_dir), self.logger)
 
-        self.assertIsNone(pipeline.pseudobulk_h5_path)
+        self.assertIsNone(pipeline.pseudobulk_path)
         self.assertIsNone(pipeline.features_mask_path)
         self.assertIsNone(pipeline.deconvolvers_dir)
 
@@ -284,7 +284,7 @@ class TestFitCalibrationConfigValidation(unittest.TestCase):
 
         with self.assertRaises(ValueError) as ctx:
             validate_config(config, "fit_calibration")
-        self.assertIn("pseudobulk_h5_path", str(ctx.exception))
+        self.assertIn("pseudobulk_path", str(ctx.exception))
 
     def test_mixed_config_requires_model_inputs(self):
         config = self._base()
@@ -295,7 +295,7 @@ class TestFitCalibrationConfigValidation(unittest.TestCase):
 
         with self.assertRaises(ValueError) as ctx:
             validate_config(config, "fit_calibration")
-        self.assertIn("pseudobulk_h5_path", str(ctx.exception))
+        self.assertIn("pseudobulk_path", str(ctx.exception))
 
 
 if __name__ == "__main__":
