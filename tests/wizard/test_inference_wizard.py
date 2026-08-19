@@ -124,6 +124,7 @@ class TestInferenceBuildConfig(unittest.TestCase):
             "bam_processing.min_cpgs": 4,
             "bam_processing.merge_pairs": True,
             "bam_processing.ont_methyl_tr": 180,
+            "bam_processing.ont_unmethyl_tr": 75,
             "max_sequence_length": 150,
             "prediction_batch_size": 2200,
             "cell_type_match_dict_path": "",

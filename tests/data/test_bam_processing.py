@@ -221,12 +221,31 @@ class TestCpgScans(unittest.TestCase):
 
     def test_cpg_scan_classifies_methylated_unmethylated_and_missing_calls(self):
         """Map ML values to CpG states and mark uncovered CpGs as missing."""
-        positions, states = bp.cpg_scan(b"ACGCGT", [200], tr=122)
+        positions, states = bp.cpg_scan(b"ACGCGT", [200], methyl_tr=122)
 
         self.assertEqual(positions, [1, 3])
         self.assertEqual(states, [1, 2])
 
-        positions, states = bp.cpg_scan(b"ACGCGT", [200, 100], tr=122)
+        positions, states = bp.cpg_scan(b"ACGCGT", [200, 100], methyl_tr=122)
+        self.assertEqual(positions, [1, 3])
+        self.assertEqual(states, [1, 0])
+
+    def test_cpg_scan_marks_ambiguous_calls_between_thresholds_as_unknown(self):
+        """Leave CpGs whose probability lands between both thresholds uncalled."""
+        # 200 -> methylated, 130 -> ambiguous, 40 -> unmethylated
+        positions, states = bp.cpg_scan(
+            b"ACGCGACGT", [200, 130, 40], methyl_tr=180, unmethyl_tr=75
+        )
+
+        self.assertEqual(positions, [1, 3, 6])
+        self.assertEqual(states, [1, 2, 0])
+
+    def test_cpg_scan_without_ambiguous_band_keeps_single_boundary(self):
+        """Call every covered CpG when both thresholds coincide."""
+        positions, states = bp.cpg_scan(
+            b"ACGCGT", [123, 122], methyl_tr=122, unmethyl_tr=122
+        )
+
         self.assertEqual(positions, [1, 3])
         self.assertEqual(states, [1, 0])
 
@@ -332,6 +351,33 @@ class TestProcessSingleReadOnt(unittest.TestCase):
         self.assertAlmostEqual(read_data["methylation_rate"], 0.5)
         self.assertEqual(read_data["read_length"], 6)
 
+    def test_ambiguous_ont_calls_are_excluded_from_the_methylation_rate(self):
+        """Token 2 for uncertain calls, which must not dilute the rate."""
+        read = build_read(
+            query_name="ont-read",
+            reference_start=100,
+            reference_end=106,
+            forward_sequence="ACGCGT",
+            tags={"ML": [200, 130], "MM": "C+m,0,0"},
+        )
+
+        result = bp.process_single_read(read, "ont", methyl_tr=180, unmethyl_tr=75)
+
+        read_data = result[0]
+        self.assertEqual(read_data["meth_states"], [1, 2])
+        self.assertEqual(read_data["methylation_encoding"], "212222")
+        self.assertEqual(read_data["total_cpgs"], 2)
+        self.assertEqual(read_data["methylated_cpgs"], 1)
+        self.assertEqual(read_data["unmethylated_cpgs"], 0)
+        self.assertAlmostEqual(read_data["methylation_rate"], 1.0)
+
+    def test_rejects_unmethylated_threshold_above_methylated_threshold(self):
+        """Guard against an inverted (meaningless) threshold pair."""
+        with self.assertRaisesRegex(ValueError, "must not exceed"):
+            bp.resolve_unmethyl_tr(122, 180)
+
+        self.assertEqual(bp.resolve_unmethyl_tr(122, None), 122)
+
 
 class TestProcessSingleReadWgbs(unittest.TestCase):
     """Test WGBS read processing for trimming, scanning, and error handling."""
@@ -425,6 +471,7 @@ class TestProcessTabularChunk(unittest.TestCase):
             bam_path="fake.bam",
             interesting_chromosomes=["chr1"],
             methyl_tr=122,
+            unmethyl_tr=122,
             data_type="wgbs",
             reference_path=None,
             min_mapq=10,
@@ -454,6 +501,7 @@ class TestProcessTabularChunk(unittest.TestCase):
             bam_path="fake.bam",
             interesting_chromosomes=["chr1"],
             methyl_tr=122,
+            unmethyl_tr=122,
             data_type="wgbs",
             reference_path="ref.fa",
             min_mapq=10,

@@ -361,7 +361,16 @@ class InferenceWizard:
             ),
             FieldSpec(
                 key="bam_processing.ont_methyl_tr",
-                label="bam ont_methyl_tr",
+                label="bam ont_methyl_tr (ML above this -> methylated)",
+                kind="int",
+                default=180,
+                tier="expert",
+                when=_input_is_bam,
+            ),
+            FieldSpec(
+                key="bam_processing.ont_unmethyl_tr",
+                label="bam ont_unmethyl_tr (ML at/below this -> unmethylated, "
+                "in-between -> unknown)",
                 kind="int",
                 default=180,
                 tier="expert",
