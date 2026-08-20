@@ -7,7 +7,7 @@ unit-tested by subclassing and scripting those methods.
 
 from typing import Any
 
-from App.wizard.fields import FieldSpec
+from syto.app.wizard.fields import FieldSpec
 
 
 class WizardEngine:

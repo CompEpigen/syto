@@ -4,7 +4,7 @@ import unittest
 
 import h5py
 
-from App.wizard.tasks import deconvolver_common as dc
+from syto.app.wizard.tasks import deconvolver_common as dc
 
 
 class TestListSplits(unittest.TestCase):

@@ -1,7 +1,7 @@
 import unittest
 
-from App.wizard.tasks.classifier_fit import ClassifierFitWizard
-from App.wizard.tasks import TASK_REGISTRY
+from syto.app.wizard.tasks.classifier_fit import ClassifierFitWizard
+from syto.app.wizard.tasks import TASK_REGISTRY
 
 
 class TestClassifierFitSchema(unittest.TestCase):

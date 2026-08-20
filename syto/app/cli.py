@@ -1,17 +1,35 @@
 #!/usr/bin/env python3
-"""
-MethylDL Main Application Entry Point
-Supports pretraining, fine-tuning, and inference for multiple model architectures
+"""Command-line entry point for the ``syto`` package.
+
+One subcommand per pipeline task::
+
+    syto inference --config config/inference.yaml
+
+Every task is driven by a YAML config, validated by :func:`validate_config`
+before the corresponding pipeline is constructed.  The legacy
+``--task <name>`` form is still accepted and rewritten to the subcommand form.
 """
 
 import logging
 import argparse
 import sys
 import os
-from typing import Dict, Any
+from typing import Any, Dict, List, Tuple
 import shutil
 
 import yaml
+
+#: Classifier architectures accepted in a config (``model.architecture`` for
+#: classifier_fit/pretrain, ``classifier.classifier_type`` for inference) and
+#: by the ``--model`` override.  Both readers use this list so they cannot
+#: drift apart.
+MODEL_ARCHITECTURES = (
+    "dismir",
+    "methylbert",
+    "cancer_detector",
+    "lookup",
+    "epigenbert2",
+)
 
 
 def setup_logging(verbose: bool = False, log_file: str = None):
@@ -136,19 +154,13 @@ def validate_config(config: Dict[str, Any], task: str) -> None:
             # Inference without a classifier (baseline-only or pre-classified
             # reads): no architecture to validate.
             model = None
-        if model is not None and model not in [
-            "methylbert",
-            "dismir",
-            "cancer_detector",
-            "lookup",
-            "epigenbert2",
-        ]:
+        if model is not None and model not in MODEL_ARCHITECTURES:
             raise ValueError(f"Unknown model architecture: {model}")
 
 
 def run_classifier_fit(config: Dict[str, Any], logger: logging.Logger) -> None:
     """Run classifier fitting workflow."""
-    from classifier_fit_pipeline import ClassifierFittingPipeline
+    from syto.app.classifier_fit_pipeline import ClassifierFittingPipeline
 
     logger.info("Starting classifier fitting pipeline")
     pipeline = ClassifierFittingPipeline(config=config, logger=logger)
@@ -157,7 +169,7 @@ def run_classifier_fit(config: Dict[str, Any], logger: logging.Logger) -> None:
 
 def run_inference(config: Dict[str, Any], logger: logging.Logger) -> None:
     """Run inference based on configuration."""
-    from inference import InferencePipeline
+    from syto.app.inference import InferencePipeline
 
     logger.debug("Starting inference pipeline")
     pipeline = InferencePipeline(config=config, logger=logger)
@@ -196,7 +208,7 @@ def run_pretraining(config: Dict[str, Any], logger: logging.Logger) -> None:
 
 def run_pseudobulk_generation(config: Dict[str, Any], logger: logging.Logger) -> None:
     """Run pseudo-bulk generation using the HDF5-based PseudobulkGenerator."""
-    from App.pseudobulk_pipeline import PseudoBulkPipeline
+    from syto.app.pseudobulk_pipeline import PseudoBulkPipeline
 
     logger.info("Starting pseudo-bulk generation pipeline (HDF5-based)")
     pipeline = PseudoBulkPipeline(config=config, logger=logger)
@@ -212,7 +224,7 @@ def run_pseudobulk_generation(config: Dict[str, Any], logger: logging.Logger) ->
 
 def run_deconvolution_fitting(config: Dict[str, Any], logger: logging.Logger) -> None:
     """Run deconvolution model fitting based on configuration."""
-    from deconvolution_pipeline import DeconvolutionFittingPipeline
+    from syto.app.deconvolution_pipeline import DeconvolutionFittingPipeline
 
     logger.info("Starting deconvolution fitting pipeline")
     pipeline = DeconvolutionFittingPipeline(config=config, logger=logger)
@@ -221,7 +233,7 @@ def run_deconvolution_fitting(config: Dict[str, Any], logger: logging.Logger) ->
 
 def run_calibration_fitting(config: Dict[str, Any], logger: logging.Logger) -> None:
     """Run calibrator fitting based on configuration."""
-    from calibration_pipeline import CalibratorFittingPipeline
+    from syto.app.calibration_pipeline import CalibratorFittingPipeline
 
     logger.info("Starting calibration fitting pipeline")
     pipeline = CalibratorFittingPipeline(config=config, logger=logger)
@@ -232,7 +244,7 @@ def run_pseudobulk_deconvolution(
     config: Dict[str, Any], logger: logging.Logger
 ) -> None:
     """Run baseline deconvolution on a pre-generated pseudobulk HDF5 file."""
-    from App.pseudobulk_deconvolution_pipeline import PseudobulkDeconvolutionPipeline
+    from syto.app.pseudobulk_deconvolution_pipeline import PseudobulkDeconvolutionPipeline
 
     logger.info("Starting pseudobulk deconvolution pipeline")
     pipeline = PseudobulkDeconvolutionPipeline(config=config, logger=logger)
@@ -241,7 +253,7 @@ def run_pseudobulk_deconvolution(
 
 def run_build_dataset(config: Dict[str, Any], logger: logging.Logger) -> None:
     """Run the recovered-reads dataset build pipeline."""
-    from App.dataset_build_pipeline import DatasetBuildPipeline
+    from syto.app.dataset_build_pipeline import DatasetBuildPipeline
 
     logger.info("Starting recovered-reads dataset build pipeline")
     summary = DatasetBuildPipeline(config=config, logger=logger).run()
@@ -250,61 +262,84 @@ def run_build_dataset(config: Dict[str, Any], logger: logging.Logger) -> None:
 
 def run_confidence_intervals(config: Dict[str, Any], logger: logging.Logger) -> None:
     """Recompute metrics with bootstrap confidence intervals."""
-    from conf_interval_pipeline import ConfidenceIntervalPipeline
+    from syto.app.conf_interval_pipeline import ConfidenceIntervalPipeline
 
     logger.info("Starting confidence interval pipeline")
     pipeline = ConfidenceIntervalPipeline(config=config, logger=logger)
     pipeline.run()
 
 
-def main():
-    """Main entry point for the application."""
-    parser = argparse.ArgumentParser(
-        description="MethylDL Training Application",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Fine-tune using configuration file
-  python main.py --task classifier_fit --config config/classifier_fit_epigenbert2.yaml
-  
-  # Fine-tune with command-line overrides
-  python main.py --task classifier_fit --config config/base.yaml \\
-    --model epigenbert2 --max-seq-length 1000 --data-path /data/methylation
-  
-  # Run inference
-  python main.py --task inference --config config/inference.yaml --checkpoint /path/to/model
-        """,
-    )
 
-    # Required arguments
-    parser.add_argument(
-        "--task",
-        choices=[
-            "pretrain",
-            "classifier_fit",
-            "inference",
-            "generate_pseudobulk",
-            "fit_deconvolution",
-            "fit_calibration",
-            "confidence_intervals",
-            "deconvolute_pseudobulk",
-            "build_dataset",
-            "create_config",
-        ],
-        required=True,
-        help="Task to perform",
-    )
+# ═══════════════════════════════════════════════════════════════════
+#  Command table
+# ═══════════════════════════════════════════════════════════════════
+
+#: ``task name -> (runner, one-line help)``.  Task names keep the underscore
+#: spelling used by ``validate_config`` and by every config on disk; the CLI
+#: exposes each one under its hyphenated form as well.
+COMMANDS: Dict[str, Any] = {
+    "classifier_fit": (run_classifier_fit, "Fit a read-level methylation classifier"),
+    "pretrain": (run_pretraining, "Pretrain a backbone model (not yet implemented)"),
+    "inference": (run_inference, "Deconvolute a sample (BAM or pre-classified reads)"),
+    "generate_pseudobulk": (
+        run_pseudobulk_generation,
+        "Build a pseudobulk store from a classified dataset",
+    ),
+    "fit_deconvolution": (
+        run_deconvolution_fitting,
+        "Fit deconvolvers on a pseudobulk store",
+    ),
+    "fit_calibration": (
+        run_calibration_fitting,
+        "Fit calibrators on deconvolver predictions",
+    ),
+    "confidence_intervals": (
+        run_confidence_intervals,
+        "Recompute metrics with bootstrap confidence intervals",
+    ),
+    "deconvolute_pseudobulk": (
+        run_pseudobulk_deconvolution,
+        "Run baseline deconvolvers over a pseudobulk store",
+    ),
+    "build_dataset": (
+        run_build_dataset,
+        "Build a recovered-reads dataset from raw input",
+    ),
+}
+
+#: Interactive, takes no ``--config``; handled before the config machinery.
+WIZARD_TASK = "create_config"
+
+ALL_TASKS = tuple(COMMANDS) + (WIZARD_TASK,)
+
+
+def _subcommand(task: str) -> str:
+    """Hyphenated CLI spelling of a task name."""
+    return task.replace("_", "-")
+
+
+def normalize_task(name: str) -> str:
+    """Canonical (underscore) task name for either CLI spelling."""
+    return name.replace("-", "_")
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  Argument parsing
+# ═══════════════════════════════════════════════════════════════════
+
+
+def _add_common_arguments(parser: argparse.ArgumentParser) -> None:
+    """Attach the flags every task accepts (config, overrides, logging)."""
     parser.add_argument(
         "--config",
         type=str,
-        required=False,
-        help="Path to configuration file (YAML). Not used by create_config.",
+        help="Path to configuration file (YAML).",
     )
 
     # Optional overrides
     parser.add_argument(
         "--model",
-        choices=["dismir", "epigenbert2", "methylbert"],
+        choices=MODEL_ARCHITECTURES,
         help="Model architecture (overrides config)",
     )
     parser.add_argument(
@@ -350,84 +385,167 @@ Examples:
         "--dry-run", action="store_true", help="Validate configuration without running"
     )
 
-    args = parser.parse_args()
 
-    # Setup logging
+def build_parser() -> argparse.ArgumentParser:
+    """Build the ``syto`` argument parser: one subcommand per task."""
+    parser = argparse.ArgumentParser(
+        prog="syto",
+        description="Syto - methylation read classification and cell-type deconvolution",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Generate a config interactively
+  syto create-config
+
+  # Fit a classifier from a config file
+  syto classifier-fit --config config/classifiers_fitting/dismir.yaml
+
+  # Deconvolute a sample, overriding paths from the command line
+  syto inference --config config/inference.yaml --bam sample.bam --output-dir out/
+
+  # Validate a config without running anything
+  syto fit-calibration --config config/calibration/fit.yaml --dry-run
+        """,
+    )
+    # Accepted for backwards compatibility with `python syto/app/cli.py --task ...`;
+    # rewritten into the subcommand form by `_rewrite_task_alias` before parsing.
+    parser.add_argument(
+        "--task",
+        choices=ALL_TASKS,
+        help=argparse.SUPPRESS,
+    )
+
+    subparsers = parser.add_subparsers(dest="task", metavar="<command>")
+    for task, (_runner, description) in COMMANDS.items():
+        sub = subparsers.add_parser(
+            _subcommand(task),
+            aliases=[task] if _subcommand(task) != task else [],
+            help=description,
+            description=description,
+        )
+        _add_common_arguments(sub)
+
+    wizard = subparsers.add_parser(
+        _subcommand(WIZARD_TASK),
+        aliases=[WIZARD_TASK],
+        help="Interactively generate a config file",
+        description="Interactively generate a config file",
+    )
+    wizard.add_argument("--verbose", action="store_true", help="Enable verbose logging")
+    wizard.add_argument("--log-file", type=str, default=None, help="Path to log file")
+
+    return parser
+
+
+def _rewrite_task_alias(argv: List[str]) -> Tuple[List[str], bool]:
+    """Translate the legacy ``--task <name>`` form into a subcommand.
+
+    ``syto --task fit_calibration --config c.yaml`` becomes
+    ``syto fit-calibration --config c.yaml``.  Returns the rewritten argv and
+    whether a rewrite happened, so the caller can warn.
+    """
+    for i, arg in enumerate(argv):
+        if arg == "--task" and i + 1 < len(argv):
+            task, rest = argv[i + 1], argv[i + 2 :]
+            break
+        if arg.startswith("--task="):
+            task, rest = arg.split("=", 1)[1], argv[i + 1 :]
+            break
+    else:
+        return argv, False
+    return [_subcommand(normalize_task(task))] + argv[:i] + rest, True
+
+
+def apply_overrides(
+    config: Dict[str, Any], args: argparse.Namespace, logger: logging.Logger
+) -> None:
+    """Apply command-line overrides onto a loaded config, in place."""
+    if args.model:
+        config.setdefault("model", {})["architecture"] = args.model
+        logger.info("Override: model = %s", args.model)
+
+    if args.data_path:
+        config["data_path"] = args.data_path
+        logger.info("Override: data_path = %s", args.data_path)
+
+    if args.max_seq_length:
+        config["max_sequence_length"] = args.max_seq_length
+        logger.info("Override: max_sequence_length = %s", args.max_seq_length)
+
+    if args.checkpoint:
+        config["checkpoint_path"] = args.checkpoint
+        logger.info("Override: checkpoint_path = %s", args.checkpoint)
+
+    # Inference-specific overrides
+    if args.bam:
+        config.setdefault("input", {})["type"] = "bam"
+        config["input"]["bam_path"] = args.bam
+        logger.info("Override: input.bam_path = %s", args.bam)
+
+    if args.atlas:
+        config["atlas_path"] = args.atlas
+        logger.info("Override: atlas_path = %s", args.atlas)
+
+    if args.labels_dict:
+        config["labels_dict_path"] = args.labels_dict
+        logger.info("Override: labels_dict_path = %s", args.labels_dict)
+
+    if args.output_dir:
+        config["output_dir"] = args.output_dir
+        logger.info("Override: output_dir = %s", args.output_dir)
+
+    if args.datasets:
+        config["datasets"] = args.datasets
+        logger.info("Override: datasets = %s", args.datasets)
+
+    if args.mlflow_uri:
+        config.setdefault("mlflow", {})["tracking_uri"] = args.mlflow_uri
+        logger.info("Override: MLflow URI = %s", args.mlflow_uri)
+
+    if args.experiment_name:
+        config.setdefault("mlflow", {})["experiment_name"] = args.experiment_name
+        logger.info("Override: experiment_name = %s", args.experiment_name)
+
+
+def main(argv: List[str] | None = None) -> int:
+    """Entry point for the ``syto`` command."""
+    argv = list(sys.argv[1:] if argv is None else argv)
+    argv, used_task_alias = _rewrite_task_alias(argv)
+
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    if not args.task:
+        parser.print_help()
+        return 1
+    task = normalize_task(args.task)
+
     logger = setup_logging(args.verbose, args.log_file)
-    logger.info("Starting MethylDL application - Task: %s", args.task)
+    if used_task_alias:
+        logger.warning(
+            "'--task %s' is deprecated; use 'syto %s' instead.",
+            task,
+            _subcommand(task),
+        )
+    logger.info("Starting syto - task: %s", task)
 
     # The config-creation wizard is interactive and takes no --config file.
-    if args.task == "create_config":
-        from wizard import run_wizard
+    if task == WIZARD_TASK:
+        from syto.app.wizard import run_wizard
 
         run_wizard()
         return 0
 
     if not args.config:
-        parser.error("--config is required for this task")
+        parser.error(f"--config is required for '{_subcommand(task)}'")
 
     try:
-        # Load configuration
         config = load_config(args.config)
         logger.info("Loaded configuration from %s", args.config)
 
-        # Apply command-line overrides
-        if args.model:
-            if "model" not in config:
-                config["model"] = {}
-            config["model"]["architecture"] = args.model
-            logger.info("Override: model = %s", args.model)
+        apply_overrides(config, args, logger)
 
-        if args.data_path:
-            config["data_path"] = args.data_path
-            logger.info("Override: data_path = %s", args.data_path)
-
-        if args.max_seq_length:
-            config["max_sequence_length"] = args.max_seq_length
-            logger.info("Override: max_sequence_length = %s", args.max_seq_length)
-
-        if args.checkpoint:
-            config["checkpoint_path"] = args.checkpoint
-            logger.info("Override: checkpoint_path = %s", args.checkpoint)
-
-        # Inference-specific overrides
-        if hasattr(args, "bam") and args.bam:
-            if "input" not in config:
-                config["input"] = {}
-            config["input"]["type"] = "bam"
-            config["input"]["bam_path"] = args.bam
-            logger.info("Override: input.bam_path = %s", args.bam)
-
-        if hasattr(args, "atlas") and args.atlas:
-            config["atlas_path"] = args.atlas
-            logger.info("Override: atlas_path = %s", args.atlas)
-
-        if hasattr(args, "labels_dict") and args.labels_dict:
-            config["labels_dict_path"] = args.labels_dict
-            logger.info("Override: labels_dict_path = %s", args.labels_dict)
-
-        if hasattr(args, "output_dir") and args.output_dir:
-            config["output_dir"] = args.output_dir
-            logger.info("Override: output_dir = %s", args.output_dir)
-
-        if args.datasets:
-            config["datasets"] = args.datasets
-            logger.info("Override: datasets = %s", args.datasets)
-
-        if args.mlflow_uri:
-            if "mlflow" not in config:
-                config["mlflow"] = {}
-            config["mlflow"]["tracking_uri"] = args.mlflow_uri
-            logger.info("Override: MLflow URI = %s", args.mlflow_uri)
-
-        if args.experiment_name:
-            if "mlflow" not in config:
-                config["mlflow"] = {}
-            config["mlflow"]["experiment_name"] = args.experiment_name
-            logger.info("Override: experiment_name = %s", args.experiment_name)
-
-        # Validate configuration
-        validate_config(config, args.task)
+        validate_config(config, task)
         logger.info("Configuration validated successfully")
 
         if args.dry_run:
@@ -441,25 +559,8 @@ Examples:
         shutil.copy(args.config, output_dir)
         logger.info(f"Copied config to {output_dir}")
 
-        # Execute task
-        if args.task == "classifier_fit":
-            run_classifier_fit(config, logger)
-        elif args.task == "inference":
-            run_inference(config, logger)
-        elif args.task == "pretrain":
-            run_pretraining(config, logger)
-        elif args.task == "generate_pseudobulk":
-            run_pseudobulk_generation(config, logger)
-        elif args.task == "fit_deconvolution":
-            run_deconvolution_fitting(config, logger)
-        elif args.task == "fit_calibration":
-            run_calibration_fitting(config, logger)
-        elif args.task == "confidence_intervals":
-            run_confidence_intervals(config, logger)
-        elif args.task == "deconvolute_pseudobulk":
-            run_pseudobulk_deconvolution(config, logger)
-        elif args.task == "build_dataset":
-            run_build_dataset(config, logger)
+        run, _description = COMMANDS[task]
+        run(config, logger)
 
         logger.info("Task completed successfully")
         return 0

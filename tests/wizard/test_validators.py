@@ -2,7 +2,7 @@ import os
 import tempfile
 import unittest
 
-from App.wizard import validators as v
+from syto.app.wizard import validators as v
 
 
 class TestValidators(unittest.TestCase):

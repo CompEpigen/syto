@@ -3,14 +3,14 @@ import unittest
 
 import yaml
 
-from App.wizard.tasks.generate_pseudobulk import (
+from syto.app.wizard.tasks.generate_pseudobulk import (
     GATE_KEYS,
     GeneratePseudobulkWizard,
 )
-from App.wizard.tasks import TASK_REGISTRY
+from syto.app.wizard.tasks import TASK_REGISTRY
 
 # A config known to run end to end; the wizard must be able to express it.
-REFERENCE_CONFIG = "App/config/pseudobulk/pseudobulk_columnar_raw_splits.yaml"
+REFERENCE_CONFIG = "config/pseudobulk/pseudobulk_columnar_raw_splits.yaml"
 
 
 class TestGeneratePseudobulkSchema(unittest.TestCase):
@@ -162,7 +162,7 @@ class TestGeneratePseudobulkBuildConfig(unittest.TestCase):
         return {
             "classifier_type": "dismir",
             "classifier_config.num_prediction_classes": 40,
-            "labels_dict_path": "App/labels_dict.json",
+            "labels_dict_path": "syto/app/labels_dict.json",
             "num_labels": 39,
             "labeling_scheme": "soft_labels",
             "split_information": {

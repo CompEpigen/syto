@@ -1,6 +1,6 @@
 import unittest
 
-from App.wizard.fields import FieldSpec
+from syto.app.wizard.fields import FieldSpec
 
 
 class TestFieldSpec(unittest.TestCase):

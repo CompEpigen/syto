@@ -536,13 +536,13 @@ if [ "$TEST_DISK" = true ]; then
         "OK" \
         "false"
     
-    run_test "App directory exists" \
-        "appt_exec '$IMAGE_PATH' test -d /workspace/methyldl/App && echo 'OK'" \
+    run_test "syto/app directory exists" \
+        "appt_exec '$IMAGE_PATH' test -d /workspace/methyldl/syto/app && echo 'OK'" \
         "OK" \
         "false"
     
     run_test "main.py exists" \
-        "appt_exec '$IMAGE_PATH' test -f /workspace/methyldl/App/main.py && echo 'OK'" \
+        "appt_exec '$IMAGE_PATH' test -f /workspace/methyldl/syto/app/cli.py && echo 'OK'" \
         "OK" \
         "false"
     
@@ -597,7 +597,7 @@ run_test "Runscript help available" \
     "true"
 
 run_test "Container executable" \
-    "appt_exec '$IMAGE_PATH' test -x /workspace/methyldl/App/main.py && echo 'main.py is accessible' || echo 'main.py exists'" \
+    "appt_exec '$IMAGE_PATH' test -x /workspace/methyldl/syto/app/cli.py && echo 'main.py is accessible' || echo 'main.py exists'" \
     "" \
     "true"
 

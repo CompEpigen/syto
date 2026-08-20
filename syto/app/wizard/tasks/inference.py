@@ -1,10 +1,10 @@
 """Inference task wizard: field schema, deconvolution sub-flows, and assembler."""
 
-from App.wizard import validators as v
-from App.wizard.config_utils import placeholder, set_nested as _set_nested
-from App.wizard.fields import FieldSpec
-from App.wizard.tasks import TASK_REGISTRY
-from App.wizard.tasks.baselines_common import (
+from syto.app.wizard import validators as v
+from syto.app.wizard.config_utils import placeholder, set_nested as _set_nested
+from syto.app.wizard.fields import FieldSpec
+from syto.app.wizard.tasks import TASK_REGISTRY
+from syto.app.wizard.tasks.baselines_common import (
     BASELINES,  # noqa: F401 - re-exported for callers/tests of this task module
     ask_baseline_entries,
     template_baseline_entries,
@@ -17,7 +17,7 @@ TRANSFORMER_ARCHS = {"methylbert", "epigenbert2"}
 HEAD_LABEL_ARCHS = {"dismir", "methylbert", "epigenbert2"}
 SYTO_DECONVOLVERS = ["xgboost", "mlp", "swn", "nnls", "psls"]
 # Friendly checkbox label -> the method-dict fields the pipeline dispatches on
-# (see App/inference.py: ``name``/``flavor`` resolution). ls-based methods carry
+# (see syto/app/inference.py: ``name``/``flavor`` resolution). ls-based methods carry
 # their variant in ``flavor``; the others are matched by ``name`` directly.
 SYTO_METHOD_DISPATCH = {
     "xgboost": {"name": "xgboost"},
@@ -27,7 +27,7 @@ SYTO_METHOD_DISPATCH = {
     "psls": {"name": "ls", "flavor": "psls"},
 }
 LABELING_SCHEMES = ["Soft Labels", "Hard Labels"]
-DEFAULT_LABELS_DICT = "App/labels_dict.json"
+DEFAULT_LABELS_DICT = "syto/app/labels_dict.json"
 
 
 def _ctype(answers):

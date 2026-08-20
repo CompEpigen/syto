@@ -33,15 +33,15 @@ def save_config(config: dict, path: str, header: str | None = None) -> None:
 
 def default_save_path(task: str) -> str:
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return f"App/config/{task}_{stamp}.yaml"
+    return f"config/{task}_{stamp}.yaml"
 
 
 def default_template_dir() -> str:
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return f"App/config/templates_{stamp}"
+    return f"config/templates_{stamp}"
 
 
 def print_run_command(task: str, path: str) -> None:
     print(f"\nConfig saved to {path}")
     print("Run with:")
-    print(f"  python App/main.py --task {task} --config {path}")
+    print(f"  syto {task.replace('_', '-')} --config {path}")

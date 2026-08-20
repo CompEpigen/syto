@@ -1,6 +1,6 @@
 """Fit-calibration task wizard: schema and assembler.
 
-Mirrors the live CalibratorFittingPipeline (App/calibration_pipeline.py), NOT the
+Mirrors the live CalibratorFittingPipeline (syto/app/calibration_pipeline.py), NOT the
 stale example YAML. Two list sections discover their choices from disk: ``splits``
 from the pseudobulk HDF5 (``outputs/*`` groups) and ``deconvolvers`` from the saved
 model files in ``deconvolvers_dir``.
@@ -8,11 +8,11 @@ model files in ``deconvolvers_dir``.
 
 import os
 
-from App.wizard import validators as v
-from App.wizard.config_utils import set_nested as _set_nested
-from App.wizard.fields import FieldSpec
-from App.wizard.tasks import TASK_REGISTRY
-from App.wizard.tasks.deconvolver_common import (
+from syto.app.wizard import validators as v
+from syto.app.wizard.config_utils import set_nested as _set_nested
+from syto.app.wizard.fields import FieldSpec
+from syto.app.wizard.tasks import TASK_REGISTRY
+from syto.app.wizard.tasks.deconvolver_common import (
     DECONVOLVER_DEFAULT_PARAMS,
     DECONVOLVER_FILES,
     DECONVOLVER_ORDER,
@@ -95,7 +95,7 @@ class FitCalibrationWizard:
                 key="labels_dict_path",
                 label="Labels dict JSON path",
                 kind="path",
-                default="App/labels_dict.json",
+                default="syto/app/labels_dict.json",
                 validate=v.path_exists,
             ),
             FieldSpec(

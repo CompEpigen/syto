@@ -4,7 +4,7 @@ import unittest
 
 import yaml
 
-from App.wizard import renderer
+from syto.app.wizard import renderer
 
 
 class TestRenderer(unittest.TestCase):
@@ -28,12 +28,12 @@ class TestRenderer(unittest.TestCase):
 
     def test_default_save_path_shape(self):
         path = renderer.default_save_path("inference")
-        self.assertTrue(path.startswith("App/config/inference_"))
+        self.assertTrue(path.startswith("config/inference_"))
         self.assertTrue(path.endswith(".yaml"))
 
     def test_render_preview_and_run_command_do_not_raise(self):
         renderer.render_preview({"a": {"b": 1}})
-        renderer.print_run_command("inference", "App/config/rrbs/x.yaml")
+        renderer.print_run_command("inference", "config/rrbs/x.yaml")
 
 
 if __name__ == "__main__":

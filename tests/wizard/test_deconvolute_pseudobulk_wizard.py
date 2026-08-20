@@ -1,9 +1,9 @@
 import unittest
 from unittest import mock
 
-from App.wizard.tasks import TASK_REGISTRY
-from App.wizard.tasks import deconvolute_pseudobulk as dp
-from App.wizard.tasks.deconvolute_pseudobulk import DeconvolutePseudobulkWizard
+from syto.app.wizard.tasks import TASK_REGISTRY
+from syto.app.wizard.tasks import deconvolute_pseudobulk as dp
+from syto.app.wizard.tasks.deconvolute_pseudobulk import DeconvolutePseudobulkWizard
 
 
 class _StubEngine:
@@ -137,7 +137,7 @@ class TestBuildConfig(unittest.TestCase):
 
     def test_lists_passthrough(self):
         answers = {
-            "labels_dict_path": "App/labels_dict.json",
+            "labels_dict_path": "syto/app/labels_dict.json",
             "pseudobulk_path": "/tmp/pb.h5",
             "splits": ["train", "test"],
             "baselines": [
@@ -154,23 +154,23 @@ class TestBuildConfig(unittest.TestCase):
         self.assertEqual(cfg["n_workers"], 12)
 
     def test_drops_blank_strings(self):
-        answers = {"output_dir": "", "labels_dict_path": "App/labels_dict.json"}
+        answers = {"output_dir": "", "labels_dict_path": "syto/app/labels_dict.json"}
         cfg = self.wiz.build_config(answers)
         self.assertNotIn("output_dir", cfg)
         self.assertIn("labels_dict_path", cfg)
 
     def test_splits_absent_when_not_provided(self):
-        answers = {"labels_dict_path": "App/labels_dict.json"}
+        answers = {"labels_dict_path": "syto/app/labels_dict.json"}
         cfg = self.wiz.build_config(answers)
         self.assertNotIn("splits", cfg)
 
 
 class TestGeneratedConfigSatisfiesValidator(unittest.TestCase):
     def test_build_config_has_pipeline_required_fields(self):
-        # Mirrors App/main.py validate_config
+        # Mirrors syto/app/cli.py validate_config
         # required_fields["deconvolute_pseudobulk"].
         answers = {
-            "labels_dict_path": "App/labels_dict.json",
+            "labels_dict_path": "syto/app/labels_dict.json",
             "pseudobulk_path": "/tmp/pb.h5",
             "baselines": [{"model": "celfie", "enabled": True, "atlas_path": "/a.csv"}],
             "output_dir": "/tmp/out",

@@ -1,7 +1,7 @@
 import unittest
 
-from App.wizard.tasks.inference import InferenceWizard
-from App.wizard.tasks import TASK_REGISTRY
+from syto.app.wizard.tasks.inference import InferenceWizard
+from syto.app.wizard.tasks import TASK_REGISTRY
 
 
 class TestInferenceWizardSchema(unittest.TestCase):
@@ -43,7 +43,7 @@ class TestInferenceWizardSchema(unittest.TestCase):
 
     def test_labels_dict_default(self):
         self.assertEqual(
-            self.by_key["labels_dict_path"].default, "App/labels_dict.json"
+            self.by_key["labels_dict_path"].default, "syto/app/labels_dict.json"
         )
 
     def test_input_type_includes_predicted_reads_and_single_data_path(self):
@@ -99,7 +99,7 @@ class TestInferenceBuildConfig(unittest.TestCase):
             "classifier.labeling_scheme": "Soft Labels",
             "checkpoint_path": "/tmp/weight.pt",
             "features_mask_path": "/tmp/mask.npz",
-            "labels_dict_path": "App/labels_dict.json",
+            "labels_dict_path": "syto/app/labels_dict.json",
             "num_labels": 39,
             "deconvolution.syto.atlas_path": "/tmp/atlas.tsv",
             "deconvolution.syto.atlas_name": "atlas",
@@ -185,7 +185,7 @@ class TestInferenceBuildConfig(unittest.TestCase):
             "features_mask_path": None,
             "deconvolution.syto.atlas_path": None,
             "deconvolution.syto.atlas_name": None,
-            "labels_dict_path": "App/labels_dict.json",
+            "labels_dict_path": "syto/app/labels_dict.json",
             "num_labels": 39,
             "input.type": "predicted_reads",
             "input.data_path": "/tmp/preds.pkl",
@@ -222,7 +222,7 @@ class TestInferenceBuildConfig(unittest.TestCase):
         ans = {
             "run_syto": True,
             "classifier.classifier_type": "cancer_detector",
-            "labels_dict_path": "App/labels_dict.json",
+            "labels_dict_path": "syto/app/labels_dict.json",
             "num_labels": 39,
             "deconvolution.syto.atlas_path": "/tmp/atlas.tsv",
             "deconvolution.syto.atlas_name": "atlas",
@@ -286,12 +286,12 @@ class _StubEngine:
 
 class TestEpidishBaselineSection(unittest.TestCase):
     def test_epidish_in_baselines_list(self):
-        from App.wizard.tasks.inference import BASELINES
+        from syto.app.wizard.tasks.inference import BASELINES
 
         self.assertIn("epidish", BASELINES)
 
     def test_rpc_entry_auto_named(self):
-        from App.wizard.tasks.inference import _deconv_baselines_section
+        from syto.app.wizard.tasks.inference import _deconv_baselines_section
 
         eng = _StubEngine(
             ["epidish"],
@@ -315,7 +315,7 @@ class TestEpidishBaselineSection(unittest.TestCase):
         self.assertNotIn("constraint", entry)
 
     def test_cp_entry_with_name_override(self):
-        from App.wizard.tasks.inference import _deconv_baselines_section
+        from syto.app.wizard.tasks.inference import _deconv_baselines_section
 
         eng = _StubEngine(
             ["epidish"],

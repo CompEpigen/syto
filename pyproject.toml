@@ -5,6 +5,10 @@ description = ""
 authors = ["Dmytro Rizdvanetskyi", "Nathan Roos"]
 readme = "README.md"
 packages = [{include = "syto"}, {include = "baselines"}]
+include = [{path = "syto/app/labels_dict.json"}]
+
+[tool.poetry.scripts]
+syto = "syto.app.cli:main"
 
 [tool.poetry.dependencies]
 python = "^3.11"
@@ -33,6 +37,7 @@ dask = "^2026.3.0"
 h5py = "^3.16.0"
 questionary = "^2.0.1"
 rich = "^14.0.0"
+pyyaml = "^6.0.3"
 
 
 [tool.poetry.group.dev.dependencies]

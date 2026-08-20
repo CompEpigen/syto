@@ -12,7 +12,7 @@ project/
 │       ├── build_container.sh
 │       └── test_container.sh
 ├── methyldl/                     # Python package
-├── App/                          # Application
+├── syto/app/                          # Application
 └── pyproject.toml
 ```
 

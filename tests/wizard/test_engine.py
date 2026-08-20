@@ -1,7 +1,7 @@
 import unittest
 
-from App.wizard.engine import WizardEngine
-from App.wizard.fields import FieldSpec
+from syto.app.wizard.engine import WizardEngine
+from syto.app.wizard.fields import FieldSpec
 
 
 class StubEngine(WizardEngine):
@@ -67,7 +67,7 @@ class TestWizardEngine(unittest.TestCase):
         self.assertEqual(answers["exp1"], 7)
 
     def test_validation_reprompts_until_valid(self):
-        from App.wizard import validators as v
+        from syto.app.wizard import validators as v
 
         attempts = iter(["0", "-3", "5"])
 

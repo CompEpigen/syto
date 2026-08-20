@@ -91,7 +91,7 @@ Stage0 += shell(
 
 # Copy application code
 Stage0 += copy(src="./methyldl", dest="/workspace/methyldl/methyldl")
-Stage0 += copy(src="./App", dest="/workspace/methyldl/App")
+Stage0 += copy(src="./syto", dest="/workspace/methyldl/syto")
 Stage0 += copy(src="./README.md", dest="/workspace/methyldl/README.md")
 Stage0 += copy(
     src="./foundationalModels", dest="/workspace/methyldl/foundationalModels"
@@ -160,7 +160,7 @@ Stage0 += runscript(
         'echo "CUDA: $(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null || echo \\"N/A\\")"',
         'echo "Python: $(python3 --version)"',
         "cd /workspace/methyldl",
-        'poetry run python App/main.py "$@"',
+        'poetry run python syto/app/cli.py "$@"',
     ]
 )
 

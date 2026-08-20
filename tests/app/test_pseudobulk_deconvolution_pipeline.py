@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 import numpy as np
 import pandas as pd
 
-from App.pseudobulk_deconvolution_pipeline import _run_baseline_on_reads
+from syto.app.pseudobulk_deconvolution_pipeline import _run_baseline_on_reads
 from baselines.deconvolution.epidish.epidish import EpiDishDeconvolver
 
 

@@ -9,7 +9,7 @@ End-to-end pipeline orchestrating:
 
 The pipeline consumes the single ``pseudobulk.h5`` file produced by the new
 :class:`~syto.data.pseudobulk_generator.PseudobulkGenerator` (see
-``App/pseudobulk_pipeline.py``).  Both the pseudobulk samples (model inputs /
+``syto/app/pseudobulk_pipeline.py``).  Both the pseudobulk samples (model inputs /
 outputs) and the pure cell-type profiles (used for feature selection and the
 least-squares reference matrix) are read from this single file.
 """

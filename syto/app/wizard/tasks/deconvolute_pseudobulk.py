@@ -1,8 +1,8 @@
 """Deconvolute-pseudobulk task wizard: schema and assembler.
 
 Mirrors the live PseudobulkDeconvolutionPipeline
-(App/pseudobulk_deconvolution_pipeline.py) and
-App/config/pseudodulk_deconvolution.yaml: read-based baselines are run over a
+(syto/app/pseudobulk_deconvolution_pipeline.py) and
+config/pseudodulk_deconvolution.yaml: read-based baselines are run over a
 pre-generated pseudobulk HDF5 file, one parquet of predicted proportions per
 model and split.
 
@@ -12,15 +12,15 @@ the file. The baseline sub-flow is shared with the ``inference`` task and lives
 in ``baselines_common``.
 """
 
-from App.wizard import validators as v
-from App.wizard.config_utils import set_nested as _set_nested
-from App.wizard.fields import FieldSpec
-from App.wizard.tasks import TASK_REGISTRY
-from App.wizard.tasks.baselines_common import (
+from syto.app.wizard import validators as v
+from syto.app.wizard.config_utils import set_nested as _set_nested
+from syto.app.wizard.fields import FieldSpec
+from syto.app.wizard.tasks import TASK_REGISTRY
+from syto.app.wizard.tasks.baselines_common import (
     ask_baseline_entries,
     template_baseline_entries,
 )
-from App.wizard.tasks.deconvolver_common import (
+from syto.app.wizard.tasks.deconvolver_common import (
     DEFAULT_SPLITS,
     list_splits as _list_splits,
 )
@@ -72,7 +72,7 @@ class DeconvolutePseudobulkWizard:
                 key="labels_dict_path",
                 label="Labels dict JSON path",
                 kind="path",
-                default="App/labels_dict.json",
+                default="syto/app/labels_dict.json",
                 validate=v.path_exists,
             ),
             FieldSpec(

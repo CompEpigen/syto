@@ -6,7 +6,6 @@ import json
 import math
 import logging
 import shutil
-import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -16,12 +15,10 @@ import numpy as np
 import pandas as pd
 import pysam
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "App"))
+from syto.app.inference import InferencePipeline
 
-from inference import InferencePipeline  # noqa: E402
-
-from baselines.deconvolution.base import BaselineDeconvolver  # noqa: E402
-from syto.data.atlases.uxm_atlases import UXMMethylationAtlas  # noqa: E402
+from baselines.deconvolution.base import BaselineDeconvolver
+from syto.data.atlases.uxm_atlases import UXMMethylationAtlas
 
 TARGETS = ["Blood-B", "Blood-T", "Colon-Ep"]
 LABELS_DICT = {i: name for i, name in enumerate(TARGETS)}
@@ -813,7 +810,7 @@ class TestStreamingPredictionWriter(unittest.TestCase):
 
     def test_later_chunks_are_aligned_to_the_first_schema(self):
         """merge_paired_reads only emits its extra columns for merged fragments."""
-        from inference import _StreamingParquetWriter
+        from syto.app.inference import _StreamingParquetWriter
 
         wide = pd.DataFrame(
             {
@@ -837,7 +834,7 @@ class TestStreamingPredictionWriter(unittest.TestCase):
 
     def test_unexpected_columns_are_dropped_not_fatal(self):
         """A chunk that gains a column keeps writing, minus that column."""
-        from inference import _StreamingParquetWriter
+        from syto.app.inference import _StreamingParquetWriter
 
         writer = _StreamingParquetWriter(str(self.path), self.logger)
         writer.write(pd.DataFrame({"read_name": ["a"], "prediction_0": [0.5]}))

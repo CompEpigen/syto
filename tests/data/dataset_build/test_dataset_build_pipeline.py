@@ -6,7 +6,7 @@ import tempfile
 
 import pandas as pd
 from syto.data.atlases.uxm_atlases import UXMMethylationAtlas
-from App.dataset_build_pipeline import DatasetBuildPipeline
+from syto.app.dataset_build_pipeline import DatasetBuildPipeline
 
 
 def _write_atlas(path):

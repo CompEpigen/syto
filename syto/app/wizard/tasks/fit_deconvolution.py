@@ -1,18 +1,18 @@
 """Fit-deconvolution task wizard: schema and assembler.
 
-Mirrors the live DeconvolutionFittingPipeline (App/deconvolution_pipeline.py) and
-App/config/deconvolution/new_deconvolution_template.yaml (HDF5 / pseudobulk-v2).
+Mirrors the live DeconvolutionFittingPipeline (syto/app/deconvolution_pipeline.py) and
+config/deconvolution/new_deconvolution_template.yaml (HDF5 / pseudobulk-v2).
 The ``splits`` section discovers its choices from the pseudobulk HDF5; the
 ``deconvolvers`` section offers the five known types to fit (no on-disk discovery,
 since the models are being created here). Shared deconvolver metadata and split
 discovery live in ``deconvolver_common``.
 """
 
-from App.wizard import validators as v
-from App.wizard.config_utils import set_nested as _set_nested
-from App.wizard.fields import FieldSpec
-from App.wizard.tasks import TASK_REGISTRY
-from App.wizard.tasks.deconvolver_common import (
+from syto.app.wizard import validators as v
+from syto.app.wizard.config_utils import set_nested as _set_nested
+from syto.app.wizard.fields import FieldSpec
+from syto.app.wizard.tasks import TASK_REGISTRY
+from syto.app.wizard.tasks.deconvolver_common import (
     DECONVOLVER_DEFAULT_PARAMS,
     DECONVOLVER_ORDER,
     DEFAULT_SPLITS,
@@ -125,7 +125,7 @@ class FitDeconvolutionWizard:
                 key="labels_dict_path",
                 label="Labels dict JSON path",
                 kind="path",
-                default="App/labels_dict.json",
+                default="syto/app/labels_dict.json",
                 validate=v.path_exists,
             ),
             FieldSpec(

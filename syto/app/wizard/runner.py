@@ -1,4 +1,4 @@
-"""Top-level orchestration for ``--task create_config``.
+"""Top-level orchestration for ``syto create-config``.
 
 Two ways in, chosen up front:
 
@@ -14,9 +14,9 @@ Two ways in, chosen up front:
 
 import os
 
-from App.wizard import renderer, templates
-from App.wizard.engine import WizardEngine
-from App.wizard.tasks import TASK_REGISTRY
+from syto.app.wizard import renderer, templates
+from syto.app.wizard.engine import WizardEngine
+from syto.app.wizard.tasks import TASK_REGISTRY
 
 MODE_TEMPLATE = "Templates — generate configs with placeholders to fill in later"
 MODE_FINE = "Fine-grained — answer every question now for a single task"
@@ -163,7 +163,7 @@ def _print_template_summary(out_dir: str, written: list[tuple[str, str, int]]) -
         print(f"  {name}  {n_placeholders} placeholder(s) to fill in")
     print("\nFill in every <placeholder>, then run e.g.:")
     task, path, _ = written[0]
-    print(f"  python App/main.py --task {task} --config {path}")
+    print(f"  syto {task.replace('_', '-')} --config {path}")
 
 
 # ── Entry point ──────────────────────────────────────────────────────────────

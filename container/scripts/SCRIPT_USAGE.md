@@ -43,7 +43,7 @@ project/
 │       ├── build_container.sh    # Build script
 │       └── test_container.sh     # Test script
 ├── methyldl/                     # Python package
-├── App/                          # Application code
+├── syto/app/                          # Application code
 └── pyproject.toml                # Poetry config
 ```
 

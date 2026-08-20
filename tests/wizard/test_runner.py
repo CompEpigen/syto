@@ -4,8 +4,8 @@ import unittest
 
 import yaml
 
-from App.wizard import runner
-from App.wizard.engine import WizardEngine
+from syto.app.wizard import runner
+from syto.app.wizard.engine import WizardEngine
 
 
 class ScriptedEngine(WizardEngine):
@@ -24,7 +24,7 @@ class ScriptedEngine(WizardEngine):
 
 def _raw_with_real_paths(tmpdir):
     """Answer set whose path-validated fields point at real (empty) files."""
-    labels = "App/labels_dict.json"
+    labels = "syto/app/labels_dict.json"
     ckpt = os.path.join(tmpdir, "weight.pt")
     open(ckpt, "w").close()
     mask = os.path.join(tmpdir, "mask.npz")
@@ -67,7 +67,7 @@ def _raw_with_real_paths(tmpdir):
 
 class TestRunner(unittest.TestCase):
     def test_run_wizard_saves_expected_config(self):
-        self.assertTrue(os.path.exists("App/labels_dict.json"))
+        self.assertTrue(os.path.exists("syto/app/labels_dict.json"))
         with tempfile.TemporaryDirectory() as d:
             raw, bam = _raw_with_real_paths(d)
             out_path = os.path.join(d, "generated.yaml")
@@ -135,7 +135,7 @@ class TestTemplateMode(unittest.TestCase):
             text = open(path, encoding="utf-8").read()
             self.assertTrue(text.startswith("# ---"))
             self.assertIn("Target classifier: dismir", text)
-            self.assertIn("--task inference", text)
+            self.assertIn("syto inference --config", text)
 
     def test_classifier_not_asked_when_no_task_needs_it(self):
         with tempfile.TemporaryDirectory() as d:

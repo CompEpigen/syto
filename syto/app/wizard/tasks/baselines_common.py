@@ -8,9 +8,9 @@ is stored under (``deconvolution.baselines`` for inference, ``baselines`` for
 pseudobulk deconvolution).
 """
 
-from App.wizard import validators as v
-from App.wizard.config_utils import placeholder
-from App.wizard.fields import FieldSpec
+from syto.app.wizard import validators as v
+from syto.app.wizard.config_utils import placeholder
+from syto.app.wizard.fields import FieldSpec
 
 BASELINES = ["uxm", "celfieish", "celfie", "epidish"]
 

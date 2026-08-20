@@ -12,8 +12,8 @@ set -euo pipefail
 # per-sample temp config from the template, and runs inference.
 # ============================================================
 
-CONFIG_TEMPLATE="/home/luna.kuleuven.be/u0169940/Repos/syto/App/config/inference/inference_20260623_150304.yaml"
-TEMP_CONFIG_DIR="App/config/inference/tmp_configs"
+CONFIG_TEMPLATE="/home/luna.kuleuven.be/u0169940/Repos/syto/config/inference/inference_20260623_150304.yaml"
+TEMP_CONFIG_DIR="config/inference/tmp_configs"
 
 INPUT_DIR="/mnt/data/cfsort/recovered_reads/U250.l4.hg19"
 #OUTPUT_BASE_DIR="/mnt/data/cfsort/deconvolution_results/U25.l4.hg19/celfieish_30000" 
@@ -78,7 +78,7 @@ for input_path in "$INPUT_DIR"/*_reads.csv; do
         -e "s|^\(output_dir:\).*|\1 ${output_dir}|" \
         "$CONFIG_TEMPLATE" > "$temp_config"
 
-    if python App/main.py --task inference --config "$temp_config"; then
+    if syto inference --config "$temp_config"; then
         n_done=$((n_done + 1))
         echo "Finished: $sample_name"
     else

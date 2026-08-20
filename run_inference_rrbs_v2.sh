@@ -9,8 +9,8 @@ set -euo pipefail
 #                      parent dir (each containing predictions.pkl)
 # ============================================================
 
-CONFIG_TEMPLATE="App/config/rrbs/inference.yaml"
-TEMP_CONFIG_DIR="App/config/rrbs/tmp_configs"
+CONFIG_TEMPLATE="config/rrbs/inference.yaml"
+TEMP_CONFIG_DIR="config/rrbs/tmp_configs"
 
 mkdir -p "$TEMP_CONFIG_DIR"
 
@@ -133,7 +133,7 @@ for entry in "${iter_glob[@]}"; do
         -e "s|^\(\s*output_dir:\).*|\1 ${output_dir}|" \
         "$CONFIG_TEMPLATE" > "$temp_config"
 
-    if python App/main.py --task inference --config "$temp_config"; then
+    if syto inference --config "$temp_config"; then
         n_done=$((n_done + 1))
         echo "Finished: $sample_name"
     else

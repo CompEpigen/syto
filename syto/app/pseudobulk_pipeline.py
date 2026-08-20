@@ -48,7 +48,7 @@ class PseudoBulkPipeline:
     Parameters
     ----------
     config : dict
-        Parsed YAML configuration. See App/config/pseudobulk_v2_template.yaml
+        Parsed YAML configuration. See config/pseudobulk_v2_template.yaml
         for available options.
     logger : logging.Logger
         Logger instance.

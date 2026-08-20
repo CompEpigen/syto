@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from App.wizard.tasks import fit_calibration as fc
+from syto.app.wizard.tasks import fit_calibration as fc
 
 
 class TestDiscoveryHelpers(unittest.TestCase):
@@ -112,8 +112,8 @@ class TestDeconvolversSection(unittest.TestCase):
         self.assertEqual(answers["deconvolvers"], [{"name": "nnls"}])
 
 
-from App.wizard.tasks import TASK_REGISTRY
-from App.wizard.tasks.fit_calibration import FitCalibrationWizard
+from syto.app.wizard.tasks import TASK_REGISTRY
+from syto.app.wizard.tasks.fit_calibration import FitCalibrationWizard
 
 
 class TestFitCalibrationSchema(unittest.TestCase):
@@ -151,7 +151,7 @@ class TestFitCalibrationBuildConfig(unittest.TestCase):
 
     def test_nested_and_lists_passthrough(self):
         answers = {
-            "labels_dict_path": "App/labels_dict.json",
+            "labels_dict_path": "syto/app/labels_dict.json",
             "num_output_labels": 39,
             "num_input_labels": 39,
             "pseudobulk_path": "/tmp/pb.h5",
@@ -171,7 +171,7 @@ class TestFitCalibrationBuildConfig(unittest.TestCase):
         self.assertNotIn("params", cfg["deconvolvers"][1])
 
     def test_drops_blank_strings(self):
-        answers = {"output_dir": "", "labels_dict_path": "App/labels_dict.json"}
+        answers = {"output_dir": "", "labels_dict_path": "syto/app/labels_dict.json"}
         cfg = self.wiz.build_config(answers)
         self.assertNotIn("output_dir", cfg)
         self.assertIn("labels_dict_path", cfg)

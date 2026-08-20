@@ -194,10 +194,10 @@ cython_debug/
 /EDA/*.pdf
 /EDA/*/*.pdf
 /EDA/*/*.png
-/App/config/rrbs/tmp_configs
-/App/config/*
-App/mlruns/*
-App/output/*
+/config/rrbs/tmp_configs
+/config/*
+syto/app/mlruns/*
+syto/app/output/*
 output/*
 *.code-workspace
 poetry.toml

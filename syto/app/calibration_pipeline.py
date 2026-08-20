@@ -3,14 +3,14 @@ Calibration pipeline:
 
 This pipeline takes as input:
 - path to the consolidated pseudobulk HDF5 file (output of the pseudobulk v2
-  pipeline, see ``App/pseudobulk_pipeline.py``)
+  pipeline, see ``syto/app/pseudobulk_pipeline.py``)
 - path to the feature-selection mask (output of the deconvolution pipeline)
 - path to folder with saved deconvolvers (named expected to match the output of
 the deconvolution pipeline)
 
 A deconvolver may instead declare ``predictions_dir``, pointing at a directory
 of already-computed long-format parquets written by the pseudobulk
-deconvolution pipeline (see ``App/pseudobulk_deconvolution_pipeline.py``).  This
+deconvolution pipeline (see ``syto/app/pseudobulk_deconvolution_pipeline.py``).  This
 is how the baselines are calibrated: their predictions and targets are read
 straight off disk, so no HDF5 file, feature mask, or saved model is needed.
 Those three inputs become optional whenever every configured deconvolver is

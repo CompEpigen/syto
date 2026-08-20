@@ -10,8 +10,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from App.wizard import validators as v
-from App.wizard.tasks.deconvolver_common import list_splits
+from syto.app.wizard import validators as v
+from syto.app.wizard.tasks.deconvolver_common import list_splits
 from syto.data.pseudobulk_store import open_pseudobulk_store
 from tests.data.pseudobulk_fixtures import PseudobulkFixture
 
@@ -54,10 +54,10 @@ class DualFormatBase(unittest.TestCase):
 
 
 class TestDeconvolutionFittingPipeline(DualFormatBase):
-    """App/deconvolution_pipeline.py"""
+    """syto/app/deconvolution_pipeline.py"""
 
     def _pipeline(self, store_path):
-        from App.deconvolution_pipeline import DeconvolutionFittingPipeline
+        from syto.app.deconvolution_pipeline import DeconvolutionFittingPipeline
 
         return DeconvolutionFittingPipeline(
             {
@@ -98,10 +98,10 @@ class TestDeconvolutionFittingPipeline(DualFormatBase):
 
 
 class TestCalibrationPipeline(DualFormatBase):
-    """App/calibration_pipeline.py"""
+    """syto/app/calibration_pipeline.py"""
 
     def _pipeline(self, store_path):
-        from App.calibration_pipeline import CalibratorFittingPipeline
+        from syto.app.calibration_pipeline import CalibratorFittingPipeline
 
         return CalibratorFittingPipeline(
             {
@@ -126,7 +126,7 @@ class TestCalibrationPipeline(DualFormatBase):
 
     def test_reader_is_none_without_a_store(self):
         """A config with no store still constructs, as before."""
-        from App.calibration_pipeline import CalibratorFittingPipeline
+        from syto.app.calibration_pipeline import CalibratorFittingPipeline
 
         pipeline = CalibratorFittingPipeline(
             {
@@ -140,11 +140,11 @@ class TestCalibrationPipeline(DualFormatBase):
 
 
 class TestBaselineDeconvolutionPipeline(DualFormatBase):
-    """App/pseudobulk_deconvolution_pipeline.py, including the removed h5py leak."""
+    """syto/app/pseudobulk_deconvolution_pipeline.py, including the removed h5py leak."""
 
     def test_count_split_pseudobulks_agrees(self):
         """The count that replaced the direct h5py access works on both."""
-        from App.pseudobulk_deconvolution_pipeline import (
+        from syto.app.pseudobulk_deconvolution_pipeline import (
             PseudobulkDeconvolutionPipeline as Pipeline,
         )
 
@@ -160,7 +160,7 @@ class TestBaselineDeconvolutionPipeline(DualFormatBase):
 
         It only sizes a progress bar, so the pipeline must survive it.
         """
-        from App.pseudobulk_deconvolution_pipeline import (
+        from syto.app.pseudobulk_deconvolution_pipeline import (
             PseudobulkDeconvolutionPipeline as Pipeline,
         )
 
@@ -182,7 +182,7 @@ class TestBaselineDeconvolutionPipeline(DualFormatBase):
 
 
 class TestInferenceUniformPrior(DualFormatBase):
-    """App/inference.py loads its uniform prior from either layout."""
+    """syto/app/inference.py loads its uniform prior from either layout."""
 
     def test_uniform_prior_agrees(self):
         """The prior used for missing-label filling is layout-independent."""
@@ -194,7 +194,7 @@ class TestInferenceUniformPrior(DualFormatBase):
 
     def test_inference_module_uses_the_factory(self):
         """The call site was actually migrated, not just the import."""
-        source = Path("App/inference.py").read_text()
+        source = Path("syto/app/inference.py").read_text()
         self.assertIn("open_pseudobulk_store", source)
         self.assertNotIn("PseudobulkHDF5Reader", source)
 

@@ -16,11 +16,11 @@ import unittest
 import numpy as np
 import pandas as pd
 
-from App.calibration_pipeline import (
+from syto.app.calibration_pipeline import (
     CalibratorFittingPipeline,
     load_predictions_from_parquet,
 )
-from App.main import validate_config
+from syto.app.cli import validate_config
 
 LABELS = {0: "ct_a", 1: "ct_b", 2: "ct_c"}
 
@@ -186,7 +186,11 @@ class TestCalibrationPipelineFromStoredPredictions(unittest.TestCase):
 
     def test_uncalibrated_stage_reads_parquet_and_caches_npz(self):
         baseline_dir = os.path.join(self.tmp.name, "epidish")
-        expected = _write_baseline_dir(baseline_dir)
+        # The pipeline reads every configured split (train included, as in the
+        # production configs) but calibrates on valid/test only.
+        expected = _write_baseline_dir(
+            baseline_dir, splits=("train", "valid", "test")
+        )
         pipeline = CalibratorFittingPipeline(self._config(baseline_dir), self.logger)
         deconv_out = os.path.join(self.tmp.name, "out", "deconv")
         os.makedirs(deconv_out, exist_ok=True)
@@ -235,7 +239,9 @@ class TestCalibrationPipelineFromStoredPredictions(unittest.TestCase):
 
     def test_targets_disagreeing_with_the_hdf5_are_rejected(self):
         baseline_dir = os.path.join(self.tmp.name, "epidish")
-        expected = _write_baseline_dir(baseline_dir)
+        expected = _write_baseline_dir(
+            baseline_dir, splits=("train", "valid", "test")
+        )
         pipeline = CalibratorFittingPipeline(self._config(baseline_dir), self.logger)
         deconv_out = os.path.join(self.tmp.name, "out", "deconv")
         os.makedirs(deconv_out, exist_ok=True)
@@ -268,7 +274,7 @@ class TestCalibrationPipelineFromStoredPredictions(unittest.TestCase):
 class TestFitCalibrationConfigValidation(unittest.TestCase):
     def _base(self):
         return {
-            "labels_dict_path": "App/labels_dict.json",
+            "labels_dict_path": "syto/app/labels_dict.json",
             "output_dir": "/tmp/out",
         }
 

@@ -1,7 +1,7 @@
 """Generate-pseudobulk task wizard: schema and assembler.
 
-Mirrors the live PseudoBulkPipeline (App/pseudobulk_pipeline.py) and the working
-configs under App/config/pseudobulk. Two things follow from the input type:
+Mirrors the live PseudoBulkPipeline (syto/app/pseudobulk_pipeline.py) and the working
+configs under config/pseudobulk. Two things follow from the input type:
 
 ``raw_splits``
     All splits are read from one shared columnar/legacy dataset directory
@@ -18,10 +18,10 @@ metadata, and ``classifier_config.num_prediction_classes`` is always written:
 PseudoBulkPipeline.__init__ reads it for both input types.
 """
 
-from App.wizard import validators as v
-from App.wizard.config_utils import placeholder, set_nested as _set_nested
-from App.wizard.fields import FieldSpec
-from App.wizard.tasks import TASK_REGISTRY
+from syto.app.wizard import validators as v
+from syto.app.wizard.config_utils import placeholder, set_nested as _set_nested
+from syto.app.wizard.fields import FieldSpec
+from syto.app.wizard.tasks import TASK_REGISTRY
 
 # Every classifier the pipeline can build; mirrors the _CLF_REGISTRY keys in
 # syto.classification.classifiers.lazy_classifier_factory, which is what
@@ -271,7 +271,7 @@ class GeneratePseudobulkWizard:
                 key="labels_dict_path",
                 label="Labels dict JSON path",
                 kind="path",
-                default="App/labels_dict.json",
+                default="syto/app/labels_dict.json",
                 validate=v.path_exists,
             ),
             FieldSpec(

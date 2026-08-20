@@ -1,15 +1,15 @@
 """Classifier-fit task wizard: per-architecture field schema and assembler.
 
-Mirrors the five working configs under App/config/classifiers_fitting. Each
+Mirrors the five working configs under config/classifiers_fitting. Each
 architecture exposes a different set of model and training fields; the schema
 gates every field with a `when` predicate keyed on the chosen architecture, so
 the generated config never carries attributes irrelevant to that architecture.
 """
 
-from App.wizard import validators as v
-from App.wizard.config_utils import set_nested as _set_nested
-from App.wizard.fields import FieldSpec
-from App.wizard.tasks import TASK_REGISTRY
+from syto.app.wizard import validators as v
+from syto.app.wizard.config_utils import set_nested as _set_nested
+from syto.app.wizard.fields import FieldSpec
+from syto.app.wizard.tasks import TASK_REGISTRY
 
 ARCHITECTURES = ["dismir", "methylbert", "cancer_detector", "lookup", "epigenbert2"]
 TRANSFORMER_ARCHS = {"methylbert", "epigenbert2"}
@@ -207,7 +207,7 @@ class ClassifierFitWizard:
                 validate=v.positive_int,
             ),
             # Top level, not nested under ``output:``. ClassifierFittingPipeline
-            # accepts either, but App/main.py reads config["output_dir"] for every
+            # accepts either, but syto/app/cli.py reads config["output_dir"] for every
             # task before dispatching (to create the dir and copy the config into
             # it), so a nested-only output_dir fails before the pipeline starts.
             FieldSpec(

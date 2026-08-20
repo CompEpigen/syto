@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pandas as pd
 
-import App.classifier_fit_pipeline as pipeline_mod
-from App.classifier_fit_pipeline import ClassifierFittingPipeline
+import syto.app.classifier_fit_pipeline as pipeline_mod
+from syto.app.classifier_fit_pipeline import ClassifierFittingPipeline
 
 
 class _StubClassifier:

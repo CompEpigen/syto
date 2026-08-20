@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from App.pseudobulk_pipeline import PseudoBulkPipeline
+from syto.app.pseudobulk_pipeline import PseudoBulkPipeline
 
 
 class _StubClassifier:
@@ -63,7 +63,8 @@ class TestRawSplitsLoading(unittest.TestCase):
             "grg_label_column": "dmr_ctype_label",
             "classifier_type": "dismir",
             "classifier_checkpoint": "unused",
-            "classifier_config": {"grg_label_column": "dmr_ctype_label"},
+            "classifier_config": {"grg_label_column": "dmr_ctype_label", 
+                                  "num_prediction_classes":2,},
             "split_information": {
                 "train": {"target_proportions_path": "unused_train.npz"},
                 "valid": {"target_proportions_path": "unused_valid.npz"},

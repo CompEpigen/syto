@@ -2,10 +2,10 @@ import unittest
 
 import yaml
 
-from App.main import validate_config
-from App.wizard import renderer, templates
-from App.wizard.fields import FieldSpec
-from App.wizard.tasks import TASK_REGISTRY
+from syto.app.cli import validate_config
+from syto.app.wizard import renderer, templates
+from syto.app.wizard.fields import FieldSpec
+from syto.app.wizard.tasks import TASK_REGISTRY
 
 
 class TestTaskListing(unittest.TestCase):
@@ -54,7 +54,7 @@ class TestHeader(unittest.TestCase):
     def test_includes_run_command(self):
         text = templates.header("inference", "cfg/inference.yaml")
         self.assertIn(
-            "python App/main.py --task inference --config cfg/inference.yaml", text
+            "syto inference --config cfg/inference.yaml", text
         )
 
     def test_classifier_named_only_for_classifier_tasks(self):
@@ -86,7 +86,7 @@ class TestBuildTemplateAllTasks(unittest.TestCase):
                 validate_config(config, task)
 
     def test_every_task_writes_output_dir_at_the_root(self):
-        # App/main.py reads config["output_dir"] for every task before dispatch,
+        # syto/app/cli.py reads config["output_dir"] for every task before dispatch,
         # so a nested-only output dir (e.g. under an `output:` section) fails
         # before the pipeline is even constructed.
         for task in templates.ordered_tasks():
@@ -127,7 +127,7 @@ class TestClassifierPropagation(unittest.TestCase):
                 self.assertEqual(cfg["classifier_type"], classifier)
 
     def test_generate_pseudobulk_falls_back_on_unknown_classifier(self):
-        from App.wizard.tasks.generate_pseudobulk import PB_CLASSIFIERS
+        from syto.app.wizard.tasks.generate_pseudobulk import PB_CLASSIFIERS
 
         cfg = templates.build_template(
             TASK_REGISTRY["generate_pseudobulk"](), "nonesuch"
@@ -137,8 +137,8 @@ class TestClassifierPropagation(unittest.TestCase):
 
 class TestSectionsArePrePopulated(unittest.TestCase):
     def test_inference_lists_every_method_and_baseline(self):
-        from App.wizard.tasks.baselines_common import BASELINES
-        from App.wizard.tasks.inference import SYTO_DECONVOLVERS
+        from syto.app.wizard.tasks.baselines_common import BASELINES
+        from syto.app.wizard.tasks.inference import SYTO_DECONVOLVERS
 
         cfg = templates.build_template(TASK_REGISTRY["inference"](), "methylbert")
         methods = cfg["deconvolution"]["syto"]["methods"]
@@ -149,7 +149,7 @@ class TestSectionsArePrePopulated(unittest.TestCase):
         )
 
     def test_fit_tasks_list_every_deconvolver_and_split(self):
-        from App.wizard.tasks.deconvolver_common import (
+        from syto.app.wizard.tasks.deconvolver_common import (
             DECONVOLVER_ORDER,
             DEFAULT_SPLITS,
         )
@@ -163,13 +163,13 @@ class TestSectionsArePrePopulated(unittest.TestCase):
                 self.assertEqual(cfg["splits"], DEFAULT_SPLITS)
 
     def test_deconvolute_pseudobulk_lists_every_baseline(self):
-        from App.wizard.tasks.baselines_common import BASELINES
+        from syto.app.wizard.tasks.baselines_common import BASELINES
 
         cfg = templates.build_template(TASK_REGISTRY["deconvolute_pseudobulk"]())
         self.assertEqual([b["model"] for b in cfg["baselines"]], BASELINES)
 
     def test_generate_pseudobulk_stubs_every_split(self):
-        from App.wizard.tasks.generate_pseudobulk import SPLITS
+        from syto.app.wizard.tasks.generate_pseudobulk import SPLITS
 
         cfg = templates.build_template(TASK_REGISTRY["generate_pseudobulk"](), "dismir")
         self.assertEqual(sorted(cfg["split_information"]), sorted(SPLITS))
@@ -193,7 +193,7 @@ class TestSectionsArePrePopulated(unittest.TestCase):
     def test_template_entries_match_the_interactive_defaults(self):
         # The uxm/celfie template entries must not drift from what the
         # interactive sub-flow would produce for the same answers.
-        from App.wizard.tasks.baselines_common import template_baseline_entries
+        from syto.app.wizard.tasks.baselines_common import template_baseline_entries
 
         by_model = {e["model"]: e for e in template_baseline_entries()}
         self.assertEqual(by_model["uxm"]["ignore_cells"], ["Megakaryocytes"])
