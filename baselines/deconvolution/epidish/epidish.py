@@ -279,6 +279,24 @@ class EpiDishDeconvolver(BaselineDeconvolver):
             "ref_cells": list(self._atlas.ref_cells),
         }
 
+    def merge_inputs(self, parts: List[dict]) -> Optional[dict]:
+        """Stack the CpG rows of each chunk; the reference cells are shared."""
+        parts = [part for part in parts if part and part["ref"].shape[0]]
+        if not parts:
+            return None
+        ref_cells = parts[0]["ref_cells"]
+        for part in parts[1:]:
+            if part["ref_cells"] != ref_cells:
+                raise ValueError(
+                    "EpiDISH chunks disagree on the reference cell types; "
+                    "they must all come from the same atlas."
+                )
+        return {
+            "mixture": np.concatenate([part["mixture"] for part in parts]),
+            "ref": np.concatenate([part["ref"] for part in parts], axis=0),
+            "ref_cells": ref_cells,
+        }
+
     def deconvolute_reads(
         self,
         reads: pd.DataFrame,
@@ -288,7 +306,16 @@ class EpiDishDeconvolver(BaselineDeconvolver):
     ) -> Optional[List[float]]:
         reads_sorted = self._sort_reads(reads)
         prepared = self.prepare_reads(reads_sorted) if prepare else reads_sorted
-        epi_in = self.build_input(prepared)
+        return self.deconvolute_from_input(
+            self.build_input(prepared), labels_dict_reversed, n_labels
+        )
+
+    def deconvolute_from_input(
+        self,
+        epi_in: Optional[dict],
+        labels_dict_reversed: Dict[str, int],
+        n_labels: Optional[int] = None,
+    ) -> Optional[List[float]]:
         if epi_in is None or epi_in["ref"].shape[0] == 0:
             return None
 

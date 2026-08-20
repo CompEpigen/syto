@@ -7,6 +7,7 @@ or LookupClassifier), and performing deconvolution using multiple
 methods simultaneously.
 """
 
+import copy
 import os
 import sys
 import json
@@ -33,9 +34,14 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 
 from syto.data import LOYFER_CELL_TYPE_MATCH_DICT
-from syto.data.sequencing.bam_processing import process_bam_with_chunking
+from syto.data.sequencing.bam_processing import (
+    BamRegionReader,
+    process_bam_with_chunking,
+    resolve_merge_pairs,
+)
 from syto.classification.prediction_aggregation import (
     aggregate_predictions_by_grg,
+    StreamingGrgAggregator,
 )
 from syto.classification.classifiers.lazy_classifier_factory import (
     read_classifier_factory,
@@ -57,6 +63,152 @@ from syto.calibration.vector_scaling_calibrator import VectorScalingCalibrator
 from syto.data.dataset import resolve_column
 
 LINEAR_NORM_METHODS = ["clip-normalize", "simplex-projection"]
+
+
+class _BaselineStreamAccumulator:
+    """Collects one baseline's per-chunk inputs during a streamed run.
+
+    Each baseline builds its model input as independent per-region entries, so
+    a chunked run can call ``build_input`` on one slice of that baseline's
+    atlas at a time and merge the pieces at the end.  Only the merged input
+    survives between chunks — never the reads.
+    """
+
+    def __init__(self, deconvolver: BaselineDeconvolver, logger: logging.Logger):
+        self.deconvolver = deconvolver
+        self.name = deconvolver.name
+        self.logger = logger
+        self.parts: List[dict] = []
+        self.n_reads = 0
+        self.failed = False
+
+    @property
+    def atlas(self):
+        return self.deconvolver.atlas
+
+    def update(self, reads: pd.DataFrame, region_names) -> None:
+        """Overlap *reads* with this chunk's regions and stash the input."""
+        if self.failed:
+            return
+        try:
+            # A copy narrowed to the chunk's regions: the per-region lookups are
+            # shared, only the region table is restricted, so a read is never
+            # attributed to a region belonging to another chunk.
+            sliced = copy.copy(self.deconvolver)
+            # pylint: disable=protected-access
+            sliced._atlas = self.deconvolver.atlas.subset_regions(region_names)
+
+            prepared = sliced.prepare_reads(BaselineDeconvolver._sort_reads(reads))
+            if prepared is None or prepared.empty:
+                return
+            built = sliced.build_input(prepared)
+            if built:
+                self.parts.append(built)
+                self.n_reads += len(prepared)
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            self.failed = True
+            self.logger.error(
+                "Baseline '%s' failed while streaming a chunk: %s",
+                self.name,
+                e,
+                exc_info=True,
+            )
+
+    def finalize(self, labels_dict_reversed: Dict[str, int], n_labels: int):
+        """Merge the chunk inputs and run the model once."""
+        if self.failed:
+            return None
+        if not self.parts:
+            self.logger.warning("%s: no overlapping reads, skipping.", self.name)
+            return None
+        try:
+            merged = self.deconvolver.merge_inputs(self.parts)
+            self.parts = []
+            if merged is None:
+                self.logger.warning("%s: no overlapping reads, skipping.", self.name)
+                return None
+            return self.deconvolver.deconvolute_from_input(
+                merged, labels_dict_reversed, n_labels=n_labels
+            )
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            self.logger.error(
+                "Baseline method '%s' failed: %s", self.name, e, exc_info=True
+            )
+            return None
+
+
+class _StreamingParquetWriter:
+    """Append read-level prediction chunks to a single parquet file.
+
+    The schema is fixed by the first chunk and later chunks are aligned to it.
+    Alignment is not cosmetic: ``merge_paired_reads`` emits extra columns
+    (``read_total_cpgs``, ``mate1_start``, ...) only for fragments it actually
+    merged, so the column set genuinely varies from chunk to chunk.  Missing
+    columns are filled with nulls and unexpected ones are dropped, each
+    reported once, rather than failing the run over a diagnostic output.
+    """
+
+    def __init__(self, path: str, logger: logging.Logger):
+        self.path = path
+        self.logger = logger
+        self._writer = None
+        self._schema = None
+        self._columns: Optional[List[str]] = None
+        self._reported_added: set = set()
+        self._reported_dropped: set = set()
+        self.n_rows = 0
+
+    def write(self, df: pd.DataFrame) -> None:
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+
+        if df is None or len(df) == 0:
+            return
+        if self._writer is None:
+            table = pa.Table.from_pandas(df, preserve_index=False)
+            self._schema = table.schema
+            self._columns = list(df.columns)
+            self._writer = pq.ParquetWriter(self.path, self._schema)
+        else:
+            table = pa.Table.from_pandas(
+                self._align(df), schema=self._schema, preserve_index=False
+            )
+        self._writer.write_table(table)
+        self.n_rows += len(df)
+
+    def _align(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Reshape a chunk to the columns the file was opened with."""
+        missing = [col for col in self._columns if col not in df.columns]
+        extra = [col for col in df.columns if col not in self._columns]
+
+        new_missing = set(missing) - self._reported_added
+        if new_missing:
+            self._reported_added |= new_missing
+            self.logger.warning(
+                "%s: columns absent from a chunk, written as null: %s",
+                os.path.basename(self.path),
+                ", ".join(sorted(new_missing)),
+            )
+        new_extra = set(extra) - self._reported_dropped
+        if new_extra:
+            self._reported_dropped |= new_extra
+            self.logger.warning(
+                "%s: columns not present in the first chunk, dropped: %s",
+                os.path.basename(self.path),
+                ", ".join(sorted(new_extra)),
+            )
+
+        if not missing and not extra:
+            return df
+        return df.reindex(columns=self._columns)
+
+    def close(self) -> None:
+        if self._writer is not None:
+            self._writer.close()
+            self.logger.info(
+                "Saved %d read-level predictions to %s", self.n_rows, self.path
+            )
+            self._writer = None
 
 
 class InferencePipeline:
@@ -128,6 +280,7 @@ class InferencePipeline:
         # ── Placeholder attributes populated during run() ───────────────
         self.processed_reads: Optional[pd.DataFrame] = None
         self.prepared_reads: Optional[pd.DataFrame] = None
+        self._read_classifier = None
         self.predictions_df: Optional[pd.DataFrame] = None
         self.dmr_aggregated: Optional[pd.DataFrame] = None
         self.deconvolution_results: Dict[str, Any] = {}
@@ -154,6 +307,34 @@ class InferencePipeline:
             self.num_labels = len(self.labels_dict)
         else:
             self.num_labels = self.config["num_labels"]
+
+        # ── Chunked syto processing ─────────────────────────────────────
+        # When enabled, stages 2-4 run one slice of the atlas at a time and the
+        # DMR matrix is accumulated incrementally, so only the predictions of
+        # the current slice are held in memory.
+        chunking_cfg = self.config.get("chunked_inference", {}) or {}
+        self.chunked_inference = bool(chunking_cfg.get("enabled", False))
+        self.chunk_by = chunking_cfg.get("chunk_by", "region")
+        if self.chunk_by not in ("region", "grg"):
+            raise ValueError(
+                f"chunked_inference.chunk_by must be 'region' or 'grg', "
+                f"got {self.chunk_by!r}"
+            )
+        self.regions_per_chunk = int(chunking_cfg.get("regions_per_chunk", 25))
+        if self.regions_per_chunk < 1:
+            raise ValueError("chunked_inference.regions_per_chunk must be >= 1")
+        self.chunk_progress_bar = bool(chunking_cfg.get("progress_bar", True))
+
+        # Stage 1 streaming: parse each chunk's reads straight from the BAM
+        # instead of parsing the whole file up front.  Only meaningful for BAM
+        # input, and only when the atlas drives the chunks.
+        self.stream_bam = (
+            self.chunked_inference
+            and self.config.get("input", {}).get("type") == "bam"
+            and bool(chunking_cfg.get("stream_bam", True))
+        )
+        if self.stream_bam:
+            self._validate_bam_streaming()
 
         # The feature mask is only needed by the syto feature-based methods.
         if self.syto_methods_enabled:
@@ -184,7 +365,15 @@ class InferencePipeline:
         input_cfg = self.config["input"]
         self.file_name = Path(input_cfg["data_path"]).name
         if input_cfg["type"] == "bam":
-            self.processed_reads = self._process_bam()
+            if self.stream_bam:
+                # Stage 1 is folded into the chunk loop below: each slice of the
+                # atlas fetches its own reads, so the full read table is never
+                # built.  ``processed_reads`` stays None by design.
+                self.logger.info(
+                    "Stage 1 streams from the BAM: reads are parsed per atlas chunk"
+                )
+            else:
+                self.processed_reads = self._process_bam()
         elif input_cfg["type"] == "parsed_reads":
             self.processed_reads = self._load_parsed_reads()
         elif input_cfg["type"] == "predicted_reads":
@@ -200,7 +389,14 @@ class InferencePipeline:
                 f"Unknown input type: {input_cfg['type']}. "
                 "Must be 'bam' or 'parsed_reads' or 'predicted_reads'."
             )
-        if not self.processed_reads is None:
+        if self.stream_bam:
+            # ── Stages 1-4, one atlas slice at a time ───────────────────
+            self.dmr_aggregated = self._run_syto_stages_chunked()
+            self.logger.info(
+                f"Stages 1-4 complete (chunked, streamed from BAM): "
+                f"{len(self.dmr_aggregated)} DMR-level aggregations"
+            )
+        elif not self.processed_reads is None:
             if not self.skip_reads_processing:
                 self.logger.info(
                     f"Stage 1 complete: {len(self.processed_reads)} processed reads"
@@ -210,7 +406,14 @@ class InferencePipeline:
                 # is skipped (no syto methods, or predicted reads supplied), the
                 # syto atlas is not loaded and these stages are bypassed; baseline
                 # deconvolvers prepare the raw processed reads themselves.
-                if not self.skip_classification:
+                if not self.skip_classification and self.chunked_inference:
+                    # ── Stages 2-4, one atlas slice at a time ───────────────
+                    self.dmr_aggregated = self._run_syto_stages_chunked()
+                    self.logger.info(
+                        f"Stages 2-4 complete (chunked): "
+                        f"{len(self.dmr_aggregated)} DMR-level aggregations"
+                    )
+                elif not self.skip_classification:
                     # ── Stage 2: overlap reads with atlas regions ───────────────
                     self.prepared_reads = self._prepare_reads()
                     self.logger.info(
@@ -224,12 +427,13 @@ class InferencePipeline:
                     )
 
         # ── Stage 4: aggregate to DMR level ────────────────────────────
-        if not self.skip_aggregation_for_syto:
+        # (already accumulated chunk by chunk when chunked inference is on)
+        if not self.skip_aggregation_for_syto and self.dmr_aggregated is None:
             self.dmr_aggregated = self._aggregate_to_dmr()
             self.logger.info(
                 f"Stage 4 complete: {len(self.dmr_aggregated)} DMR-level aggregations"
             )
-        else:
+        elif self.skip_aggregation_for_syto:
             self.logger.info(
                 f"Stage 4 is skipped as no prediction aggregation is required for baseline methods"
             )
@@ -246,24 +450,12 @@ class InferencePipeline:
     #  Stage 1: BAM processing / loading pre-processed reads
     # ═══════════════════════════════════════════════════════════════════
 
-    def _process_bam(self) -> pd.DataFrame:
-        """Process a BAM file into a read-level DataFrame."""
+    def _bam_parsing_params(self) -> Dict[str, Any]:
+        """Resolve every BAM-parsing knob shared by whole-file and chunked reads."""
         input_cfg = self.config["input"]
         bam_cfg = self.config.get("bam_processing", {})
 
-        bam_path = input_cfg["data_path"]
-        reference_path = input_cfg.get("reference_path")
         data_type = input_cfg.get("data_type")
-
-        # Resolve chromosomes
-        chromosomes = input_cfg.get("chromosomes", "all")
-        if chromosomes == "all":
-            chromosomes = [f"chr{i}" for i in range(1, 23)]
-            chromosomes += ["chrX"]
-            chromosomes += ["chrY"]
-
-        self.logger.info(f"Processing BAM: {bam_path} ({len(chromosomes)} chromosomes)")
-
         if data_type == "wgbs":
             require_flags = bam_cfg.get("require_flags", 3)
         elif data_type == "ont":
@@ -276,19 +468,108 @@ class InferencePipeline:
                 "The pipeline only supports BAMS originating from WGBS or ONT"
             )
 
+        chromosomes = input_cfg.get("chromosomes", "all")
+        if chromosomes == "all":
+            chromosomes = [f"chr{i}" for i in range(1, 23)]
+            chromosomes += ["chrX"]
+            chromosomes += ["chrY"]
+
+        return {
+            "bam_path": input_cfg["data_path"],
+            "reference_path": input_cfg.get("reference_path"),
+            "data_type": data_type,
+            "chromosomes": chromosomes,
+            "methyl_tr": bam_cfg.get("ont_methyl_tr", 122),
+            "unmethyl_tr": bam_cfg.get("ont_unmethyl_tr"),
+            "n_jobs": bam_cfg.get("n_jobs", 4),
+            "min_mapq": bam_cfg.get("min_mapq", 10),
+            "require_flags": require_flags,
+            "exclude_flags": bam_cfg.get("exclude_flags", 1796),
+            "min_cpgs": bam_cfg.get("min_cpgs", 1),
+            # ONT records sharing a read name are supplementary alignments, not
+            # mates, so merging is refused for ONT however the config reads.
+            "merge_pairs": resolve_merge_pairs(
+                data_type, bam_cfg.get("merge_pairs", True)
+            ),
+        }
+
+    def _atlas_fetch_intervals(self) -> List[Tuple[str, int, int]]:
+        """Merged 0-based intervals covering every atlas this run will consult.
+
+        Deconvolution only ever looks at reads overlapping an atlas region, so
+        there is no reason to parse the rest of the genome.  The syto atlas and
+        each enabled baseline atlas are pooled, padded, and merged, which turns
+        a whole-BAM walk into a few thousand indexed fetches.
+
+        Returns an empty list when no atlas is loaded, i.e. when there is
+        nothing to restrict to.
+        """
+        frames = []
+        if self.atlas is not None:
+            frames.append(self.atlas.atlas[["chr", "start", "end"]])
+        for deconvolver in self._baseline_deconvolvers:
+            frames.append(deconvolver.atlas.atlas[["chr", "start", "end"]])
+        if not frames:
+            return []
+
+        params = self._bam_parsing_params()
+        wanted = set(params["chromosomes"])
+        padding = self._mate_fetch_padding(params)
+
+        regions = pd.concat(frames, ignore_index=True)
+        regions = regions[regions["chr"].isin(wanted)]
+        regions = regions.sort_values(["chr", "start", "end"], kind="stable")
+
+        merged: List[Tuple[str, int, int]] = []
+        for chromosome, start, end in regions.itertuples(index=False):
+            # Atlas regions are 1-based inclusive; fetch wants 0-based half-open.
+            start = max(0, int(start) - 1 - padding)
+            end = int(end) + padding
+            if merged and merged[-1][0] == chromosome and start <= merged[-1][2]:
+                merged[-1] = (chromosome, merged[-1][1], max(merged[-1][2], end))
+            else:
+                merged.append((chromosome, start, end))
+        return merged
+
+    def _mate_fetch_padding(self, params: Dict[str, Any]) -> int:
+        """Extra span fetched around each region so mates come along.
+
+        Only relevant when mates are merged (WGBS): a fragment whose second
+        mate falls outside every atlas region would otherwise arrive alone and
+        stay unmerged, unlike in a whole-genome parse.
+        """
+        if not params["merge_pairs"]:
+            return 0
+        return int(
+            self.config.get("bam_processing", {}).get("mate_fetch_padding", 1000)
+        )
+
+    def _process_bam(self) -> pd.DataFrame:
+        """Process a BAM file into a read-level DataFrame."""
+        params = self._bam_parsing_params()
+        bam_path = params["bam_path"]
+        chromosomes = params["chromosomes"]
+
+        restrict = self.config.get("bam_processing", {}).get("restrict_to_atlas", True)
+        intervals = self._atlas_fetch_intervals() if restrict else []
+        if intervals:
+            return self._process_bam_over_regions(params, intervals)
+
+        self.logger.info(f"Processing BAM: {bam_path} ({len(chromosomes)} chromosomes)")
+
         df = process_bam_with_chunking(
             bam_path=bam_path,
             chromosomes=chromosomes,
-            methyl_tr=bam_cfg.get("ont_methyl_tr", 122),
-            unmethyl_tr=bam_cfg.get("ont_unmethyl_tr"),
-            n_jobs=bam_cfg.get("n_jobs", 4),
-            reference_path=reference_path,
-            data_type=data_type,
-            min_mapq=bam_cfg.get("min_mapq", 10),
-            require_flags=require_flags,
-            exclude_flags=bam_cfg.get("exclude_flags", 1796),
-            min_cpgs=bam_cfg.get("min_cpgs", 1),
-            merge_pairs=bam_cfg.get("merge_pairs", True),
+            methyl_tr=params["methyl_tr"],
+            unmethyl_tr=params["unmethyl_tr"],
+            n_jobs=params["n_jobs"],
+            reference_path=params["reference_path"],
+            data_type=params["data_type"],
+            min_mapq=params["min_mapq"],
+            require_flags=params["require_flags"],
+            exclude_flags=params["exclude_flags"],
+            min_cpgs=params["min_cpgs"],
+            merge_pairs=params["merge_pairs"],
         )
         if not len(df):
             self.logger.warning(
@@ -298,17 +579,61 @@ class InferencePipeline:
             df = process_bam_with_chunking(
                 bam_path=bam_path,
                 chromosomes=chromosomes,
-                methyl_tr=bam_cfg.get("ont_methyl_tr", 122),
-                unmethyl_tr=bam_cfg.get("ont_unmethyl_tr"),
-                n_jobs=bam_cfg.get("n_jobs", 4),
-                reference_path=reference_path,
-                data_type=data_type,
-                min_mapq=bam_cfg.get("min_mapq", 10),
+                methyl_tr=params["methyl_tr"],
+                unmethyl_tr=params["unmethyl_tr"],
+                n_jobs=params["n_jobs"],
+                reference_path=params["reference_path"],
+                data_type=params["data_type"],
+                min_mapq=params["min_mapq"],
                 require_flags=None,
                 exclude_flags=None,
-                min_cpgs=bam_cfg.get("min_cpgs", 1),
-                merge_pairs=bam_cfg.get("merge_pairs", True),
+                min_cpgs=params["min_cpgs"],
+                merge_pairs=params["merge_pairs"],
             )
+        if not len(df):
+            self.logger.warning(
+                "Setting exclude_flags=None and require_flags=None didn't help. "
+                "The processing of this file will be terminated."
+            )
+            return None
+
+        return df
+
+    def _process_bam_over_regions(
+        self, params: Dict[str, Any], intervals: List[Tuple[str, int, int]]
+    ) -> Optional[pd.DataFrame]:
+        """Parse only the reads overlapping the atlases, in one indexed pass."""
+        span = sum(end - start for _, start, end in intervals)
+        self.logger.info(
+            "Processing BAM: %s (%d merged atlas intervals, %.1f Mb; "
+            "set bam_processing.restrict_to_atlas: false to parse the whole file)",
+            params["bam_path"],
+            len(intervals),
+            span / 1e6,
+        )
+
+        def read(require_flags, exclude_flags):
+            with BamRegionReader(
+                bam_path=params["bam_path"],
+                data_type=params["data_type"],
+                reference_path=params["reference_path"],
+                methyl_tr=params["methyl_tr"],
+                unmethyl_tr=params["unmethyl_tr"],
+                min_mapq=params["min_mapq"],
+                require_flags=require_flags,
+                exclude_flags=exclude_flags,
+                min_cpgs=params["min_cpgs"],
+                merge_pairs=params["merge_pairs"],
+            ) as reader:
+                return reader.read_regions(intervals)
+
+        df = read(params["require_flags"], params["exclude_flags"])
+        if not len(df):
+            self.logger.warning(
+                "The dataset has 0 reads after applying all samtools filters. "
+                "The attempt will be made to reparse .bam without applying flag filters"
+            )
+            df = read(None, None)
         if not len(df):
             self.logger.warning(
                 "Setting exclude_flags=None and require_flags=None didn't help. "
@@ -369,18 +694,8 @@ class InferencePipeline:
         - trims reads to region boundaries (coordinates, seq, pattern)
         - resolves ``dmr_ctype_label`` via labels_dict and cell_type_match_dict
         """
-        df = self.processed_reads.copy()
-        df = df.sort_values(["chromosome", "read_start"]).reset_index(drop=True)
-
         self.logger.info("Overlapping reads with atlas regions ...")
-        prepared = self.atlas.prepare_reads(
-            df,
-            trim=True,
-            labels_dict=self.labels_dict,
-            cell_type_match_dict=self.cell_type_match_dict,
-        )
-
-        prepared = mark_records_methyl_state(prepared)
+        prepared = self._overlap_reads_with_atlas(self.processed_reads, self.atlas)
 
         if len(prepared) == 0:
             raise RuntimeError(
@@ -390,16 +705,32 @@ class InferencePipeline:
 
         return prepared
 
-    def _predict_classifier(self) -> pd.DataFrame:
-        """
-        Run the configured classifier on the prepared reads.
+    def _overlap_reads_with_atlas(self, reads: pd.DataFrame, atlas) -> pd.DataFrame:
+        """Overlap, trim and annotate *reads* against *atlas* (may be a subset).
 
-        Returns
-        -------
-        pd.DataFrame
-            The prepared_reads DataFrame augmented with ``prediction_*``
-            columns (one per cell type).
+        Unlike :meth:`_prepare_reads` this returns an empty frame instead of
+        raising when nothing overlaps, which is a normal outcome for an
+        individual chunk of atlas regions.
         """
+        df = reads.copy()
+        df = df.sort_values(["chromosome", "read_start"]).reset_index(drop=True)
+
+        prepared = atlas.prepare_reads(
+            df,
+            trim=True,
+            labels_dict=self.labels_dict,
+            cell_type_match_dict=self.cell_type_match_dict,
+        )
+        if len(prepared) == 0:
+            return prepared
+
+        return mark_records_methyl_state(prepared)
+
+    def _build_classifier(self):
+        """Instantiate the configured read classifier (loaded once per run)."""
+        if getattr(self, "_read_classifier", None) is not None:
+            return self._read_classifier
+
         classifier_cfg = self.config.get("classifier", self.config.get("model", {}))
         self.classifier_type = classifier_cfg.get("classifier_type")
         read_classifier = read_classifier_factory(
@@ -422,10 +753,31 @@ class InferencePipeline:
             soft_labels=classifier_cfg.get("soft_labels", False),
             batch_size=self.config.get("prediction_batch_size", 2200),
         )
+        self._read_classifier = read_classifier
+        return read_classifier
 
-        self.logger.info("Running classifier predictions ...")
+    def _predict_classifier(self, reads: Optional[pd.DataFrame] = None) -> pd.DataFrame:
+        """
+        Run the configured classifier on prepared reads.
 
-        result_df = read_classifier.predict_split(self.prepared_reads, **classifier_cfg)
+        Parameters
+        ----------
+        reads : pd.DataFrame, optional
+            Prepared reads to classify.  Defaults to ``self.prepared_reads``.
+
+        Returns
+        -------
+        pd.DataFrame
+            The prepared reads augmented with ``prediction_*`` columns
+            (one per cell type).
+        """
+        classifier_cfg = self.config.get("classifier", self.config.get("model", {}))
+        read_classifier = self._build_classifier()
+        if reads is None:
+            self.logger.info("Running classifier predictions ...")
+            reads = self.prepared_reads
+
+        result_df = read_classifier.predict_split(reads, **classifier_cfg)
 
         prediction_cols = [
             c
@@ -438,6 +790,405 @@ class InferencePipeline:
             result_df.rename(columns={"M_rate": "methylation_level"}, inplace=True)
 
         return result_df
+
+    # ═══════════════════════════════════════════════════════════════════
+    #  Stages 2-4, chunked: one atlas slice at a time
+    # ═══════════════════════════════════════════════════════════════════
+
+    def _run_syto_stages_chunked(self) -> pd.DataFrame:
+        """Overlap, classify and aggregate one slice of the atlas at a time.
+
+        Predicting every read up front and aggregating afterwards needs the
+        whole read x region prediction table (one float column per cell type)
+        in memory at once, which is what runs large samples out of memory.
+        Here each slice of atlas regions is carried through stages 2-4 on its
+        own and only its running sums survive into the next slice, so peak
+        memory follows the busiest slice rather than the whole sample.
+
+        Returns the same DMR-aggregated matrix as the unchunked path.
+        """
+        baseline_accumulators = self._build_baseline_accumulators()
+        chunks = self._plan_chunks(baseline_accumulators)
+        self.logger.info(
+            "Chunked inference: %d chunks (chunk_by=%s%s, source=%s%s)",
+            len(chunks),
+            self.chunk_by,
+            (
+                f", regions_per_chunk={self.regions_per_chunk}"
+                if self.chunk_by == "region"
+                else ""
+            ),
+            "bam" if self.stream_bam else "processed reads",
+            (
+                f", streaming {len(baseline_accumulators)} baseline(s)"
+                if baseline_accumulators
+                else ""
+            ),
+        )
+
+        aggregator, n_prepared = self._accumulate_chunks(chunks, baseline_accumulators)
+
+        if aggregator.n_reads_seen == 0 and self.stream_bam:
+            # Mirrors the whole-file path: an empty result is usually the flag
+            # filters, so retry once with them off before giving up.
+            params = self._bam_parsing_params()
+            if params["require_flags"] or params["exclude_flags"]:
+                self.logger.warning(
+                    "0 reads after applying all samtools filters. "
+                    "Retrying the chunked pass without flag filters"
+                )
+                baseline_accumulators = self._build_baseline_accumulators()
+                aggregator, n_prepared = self._accumulate_chunks(
+                    chunks, baseline_accumulators, relax_flag_filters=True
+                )
+
+        if aggregator.n_reads_seen == 0:
+            raise RuntimeError(
+                "No reads overlapped with atlas regions. "
+                "Check that chromosome naming is consistent between BAM and atlas."
+            )
+
+        self._finalize_streamed_baselines(baseline_accumulators)
+
+        self.logger.info(
+            "Chunked stages 2-3: %d atlas-overlapped reads, %d classified",
+            n_prepared,
+            aggregator.n_reads_seen,
+        )
+        return aggregator.finalize(
+            fill_in_missing_labels=self.fill_in_missing_labels,
+            labels_dict=self.labels_dict,
+            substitution_strategy=self.missing_label_strategy,
+            uniform_prior=self.uniform_prior,
+            prior_weight=self.prior_weight,
+        )
+
+    def _validate_bam_streaming(self) -> None:
+        """Reject configurations that streaming stage 1 cannot serve.
+
+        Streaming never builds the full read table.  The read-based baselines
+        are fed from the same pass (their inputs are per-region and merge
+        exactly), but anything that needs every read as one frame - the
+        processed-reads dump - has nothing to work from.
+        """
+        if not self.syto_methods_enabled:
+            raise ValueError(
+                "chunked_inference.stream_bam needs syto methods to drive the "
+                "chunks (deconvolution.syto.methods is empty). Set "
+                "chunked_inference.stream_bam: false."
+            )
+
+        if self._baseline_deconvolvers and self.chunk_by != "region":
+            raise ValueError(
+                "chunked_inference.chunk_by='grg' cannot stream the read-based "
+                "baselines: their chunks follow their own atlases, so the pass is "
+                "planned over the union of all atlases in genomic order. Use "
+                "chunk_by: region, or disable the baselines."
+            )
+
+        if self.config.get("output", {}).get("save_processed_reads", True):
+            self.logger.warning(
+                "output.save_processed_reads is ignored when "
+                "chunked_inference.stream_bam is on: reads are parsed per chunk "
+                "and never held as one table. Read-level predictions are still "
+                "written (predictions.parquet)."
+            )
+
+    def _accumulate_chunks(
+        self,
+        chunks: List[pd.DataFrame],
+        baseline_accumulators: Optional[List[Any]] = None,
+        relax_flag_filters: bool = False,
+    ) -> Tuple[StreamingGrgAggregator, int]:
+        """Run every chunk through stages (1-)2-4 and return the accumulator.
+
+        When *baseline_accumulators* are given, the same chunk of reads also
+        feeds each read-based baseline, so one pass over the BAM serves every
+        consumer.
+        """
+        baseline_accumulators = baseline_accumulators or []
+        aggregator = StreamingGrgAggregator(
+            group_cols=["dmr_ctype_label", "dmr_ctype"],
+            weight_col="NCPGS",
+            create_weight_from_cpgs=False,
+        )
+        writer = self._open_chunked_prediction_writer()
+        reader = (
+            self._open_bam_region_reader(relax_flag_filters=relax_flag_filters)
+            if self.stream_bam
+            else None
+        )
+        read_index = (
+            None if self.stream_bam else self._build_read_index(self.processed_reads)
+        )
+
+        n_prepared = 0
+        progress = self._progress_bar(chunks)
+        try:
+            for regions in progress:
+                if reader is not None:
+                    reads = reader.read_regions(self._fetch_intervals(regions))
+                else:
+                    reads = self._reads_for_regions(regions, read_index)
+                if reads is None or len(reads) == 0:
+                    continue
+
+                # Read-based baselines see the same reads, each restricted to
+                # the regions of its own atlas that fall in this chunk.
+                for index, accumulator in enumerate(baseline_accumulators):
+                    owned = regions.loc[regions["consumer"] == index, "name"]
+                    if len(owned):
+                        accumulator.update(reads, owned)
+
+                syto_regions = (
+                    regions.loc[regions["consumer"] == -1, "name"]
+                    if "consumer" in regions.columns
+                    else regions["name"]
+                )
+                if len(syto_regions):
+                    prepared = self._overlap_reads_with_atlas(
+                        reads, self.atlas.subset_regions(syto_regions)
+                    )
+                    if len(prepared):
+                        n_prepared += len(prepared)
+                        predictions = self._predict_classifier(prepared)
+                        aggregator.update(predictions)
+                        if writer is not None:
+                            try:
+                                writer.write(predictions)
+                            except (
+                                Exception
+                            ) as e:  # pylint: disable=broad-exception-caught
+                                # predictions.parquet is a diagnostic output;
+                                # losing it must not cost the whole run.
+                                self.logger.error(
+                                    "Failed to write read-level predictions, "
+                                    "continuing without them: %s",
+                                    e,
+                                    exc_info=True,
+                                )
+                                writer.close()
+                                writer = None
+                        del prepared, predictions
+
+                if hasattr(progress, "set_postfix"):
+                    progress.set_postfix(
+                        reads=n_prepared, predicted=aggregator.n_reads_seen
+                    )
+                # Drop the slice before the next one is built.
+                del reads
+        finally:
+            if writer is not None:
+                writer.close()
+            if reader is not None:
+                reader.close()
+            if hasattr(progress, "close"):
+                progress.close()
+
+        return aggregator, n_prepared
+
+    def _build_baseline_accumulators(self) -> List[Any]:
+        """One accumulator per enabled baseline, for streamed runs only.
+
+        Without streaming the baselines keep working from the full read table in
+        stage 5, so there is nothing to accumulate.
+        """
+        if not self.stream_bam or not self._baseline_deconvolvers:
+            return []
+        return [
+            _BaselineStreamAccumulator(deconvolver, self.logger)
+            for deconvolver in self._baseline_deconvolvers
+        ]
+
+    def _finalize_streamed_baselines(self, accumulators: List[Any]) -> None:
+        """Solve each streamed baseline and stash its result for stage 5."""
+        self._streamed_baseline_results = []
+        for accumulator in accumulators:
+            self.logger.info(
+                "Running baseline deconvolution: %s (streamed, %d reads)",
+                accumulator.name,
+                accumulator.n_reads,
+            )
+            result = accumulator.finalize(self.labels_dict_reversed, self.num_labels)
+            if result is None:
+                continue
+            self._streamed_baseline_results.extend(
+                self._format_baseline_result(accumulator.deconvolver, result)
+            )
+
+    def _open_bam_region_reader(self, relax_flag_filters: bool = False):
+        """Open the BAM once for the whole chunked run."""
+        params = self._bam_parsing_params()
+        self.logger.info(
+            "Streaming reads from %s (%d chromosomes)",
+            params["bam_path"],
+            len(params["chromosomes"]),
+        )
+        return BamRegionReader(
+            bam_path=params["bam_path"],
+            data_type=params["data_type"],
+            reference_path=params["reference_path"],
+            methyl_tr=params["methyl_tr"],
+            unmethyl_tr=params["unmethyl_tr"],
+            min_mapq=params["min_mapq"],
+            require_flags=None if relax_flag_filters else params["require_flags"],
+            exclude_flags=None if relax_flag_filters else params["exclude_flags"],
+            min_cpgs=params["min_cpgs"],
+            merge_pairs=params["merge_pairs"],
+        )
+
+    def _fetch_intervals(self, regions: pd.DataFrame) -> List[Tuple[str, int, int]]:
+        """Convert a chunk's atlas rows into 0-based half-open fetch intervals.
+
+        Regions outside ``input.chromosomes`` are dropped, so restricting the
+        run to a few chromosomes skips their reads entirely.
+        """
+        if getattr(self, "_fetch_chromosomes", None) is None:
+            params = self._bam_parsing_params()
+            self._fetch_chromosomes = set(params["chromosomes"])
+            self._fetch_padding = self._mate_fetch_padding(params)
+        # Consumers share loci; fetch each interval once per chunk.
+        intervals = regions.loc[
+            regions["chr"].isin(self._fetch_chromosomes), ["chr", "start", "end"]
+        ].drop_duplicates()
+        return [
+            (
+                chromosome,
+                max(0, int(start) - 1 - self._fetch_padding),
+                int(end) + self._fetch_padding,
+            )
+            for chromosome, start, end in intervals.itertuples(index=False)
+        ]
+
+    def _plan_chunks(
+        self, baseline_accumulators: Optional[List[Any]] = None
+    ) -> List[pd.DataFrame]:
+        """Split the regions to process into the slices handled one by one.
+
+        Every chunk is a frame of regions carrying a ``consumer`` column: ``-1``
+        for the syto atlas, otherwise the index of the baseline accumulator that
+        owns the region.  Chunks are planned over the *union* of all consumers'
+        atlases in genomic order, so one BAM pass serves every consumer and a
+        read spanning regions of different atlases is fetched (and its tags
+        decoded) once rather than once per atlas.
+
+        ``regions_per_chunk`` counts *distinct loci*, not rows: consumers
+        sharing a region (the usual case, since the baseline atlases are built
+        from the same markers) land in the same chunk, so its reads are parsed
+        once and handed to all of them.
+
+        ``chunk_by="grg"`` yields one slice per GR group (cell type target),
+        i.e. exactly one row of the feature matrix per slice.  ``"region"``
+        yields fixed-size batches of individual regions, which keeps the working
+        set smaller at the cost of more classifier calls.
+        """
+        columns = ["chr", "start", "end", "name"]
+        syto = self.atlas.atlas.assign(consumer=-1)
+
+        if self.chunk_by == "grg":
+            return [group for _, group in syto.groupby("target", sort=True)]
+
+        frames = [syto[columns + ["consumer"]]]
+        for index, accumulator in enumerate(baseline_accumulators or []):
+            frames.append(accumulator.atlas.atlas[columns].assign(consumer=index))
+
+        union = pd.concat(frames, ignore_index=True).sort_values(
+            ["chr", "start", "end"], kind="stable"
+        )
+        if len(union) == 0:
+            return []
+        # Number the distinct loci in genomic order, then cut every
+        # ``regions_per_chunk`` of them; rows sharing a locus stay together.
+        locus = union.groupby(["chr", "start", "end"], sort=False).ngroup()
+        return [
+            group
+            for _, group in union.groupby(locus // self.regions_per_chunk, sort=True)
+        ]
+
+    @staticmethod
+    def _build_read_index(reads: pd.DataFrame) -> Dict[str, Any]:
+        """Index reads by chromosome and start, for fast per-region lookup.
+
+        Reads are not fixed length (ONT reads run to tens of kb), so a start
+        position alone cannot bound the search.  The per-chromosome maximum
+        read length gives the window that must be scanned to the left of a
+        region before filtering on ``read_end``.
+        """
+        index: Dict[str, Any] = {}
+        starts_all = reads["read_start"].to_numpy()
+        ends_all = reads["read_end"].to_numpy()
+        for chromosome, positions in reads.groupby(
+            "chromosome", sort=False
+        ).indices.items():
+            order = positions[np.argsort(starts_all[positions], kind="stable")]
+            starts = starts_all[order]
+            ends = ends_all[order]
+            index[chromosome] = {
+                "positions": order,
+                "starts": starts,
+                "ends": ends,
+                "max_length": int((ends - starts).max()) if len(order) else 0,
+            }
+        return index
+
+    def _reads_for_regions(
+        self, regions: pd.DataFrame, read_index: Dict[str, Any]
+    ) -> Optional[pd.DataFrame]:
+        """Select the reads that can overlap any region in this chunk."""
+        selected: List[np.ndarray] = []
+        for chromosome, start, end in zip(
+            regions["chr"], regions["start"], regions["end"]
+        ):
+            entry = read_index.get(chromosome)
+            if entry is None:
+                continue
+            starts, ends = entry["starts"], entry["ends"]
+            # Atlas regions are 1-based; overlap_reads compares against
+            # ``start - 1`` (0-based) and an exclusive ``end``.
+            region_start = int(start) - 1
+            region_end = int(end)
+            first = np.searchsorted(
+                starts, region_start - entry["max_length"], side="left"
+            )
+            last = np.searchsorted(starts, region_end, side="left")
+            if last <= first:
+                continue
+            window = slice(first, last)
+            hits = np.flatnonzero(ends[window] >= region_start) + first
+            if len(hits):
+                selected.append(entry["positions"][hits])
+
+        if not selected:
+            return None
+        return self.processed_reads.iloc[np.unique(np.concatenate(selected))]
+
+    def _progress_bar(self, chunks: List[pd.DataFrame]):
+        """Wrap the chunk list in a tqdm bar when progress display is on."""
+        if not self.chunk_progress_bar:
+            return chunks
+        try:
+            from tqdm.auto import tqdm
+        except ImportError:  # pragma: no cover - tqdm ships with the project
+            self.logger.warning("tqdm is not installed; progress bar disabled")
+            return chunks
+        return tqdm(chunks, desc="Chunked inference", unit="chunk")
+
+    def _open_chunked_prediction_writer(self):
+        """Return a streaming parquet writer for read-level predictions.
+
+        In chunked mode the full prediction table never exists in memory, so
+        ``output.save_predictions`` is honoured by appending each chunk to a
+        parquet file instead of pickling one big DataFrame at the end.
+        """
+        output_cfg = self.config.get("output", {})
+        if not output_cfg.get("save_predictions", True):
+            return None
+
+        output_dir = self.config.get("output_dir", "./inference_output")
+        os.makedirs(output_dir, exist_ok=True)
+        path = os.path.join(output_dir, "predictions.parquet")
+        self.logger.info("Streaming read-level predictions to %s", path)
+        return _StreamingParquetWriter(path, self.logger)
 
     def _load_or_compute_uniform_prior(self) -> pd.DataFrame:
         """Load the uniform prior matrix from the pseudobulk HDF5 file.
@@ -473,7 +1224,9 @@ class InferencePipeline:
 
         split = self.config.get("pure_profiles_split", "train")
         self.logger.info(
-            "Loading uniform prior from pseudobulk store (split=%r): %s", split, pseudobulk_path
+            "Loading uniform prior from pseudobulk store (split=%r): %s",
+            split,
+            pseudobulk_path,
         )
         reader = open_pseudobulk_store(pseudobulk_path, logger=self.logger)
         return reader.read_uniform_prior(split)
@@ -569,8 +1322,13 @@ class InferencePipeline:
                 )
 
         # ── Read-based baseline methods ─────────────────────────────────
-        for deconvolver in self._baseline_deconvolvers:
-            results.extend(self._run_baseline(deconvolver))
+        streamed = getattr(self, "_streamed_baseline_results", None)
+        if streamed is not None:
+            # Already deconvoluted chunk by chunk during the streamed pass.
+            results.extend(streamed)
+        else:
+            for deconvolver in self._baseline_deconvolvers:
+                results.extend(self._run_baseline(deconvolver))
 
         return results
 
@@ -891,6 +1649,13 @@ class InferencePipeline:
             self.logger.warning("%s: no overlapping reads, skipping.", model)
             return []
 
+        return self._format_baseline_result(deconvolver, result)
+
+    def _format_baseline_result(
+        self, deconvolver: BaselineDeconvolver, result
+    ) -> List[Tuple[str, str, np.ndarray]]:
+        """Turn a baseline's proportions into result tuples (EM checkpoints included)."""
+        model = deconvolver.name
         em_checkpoints = getattr(deconvolver, "em_checkpoints", None)
         if em_checkpoints is not None:
             return [
@@ -922,6 +1687,8 @@ class InferencePipeline:
             self.logger.info(f"Saved processed reads to {path}")
 
         # ── Predictions with MethylBERT scores (pickle) ────────────────
+        # Chunked runs stream these to parquet during stages 2-4 instead; see
+        # ``_open_chunked_prediction_writer``.
         if output_cfg.get("save_predictions", True) and self.predictions_df is not None:
             path = os.path.join(output_dir, "predictions.pkl")
             with open(path, "wb") as f:

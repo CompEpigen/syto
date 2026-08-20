@@ -1,5 +1,4 @@
-"""Format-independent access to generated pseudobulks.
-"""
+"""Format-independent access to generated pseudobulks."""
 
 from __future__ import annotations
 
@@ -277,9 +276,11 @@ class BasePseudobulkReader(ABC):
             split_name, class_label_column
         )
 
-        for seed, n_samples_per_class_per_grg, target_proportions in (
-            self.iter_pseudobulk_params(split_name)
-        ):
+        for (
+            seed,
+            n_samples_per_class_per_grg,
+            target_proportions,
+        ) in self.iter_pseudobulk_params(split_name):
             read_ids = _sample_read_ids_from_grouped_dataframe(
                 n_samples_per_class_per_grg,
                 indices_per_class_and_grg,

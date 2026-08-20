@@ -1,5 +1,4 @@
-"""Every consumer of a pseudobulk store works against both on-disk layouts.
-"""
+"""Every consumer of a pseudobulk store works against both on-disk layouts."""
 
 import json
 import logging

@@ -65,8 +65,12 @@ class ColumnarEquivalenceMixin:
                 np.testing.assert_array_equal(ch, cc)
                 np.testing.assert_array_equal(th, tc)
 
-            subsets_h5 = list(h5.iter_pseudobulk_read_subsets(split, CLASS_LABEL_COLUMN))
-            subsets_col = list(col.iter_pseudobulk_read_subsets(split, CLASS_LABEL_COLUMN))
+            subsets_h5 = list(
+                h5.iter_pseudobulk_read_subsets(split, CLASS_LABEL_COLUMN)
+            )
+            subsets_col = list(
+                col.iter_pseudobulk_read_subsets(split, CLASS_LABEL_COLUMN)
+            )
             self.assertEqual(len(subsets_h5), len(subsets_col))
             for (rh, th), (rc, tc) in zip(subsets_h5, subsets_col):
                 pd.testing.assert_frame_equal(
@@ -99,7 +103,9 @@ class TestColumnarEquivalenceSquare(unittest.TestCase, ColumnarEquivalenceMixin)
         self.assert_stores_equivalent(num_pred_classes=2)
 
 
-class TestColumnarEquivalenceBackgroundClass(unittest.TestCase, ColumnarEquivalenceMixin):
+class TestColumnarEquivalenceBackgroundClass(
+    unittest.TestCase, ColumnarEquivalenceMixin
+):
     """Predictions exceed classes, as in the background-class runs."""
 
     @classmethod
@@ -150,7 +156,9 @@ class TestColumnarEquivalenceThreeSplits(unittest.TestCase, ColumnarEquivalenceM
         self.assertEqual(sorted(col.list_splits()), ["test", "train", "valid"])
 
 
-class TestColumnarEquivalenceProductionShape(unittest.TestCase, ColumnarEquivalenceMixin):
+class TestColumnarEquivalenceProductionShape(
+    unittest.TestCase, ColumnarEquivalenceMixin
+):
     """The widths the published runs actually use: 39 GR groups, 40 predictions.
 
     Small fixtures cannot surface reshape or integer-width mistakes that only

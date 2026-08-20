@@ -59,9 +59,7 @@ class TestOnTargetScores(unittest.TestCase):
 
     def test_returns_empty_when_nothing_is_on_target(self):
         predictions = np.array([[0.4, 0.6], [0.7, 0.3]])
-        got = on_target_scores(
-            predictions, np.array([0, 1]), np.array([False, False])
-        )
+        got = on_target_scores(predictions, np.array([0, 1]), np.array([False, False]))
         self.assertEqual(len(got), 0)
 
     def test_accepts_integer_mask(self):

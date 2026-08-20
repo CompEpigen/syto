@@ -42,6 +42,10 @@ def _input_is_bam(answers):
     return answers.get("input.type") == "bam"
 
 
+def _chunked_inference(answers):
+    return _run_syto(answers) and bool(answers.get("chunked_inference.enabled"))
+
+
 def _deconv_methods_section(engine, answers):
     """Build deconvolution.syto.methods as a list of dicts."""
     selected = engine.ask_checkbox(
@@ -352,6 +356,14 @@ class InferenceWizard:
                 when=_input_is_bam,
             ),
             FieldSpec(
+                key="bam_processing.restrict_to_atlas",
+                label="bam restrict_to_atlas (fetch only atlas-overlapping reads)",
+                kind="bool",
+                default=True,
+                tier="expert",
+                when=_input_is_bam,
+            ),
+            FieldSpec(
                 key="bam_processing.merge_pairs",
                 label="bam merge_pairs",
                 kind="bool",
@@ -394,6 +406,51 @@ class InferenceWizard:
                 tier="expert",
                 validate=v.positive_int,
                 when=_run_syto,
+            ),
+            # ── Expert: chunked (low-memory) classification + aggregation ──
+            FieldSpec(
+                key="chunked_inference.enabled",
+                label="chunked_inference: process the atlas in slices (low memory)",
+                kind="bool",
+                default=False,
+                tier="expert",
+                when=_run_syto,
+            ),
+            FieldSpec(
+                key="chunked_inference.chunk_by",
+                label="chunked_inference chunk_by",
+                kind="select",
+                choices=["region", "grg"],
+                default="region",
+                tier="expert",
+                when=_chunked_inference,
+            ),
+            FieldSpec(
+                key="chunked_inference.regions_per_chunk",
+                label="chunked_inference regions_per_chunk",
+                kind="int",
+                default=25,
+                tier="expert",
+                validate=v.positive_int,
+                when=lambda a: _chunked_inference(a)
+                and a.get("chunked_inference.chunk_by", "region") == "region",
+            ),
+            FieldSpec(
+                key="chunked_inference.stream_bam",
+                label="chunked_inference stream_bam (parse each chunk's reads "
+                "straight from the BAM; needs chunk_by=region when baselines run)",
+                kind="bool",
+                default=True,
+                tier="expert",
+                when=lambda a: _chunked_inference(a) and _input_is_bam(a),
+            ),
+            FieldSpec(
+                key="chunked_inference.progress_bar",
+                label="chunked_inference progress_bar",
+                kind="bool",
+                default=True,
+                tier="expert",
+                when=_chunked_inference,
             ),
         ]
 

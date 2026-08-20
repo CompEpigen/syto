@@ -558,3 +558,177 @@ def get_final_prediction(
         df[f"final_confidence_{method}"] = pred_array.max(axis=1)
 
     return df
+
+
+class StreamingGrgAggregator:
+    """Incremental equivalent of :func:`aggregate_predictions_by_grg`.
+
+    Feed read-level predictions one chunk at a time with :meth:`update` and
+    build the GR-aggregated matrix with :meth:`finalize`.  Only the per-group
+    running sums are retained, so peak memory is set by the largest chunk
+    rather than by the full prediction table.
+
+    Every statistic the batch function computes decomposes into sums, so the
+    result is identical (bit-for-bit up to float summation order) regardless of
+    how the reads were split across chunks — including the NaN semantics:
+    ``*_avg`` skips NaN values (like ``DataFrame.mean``) while ``*_wavg``
+    propagates them (like ``np.average``).
+
+    Parameters mirror :func:`aggregate_predictions_by_grg`.
+    """
+
+    def __init__(
+        self,
+        group_cols: Optional[List[str]] = None,
+        prediction_cols: Optional[List[str]] = None,
+        weight_col: str = "total_marked_cpgs",
+        create_weight_from_cpgs: bool = True,
+    ):
+        self.group_cols = (
+            list(group_cols)
+            if group_cols is not None
+            else ["dmr_label", "file", "original_label"]
+        )
+        self.prediction_cols = list(prediction_cols) if prediction_cols else None
+        self.weight_col = weight_col
+        self.create_weight_from_cpgs = create_weight_from_cpgs
+
+        # group key -> running sums
+        self._sum_weight: dict = {}
+        self._n_reads: dict = {}
+        self._sum_value: dict = {}  # NaN-skipping, for the simple average
+        self._count_value: dict = {}  # non-NaN counts behind the simple average
+        self._sum_weighted_value: dict = {}  # NaN-propagating, for the wavg
+        self.n_reads_seen = 0
+
+    def update(self, df: pd.DataFrame) -> None:
+        """Accumulate one chunk of read-level predictions."""
+        if df is None or len(df) == 0:
+            return
+
+        df = df.copy()
+        if self.prediction_cols is None:
+            self.prediction_cols = _resolve_prediction_cols(df)
+
+        if self.weight_col not in df.columns and self.create_weight_from_cpgs:
+            if "methylated_CpGs" in df.columns and "unmethylated_CpGs" in df.columns:
+                df[self.weight_col] = df["methylated_CpGs"] + df["unmethylated_CpGs"]
+            else:
+                raise ValueError(
+                    f"Weight column '{self.weight_col}' not found and cannot create "
+                    "from CpG columns."
+                )
+
+        weights = df[self.weight_col].astype(float).clip(lower=1e-10).to_numpy()
+        values = df[self.prediction_cols].to_numpy(dtype=float)
+        self.n_reads_seen += len(df)
+
+        codes, keys = _group_positions(df, self.group_cols)
+        for position, key in enumerate(keys):
+            rows = codes == position
+            chunk_values = values[rows]
+            chunk_weights = weights[rows]
+
+            valid = ~np.isnan(chunk_values)
+            sum_value = np.where(valid, chunk_values, 0.0).sum(axis=0)
+            count_value = valid.sum(axis=0)
+            sum_weighted = chunk_values.T @ chunk_weights
+
+            if key not in self._sum_weight:
+                self._sum_weight[key] = 0.0
+                self._n_reads[key] = 0
+                self._sum_value[key] = np.zeros(len(self.prediction_cols))
+                self._count_value[key] = np.zeros(len(self.prediction_cols), dtype=int)
+                self._sum_weighted_value[key] = np.zeros(len(self.prediction_cols))
+
+            self._sum_weight[key] += chunk_weights.sum()
+            self._n_reads[key] += int(rows.sum())
+            self._sum_value[key] += sum_value
+            self._count_value[key] += count_value
+            self._sum_weighted_value[key] += sum_weighted
+
+    def finalize(
+        self,
+        fill_in_missing_labels: bool = False,
+        labels_dict: dict = None,
+        substitution_strategy: str = "uniform_number",
+        uniform_prior: Optional[pd.DataFrame] = None,
+        prior_weight: float = 1.0,
+    ) -> pd.DataFrame:
+        """Build the GR-aggregated DataFrame from the accumulated sums."""
+        if fill_in_missing_labels and labels_dict is None:
+            raise ValueError(
+                "labels_dict must be provided when fill_in_missing_labels is set to True"
+            )
+        if self.prediction_cols is None:
+            raise ValueError("No chunks were aggregated; nothing to finalize.")
+
+        rows = []
+        for key in self._sum_weight:
+            row = dict(zip(self.group_cols, key))
+            with np.errstate(invalid="ignore", divide="ignore"):
+                simple = np.where(
+                    self._count_value[key] > 0,
+                    self._sum_value[key] / np.maximum(self._count_value[key], 1),
+                    np.nan,
+                )
+                weighted = self._sum_weighted_value[key] / self._sum_weight[key]
+            for col, value in zip(self.prediction_cols, simple):
+                row[f"{col}_avg"] = value
+            for col, value in zip(self.prediction_cols, weighted):
+                row[f"{col}_wavg"] = value
+            row["total_weight"] = self._sum_weight[key]
+            row["n_reads"] = float(self._n_reads[key])
+            rows.append(row)
+
+        columns = (
+            self.group_cols
+            + [f"{col}_avg" for col in self.prediction_cols]
+            + [f"{col}_wavg" for col in self.prediction_cols]
+            + ["total_weight", "n_reads"]
+        )
+        result = pd.DataFrame(rows, columns=columns)
+        # groupby(...) in the batch path sorts by the group keys; match it so
+        # chunked and non-chunked runs produce identically ordered matrices.
+        result = result.sort_values(self.group_cols).reset_index(drop=True)
+
+        if fill_in_missing_labels:
+            result = _fill_in_missing_labels(
+                result,
+                self.group_cols,
+                labels_dict,
+                substitution_strategy=substitution_strategy,
+                uniform_prior=uniform_prior,
+                prior_weight=prior_weight,
+            )
+
+        return result
+
+
+def _resolve_prediction_cols(df: pd.DataFrame) -> List[str]:
+    """Auto-detect prediction columns exactly as the batch aggregator does."""
+    cols = [
+        col
+        for col in df.columns
+        if col.startswith("prediction_") and col[11:].isdigit()
+    ]
+    cols = sorted(cols, key=lambda x: int(x.split("_")[1]))
+    cols.append("methylation_level")
+    return cols
+
+
+def _group_positions(df: pd.DataFrame, group_cols: List[str]):
+    """Return (row -> group position, group keys) for the chunk.
+
+    Rows with a missing group key are dropped, matching ``groupby`` defaults.
+    """
+    keys = list(df[group_cols].itertuples(index=False, name=None))
+    lookup: dict = {}
+    codes = np.full(len(keys), -1, dtype=int)
+    for row, key in enumerate(keys):
+        if any(pd.isna(part) for part in key):
+            continue
+        if key not in lookup:
+            lookup[key] = len(lookup)
+        codes[row] = lookup[key]
+    return codes, list(lookup)

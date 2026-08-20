@@ -52,6 +52,39 @@ UNKNOWN = 2
 CG_ASCII = np.array([ord("C"), ord("G")], dtype=np.uint8)
 
 
+def resolve_merge_pairs(data_type, merge_pairs):
+    """Force paired-end merging off for ONT.
+
+    ONT reads are single-molecule: two records sharing a ``read_name`` are
+    supplementary alignments of one read, not mates.  Merging them the way
+    :func:`merge_paired_reads` merges bisulfite mates fabricates a fragment
+    spanning both alignments, so it is disabled for ONT regardless of config.
+    """
+    if data_type == DataType.ONT.value and merge_pairs:
+        logger.warning(
+            "merge_pairs is not applicable to ONT data (same-name records are "
+            "supplementary alignments, not mates); disabling it."
+        )
+        return False
+    return merge_pairs
+
+
+def resolve_unmethyl_tr(methyl_tr, unmethyl_tr):
+    """Fill in and validate the unmethylated-call threshold for ONT.
+
+    ``unmethyl_tr=None`` means "no UNKNOWN band", i.e. the single-threshold
+    behaviour where every call falls on one side of ``methyl_tr``.
+    """
+    if unmethyl_tr is None:
+        return methyl_tr
+    if unmethyl_tr > methyl_tr:
+        raise ValueError(
+            f"unmethyl_tr ({unmethyl_tr}) must not exceed methyl_tr ({methyl_tr}); "
+            "calls between the two are marked UNKNOWN"
+        )
+    return unmethyl_tr
+
+
 # ============================================================
 # Data classes
 # ============================================================
@@ -67,6 +100,7 @@ class ChunkTask:
     bam_path: str
     interesting_chromosomes: list
     methyl_tr: int
+    unmethyl_tr: int
     data_type: str
     reference_path: str | None
     min_mapq: int
@@ -227,8 +261,15 @@ def extract_cpg_ml_values(ml_array, mm_info):
 
 
 @nb.njit(fastmath=True, cache=True)
-def cpg_scan(seq_bytes, ml_values, tr=122):
-    """Return CpG offsets (0-based) and methylation states for one read (ONT)."""
+def cpg_scan(seq_bytes, ml_values, methyl_tr=122, unmethyl_tr=122):
+    """Return CpG offsets (0-based) and methylation states for one read (ONT).
+
+    Calls are made from the ML probability (0-255 scale) with two thresholds:
+    a call above ``methyl_tr`` is METHYLATED, a call at or below ``unmethyl_tr``
+    is UNMETHYLATED, and anything in the ambiguous band between them is left
+    UNKNOWN.  With ``unmethyl_tr == methyl_tr`` the band is empty and every CpG
+    is called one way or the other.
+    """
     n = len(seq_bytes) - 1
     pos_buf = []
     state_buf = []
@@ -237,7 +278,13 @@ def cpg_scan(seq_bytes, ml_values, tr=122):
         if seq_bytes[i] == CG_ASCII[0] and seq_bytes[i + 1] == CG_ASCII[1]:
             pos_buf.append(i)
             if cg_idx < len(ml_values):
-                state_buf.append(METHYLATED if ml_values[cg_idx] > tr else UNMETHYLATED)
+                ml = ml_values[cg_idx]
+                if ml > methyl_tr:
+                    state_buf.append(METHYLATED)
+                elif ml <= unmethyl_tr:
+                    state_buf.append(UNMETHYLATED)
+                else:
+                    state_buf.append(UNKNOWN)
             else:
                 state_buf.append(UNKNOWN)
             cg_idx += 1
@@ -431,7 +478,7 @@ def _passes_quality_filters(
     return True
 
 
-def _extract_cpgs_ont(read, methyl_tr=122):
+def _extract_cpgs_ont(read, methyl_tr=122, unmethyl_tr=None):
     """
     Extract CpG positions and methylation states from an ONT read.
 
@@ -442,7 +489,14 @@ def _extract_cpgs_ont(read, methyl_tr=122):
     read : pysam.AlignedSegment
         BAM read with MM and ML tags
     methyl_tr : int
-        Methylation probability threshold (default: 122, ~48% on 0-255 scale)
+        Probability above which a CpG is called METHYLATED
+        (default: 122, ~48% on 0-255 scale)
+    unmethyl_tr : int or None
+        Probability at or below which a CpG is called UNMETHYLATED. Calls
+        landing between the two thresholds are too uncertain to attribute to
+        either state and are marked UNKNOWN. None (default) means
+        ``unmethyl_tr = methyl_tr``, i.e. a single decision boundary with no
+        UNKNOWN band.
 
     Returns
     -------
@@ -469,7 +523,9 @@ def _extract_cpgs_ont(read, methyl_tr=122):
     read_length = len(seq)
 
     # Scan for CpGs using extracted C+m probabilities
-    pos_in_read, meth_states = cpg_scan(seq.encode(), ml_values, methyl_tr)
+    pos_in_read, meth_states = cpg_scan(
+        seq.encode(), ml_values, methyl_tr, resolve_unmethyl_tr(methyl_tr, unmethyl_tr)
+    )
     return pos_in_read, meth_states, seq, read_length
 
 
@@ -579,9 +635,12 @@ def _build_read_record(read, pos_in_read, meth_states, seq, data_type):
     )
 
     total_cpgs = len(pos_in_read)
-    methylated_cpgs = sum(1 for s in meth_states if s == METHYLATED)
-    unmethylated_cpgs = sum(1 for s in meth_states if s == UNMETHYLATED)
-    methylation_rate = methylated_cpgs / total_cpgs if total_cpgs > 0 else 0.0
+    # UNKNOWN calls (ambiguous ONT probabilities, uncovered WGBS positions) are
+    # excluded from the rate denominator, matching compute_cpg_stats().
+    cpg_stats = compute_cpg_stats(meth_states)
+    methylated_cpgs = cpg_stats["methylated"]
+    unmethylated_cpgs = cpg_stats["unmethylated"]
+    methylation_rate = cpg_stats["methylation_rate"]
 
     return {
         "read_name": read.query_name,
@@ -612,6 +671,7 @@ def process_single_read(
     read,
     data_type,
     methyl_tr=122,
+    unmethyl_tr=None,
     ref_fasta=None,
     interesting_chromosomes=None,
     min_mapq=10,
@@ -629,7 +689,10 @@ def process_single_read(
     data_type : str
         'ont' or 'wgbs'
     methyl_tr : int
-        Methylation threshold for ONT (default: 122)
+        ONT probability above which a CpG is called methylated (default: 122)
+    unmethyl_tr : int or None
+        ONT probability at or below which a CpG is called unmethylated; calls
+        in between are marked UNKNOWN. None (default) reuses ``methyl_tr``.
     ref_fasta : pysam.FastaFile or None
         Reference genome (required for WGBS)
     interesting_chromosomes : list or None
@@ -663,7 +726,7 @@ def process_single_read(
 
     # Data-type-specific CpG extraction
     if data_type == DataType.ONT.value:
-        result = _extract_cpgs_ont(read, methyl_tr)
+        result = _extract_cpgs_ont(read, methyl_tr, unmethyl_tr)
     elif data_type == DataType.WGBS.value:
         if ref_fasta is None:
             raise ValueError("Reference genome (ref_fasta) required for WGBS data")
@@ -726,6 +789,7 @@ def process_tabular_chunk(task):
                 read=read,
                 data_type=task.data_type,
                 methyl_tr=task.methyl_tr,
+                unmethyl_tr=task.unmethyl_tr,
                 ref_fasta=ref_fasta,
                 interesting_chromosomes=task.interesting_chromosomes,
                 min_mapq=task.min_mapq,
@@ -744,6 +808,154 @@ def process_tabular_chunk(task):
 
 
 # ============================================================
+# Region-driven reading (chunked stage 1)
+# ============================================================
+
+
+class BamRegionReader:
+    """Parse only the reads overlapping specific genomic intervals.
+
+    :func:`process_bam_with_chunking` walks the whole genome and returns one
+    frame with every read in it.  When the downstream consumer only cares about
+    a small set of atlas regions, that is both wasted parsing and the peak
+    memory of the run.  This reader inverts the loop: the caller asks for the
+    regions it is about to process, and gets back just those reads.
+
+    The BAM must be coordinate-sorted and indexed (the same requirement
+    ``fetch``-based chunk processing already imposes).  The file handles stay
+    open for the lifetime of the reader, so one instance should serve all
+    chunks of a run.
+
+    Reads overlapping several of the requested regions are parsed once per
+    call; callers that request overlapping or repeated region sets across
+    calls will see such a read once per call.
+
+    Parameters
+    ----------
+    bam_path : str
+        Path to the coordinate-sorted, indexed BAM.
+    data_type : str
+        ``"ont"`` or ``"wgbs"``.
+    reference_path : str or None
+        Reference FASTA, required for WGBS.
+    methyl_tr, unmethyl_tr : int
+        ONT calling thresholds; see :func:`cpg_scan`.
+    min_mapq, require_flags, exclude_flags, min_cpgs : int
+        Read filters, matching :func:`process_bam_with_chunking`.
+    merge_pairs : bool
+        Merge mates into fragments within each returned batch.  Only mates that
+        also overlap the requested regions are present to merge with, so this
+        is not identical to merging over a whole-genome parse.  Ignored for ONT
+        (see :func:`resolve_merge_pairs`).
+    """
+
+    def __init__(
+        self,
+        bam_path,
+        data_type,
+        reference_path=None,
+        methyl_tr=122,
+        unmethyl_tr=None,
+        min_mapq=10,
+        require_flags=3,
+        exclude_flags=1796,
+        min_cpgs=1,
+        merge_pairs=False,
+    ):
+        if data_type == DataType.WGBS.value and reference_path is None:
+            raise ValueError("Reference genome path is required for WGBS data")
+
+        self.bam_path = bam_path
+        self.data_type = data_type
+        self.methyl_tr = methyl_tr
+        self.unmethyl_tr = resolve_unmethyl_tr(methyl_tr, unmethyl_tr)
+        self.min_mapq = min_mapq
+        self.require_flags = require_flags
+        self.exclude_flags = exclude_flags
+        self.min_cpgs = min_cpgs
+        self.merge_pairs = resolve_merge_pairs(data_type, merge_pairs)
+
+        self._bam = pysam.AlignmentFile(bam_path, "rb")
+        if not self._bam.has_index():
+            self.close()
+            raise ValueError(
+                f"{bam_path} has no index; region-driven reading needs a "
+                "coordinate-sorted, indexed BAM (samtools index)."
+            )
+        self._references = set(self._bam.references)
+        self._ref_fasta = (
+            pysam.FastaFile(reference_path)
+            if data_type == DataType.WGBS.value
+            else None
+        )
+
+    # -- context manager -------------------------------------------------
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        self.close()
+
+    def close(self):
+        """Release the BAM and reference handles."""
+        for handle_name in ("_bam", "_ref_fasta"):
+            handle = getattr(self, handle_name, None)
+            if handle is not None:
+                handle.close()
+                setattr(self, handle_name, None)
+
+    # -- reading ---------------------------------------------------------
+
+    def read_regions(self, regions):
+        """Return the reads overlapping *regions* as a read-level DataFrame.
+
+        Parameters
+        ----------
+        regions : iterable of (chromosome, start, end)
+            Half-open 0-based intervals, matching ``pysam.fetch``.
+
+        Returns
+        -------
+        pd.DataFrame
+            Same columns as :func:`process_bam_with_chunking`; empty when no
+            read passes the filters.
+        """
+        records = []
+        seen = set()
+        for chromosome, start, end in regions:
+            if chromosome not in self._references:
+                continue
+            for read in self._bam.fetch(chromosome, int(start), int(end)):
+                # A read overlapping several regions of this batch is fetched
+                # once per region; keep the first parse only.
+                identity = (read.query_name, read.reference_start, read.flag)
+                if identity in seen:
+                    continue
+                seen.add(identity)
+
+                records.extend(
+                    process_single_read(
+                        read=read,
+                        data_type=self.data_type,
+                        methyl_tr=self.methyl_tr,
+                        unmethyl_tr=self.unmethyl_tr,
+                        ref_fasta=self._ref_fasta,
+                        interesting_chromosomes=None,
+                        min_mapq=self.min_mapq,
+                        require_flags=self.require_flags,
+                        exclude_flags=self.exclude_flags,
+                        min_cpgs=self.min_cpgs,
+                    )
+                )
+
+        df = pd.DataFrame(records)
+        if self.merge_pairs and len(df) > 0:
+            df = merge_paired_reads(df, verbose=False)
+        return df
+
+
+# ============================================================
 # BAM-level orchestration
 # ============================================================
 
@@ -754,6 +966,7 @@ def process_bam_with_chunking(
     n_jobs=4,
     chunk_size_genomic=1_000_000,
     methyl_tr=122,
+    unmethyl_tr=None,
     reference_path=None,
     data_type=None,
     min_mapq=10,
@@ -780,7 +993,12 @@ def process_bam_with_chunking(
     chunk_size_genomic : int
         Genomic chunk size for parallel processing (default: 1M)
     methyl_tr : int
-        Methylation threshold for ONT (default: 122)
+        ONT probability above which a CpG is called methylated (default: 122)
+    unmethyl_tr : int or None
+        ONT probability at or below which a CpG is called unmethylated. CpGs
+        whose probability falls between ``unmethyl_tr`` and ``methyl_tr`` are
+        too uncertain to attribute to either state and get the UNKNOWN token
+        ("2"). None (default) reuses ``methyl_tr``, i.e. no UNKNOWN band.
     reference_path : str
         Path to reference genome FASTA (required for WGBS)
     data_type : str
@@ -803,7 +1021,8 @@ def process_bam_with_chunking(
         If True, merge paired-end reads (mates) into single fragments, similar to
         wgbs_tools' bam2pat. Both mates are combined with their methylation patterns
         merged, spanning the full fragment. Also adds reference-based CpG counts
-        including 'unknown_cpgs' for CpGs in the insert region. (default: True)
+        including 'unknown_cpgs' for CpGs in the insert region. (default: True).
+        Ignored for ONT data (see :func:`resolve_merge_pairs`).
 
     Returns
     -------
@@ -824,6 +1043,9 @@ def process_bam_with_chunking(
     # Validate inputs
     if data_type == DataType.WGBS.value and reference_path is None:
         raise ValueError("Reference genome path is required for WGBS data")
+
+    unmethyl_tr = resolve_unmethyl_tr(methyl_tr, unmethyl_tr)
+    merge_pairs = resolve_merge_pairs(data_type, merge_pairs)
 
     # Get chromosome lengths from BAM
     logger.info("Reading BAM file...")
@@ -848,6 +1070,7 @@ def process_bam_with_chunking(
                     bam_path=bam_path,
                     interesting_chromosomes=chromosomes,
                     methyl_tr=methyl_tr,
+                    unmethyl_tr=unmethyl_tr,
                     data_type=data_type,
                     reference_path=reference_path,
                     min_mapq=min_mapq,

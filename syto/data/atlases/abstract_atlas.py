@@ -1,7 +1,8 @@
 """ """
 
+import copy
 from abc import ABC, abstractmethod
-from typing import Dict, List
+from typing import Dict, Iterable, List
 
 import pandas as pd
 from syto.data.dataset import resolve_column
@@ -33,6 +34,26 @@ class AbstractAtlas(ABC):
         - 'name': Identifier of the genomic region (e.g. "chr1:1000-2000")
         - 'target': The characteristic group for the region (e.g. cell type)
         """
+
+    # ------------------------------------------------------------------
+    # Region subsetting
+    # ------------------------------------------------------------------
+
+    def subset_regions(self, names: Iterable[str]) -> "AbstractAtlas":
+        """Return a view of this atlas restricted to the named regions.
+
+        Used to process a large sample one slice of the atlas at a time: the
+        copy shares every loaded attribute (reference cells, name, genome) and
+        only narrows the region table, so read overlap and preparation touch
+        just the regions in the slice.
+        """
+        wanted = set(names)
+        subset = copy.copy(self)
+        # pylint: disable=protected-access
+        subset._atlas = self.atlas[self.atlas["name"].isin(wanted)].reset_index(
+            drop=True
+        )
+        return subset
 
     # ------------------------------------------------------------------
     # Reads preparation methods

@@ -123,6 +123,7 @@ class TestInferenceBuildConfig(unittest.TestCase):
             "bam_processing.exclude_flags": 1796,
             "bam_processing.min_cpgs": 4,
             "bam_processing.merge_pairs": True,
+            "bam_processing.restrict_to_atlas": True,
             "bam_processing.ont_methyl_tr": 180,
             "bam_processing.ont_unmethyl_tr": 75,
             "max_sequence_length": 150,
@@ -241,6 +242,21 @@ class TestInferenceBuildConfig(unittest.TestCase):
         self.assertNotIn("foundation_model", cfg["classifier"])
         self.assertNotIn("classifier_head_implementation", cfg["classifier"])
         self.assertNotIn("soft_labels", cfg["classifier"])
+
+    def test_chunked_inference_block_is_nested_when_enabled(self):
+        ans = self._syto_answers()
+        ans["chunked_inference.enabled"] = True
+        ans["chunked_inference.chunk_by"] = "grg"
+        ans["chunked_inference.progress_bar"] = True
+        cfg = self.wiz.build_config(ans)
+        self.assertEqual(
+            cfg["chunked_inference"],
+            {"enabled": True, "chunk_by": "grg", "progress_bar": True},
+        )
+
+    def test_chunked_inference_omitted_when_not_answered(self):
+        cfg = self.wiz.build_config(self._syto_answers())
+        self.assertNotIn("chunked_inference", cfg)
 
     def test_bam_processing_omitted_for_non_bam_input(self):
         ans = self._syto_answers()

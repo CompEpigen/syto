@@ -375,6 +375,19 @@ class CelFiEISHDeconvolver(BaselineDeconvolver):
     def build_input(self, reads: pd.DataFrame) -> dict:
         return self._build_celfieish_input(reads, self._atlas)
 
+    def merge_inputs(self, parts: List[dict]) -> Optional[dict]:
+        """Concatenate the per-region read x CpG matrices of each chunk."""
+        matrices: List[np.ndarray] = []
+        region_names: List[str] = []
+        for part in parts:
+            if not part:
+                continue
+            matrices.extend(part["matrices"])
+            region_names.extend(part["region_names"])
+        if not matrices:
+            return None
+        return {"matrices": matrices, "region_names": region_names}
+
     def deconvolute_reads(
         self,
         reads: pd.DataFrame,
@@ -385,7 +398,15 @@ class CelFiEISHDeconvolver(BaselineDeconvolver):
         reads_sorted = self._sort_reads(reads)
         prepared = self.prepare_reads(reads_sorted) if prepare else reads_sorted
         celfieish_in = self.build_input(prepared)
-        if not celfieish_in["matrices"]:
+        return self.deconvolute_from_input(celfieish_in, labels_dict_reversed, n_labels)
+
+    def deconvolute_from_input(
+        self,
+        celfieish_in: Optional[dict],
+        labels_dict_reversed: Dict[str, int],
+        n_labels: Optional[int] = None,
+    ) -> Optional[Union[List[float], List[Tuple[int, List[float]]]]]:
+        if not celfieish_in or not celfieish_in["matrices"]:
             return None
         beta_matrices = self._atlas.get_beta_for_regions(celfieish_in["region_names"])
         model = _CelfieISHModel(

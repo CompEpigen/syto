@@ -371,6 +371,13 @@ class TestProcessSingleReadOnt(unittest.TestCase):
         self.assertEqual(read_data["unmethylated_cpgs"], 0)
         self.assertAlmostEqual(read_data["methylation_rate"], 1.0)
 
+    def test_merge_pairs_is_refused_for_ont(self):
+        """ONT records sharing a name are supplementary alignments, not mates."""
+        self.assertFalse(bp.resolve_merge_pairs("ont", True))
+        self.assertFalse(bp.resolve_merge_pairs("ont", False))
+        self.assertTrue(bp.resolve_merge_pairs("wgbs", True))
+        self.assertFalse(bp.resolve_merge_pairs("wgbs", False))
+
     def test_rejects_unmethylated_threshold_above_methylated_threshold(self):
         """Guard against an inverted (meaningless) threshold pair."""
         with self.assertRaisesRegex(ValueError, "must not exceed"):
@@ -552,8 +559,9 @@ class TestProcessBamWithChunking(unittest.TestCase):
         ]
         merged_df = pd.DataFrame([{"read_name": "merged", "value": 99}])
 
+        # WGBS, since merging is refused for ONT (resolve_merge_pairs).
         with patch.object(
-            bp, "detect_bam_data_type", return_value="ont"
+            bp, "detect_bam_data_type", return_value="wgbs"
         ) as detect_mock, patch.object(
             bp.pysam, "AlignmentFile", return_value=fake_bam
         ), patch.object(
@@ -567,6 +575,7 @@ class TestProcessBamWithChunking(unittest.TestCase):
                 n_jobs=1,
                 chunk_size_genomic=100,
                 data_type=None,
+                reference_path="ref.fa",
                 merge_pairs=True,
             )
 
@@ -577,6 +586,28 @@ class TestProcessBamWithChunking(unittest.TestCase):
         self.assertEqual(first_task.chromosome, "chr1")
         merge_mock.assert_called_once()
         self.assertTrue(result.equals(merged_df))
+
+    def test_ont_never_merges_pairs(self):
+        """Same-name ONT records are supplementary alignments, not mates."""
+        fake_bam = FakeAlignmentFile(references=["chr1"], lengths=[100])
+
+        with patch.object(
+            bp.pysam, "AlignmentFile", return_value=fake_bam
+        ), patch.object(
+            bp, "process_tabular_chunk", return_value=[{"read_name": "r1"}]
+        ), patch.object(
+            bp, "merge_paired_reads"
+        ) as merge_mock:
+            bp.process_bam_with_chunking(
+                bam_path="fake.bam",
+                chromosomes=["chr1"],
+                n_jobs=1,
+                chunk_size_genomic=100,
+                data_type="ont",
+                merge_pairs=True,
+            )
+
+        merge_mock.assert_not_called()
 
     def test_uses_pool_for_parallel_chunk_processing_without_merging(self):
         """Dispatch chunk tasks through multiprocessing when more than one worker is requested."""

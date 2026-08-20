@@ -183,7 +183,9 @@ class PseudobulkColumnarWriter:
                 ``to_dict``, or a plain dictionary).
             parameters: A ``GenerationParameters``, similarly duck-typed.
         """
-        self._metadata = metadata.to_dict() if hasattr(metadata, "to_dict") else dict(metadata)
+        self._metadata = (
+            metadata.to_dict() if hasattr(metadata, "to_dict") else dict(metadata)
+        )
         if hasattr(parameters, "cell_types_mapping"):
             self._parameters = {
                 "cell_types_mapping": dict(parameters.cell_types_mapping),
@@ -522,8 +524,12 @@ class SplitWriter:
         return pa.Table.from_arrays(arrays, schema=self._features_schema())
 
     def _proportions_table(self, results: List[Any]) -> pa.Table:
-        targets = np.stack([np.asarray(r.target_proportions, dtype=np.float64) for r in results])
-        actuals = np.stack([np.asarray(r.actual_proportions, dtype=np.float64) for r in results])
+        targets = np.stack(
+            [np.asarray(r.target_proportions, dtype=np.float64) for r in results]
+        )
+        actuals = np.stack(
+            [np.asarray(r.actual_proportions, dtype=np.float64) for r in results]
+        )
         arrays = [
             pa.array(np.array([r.index for r in results], dtype=np.int32)),
             pa.array(np.array([r.seed for r in results], dtype=np.int64)),
@@ -695,7 +701,10 @@ class PseudobulkColumnarReader(BasePseudobulkReader):
             self._split_dir(split_name) / PROPORTIONS_FILE, columns=target_columns
         )
         targets = np.column_stack(
-            [proportions.column(c).to_numpy(zero_copy_only=False) for c in target_columns]
+            [
+                proportions.column(c).to_numpy(zero_copy_only=False)
+                for c in target_columns
+            ]
         )
         return features, targets
 
@@ -752,11 +761,16 @@ class PseudobulkColumnarReader(BasePseudobulkReader):
         )
         seeds = proportions.column("seed").to_numpy(zero_copy_only=False)
         targets = np.column_stack(
-            [proportions.column(c).to_numpy(zero_copy_only=False) for c in target_columns]
+            [
+                proportions.column(c).to_numpy(zero_copy_only=False)
+                for c in target_columns
+            ]
         )
 
         grg_columns = [_grg_column(j) for j in range(manifest.n_grg)]
-        counts_table = pq.read_table(split_dir / N_READS_PER_GR_FILE, columns=grg_columns)
+        counts_table = pq.read_table(
+            split_dir / N_READS_PER_GR_FILE, columns=grg_columns
+        )
         counts = np.column_stack(
             [counts_table.column(c).to_numpy(zero_copy_only=False) for c in grg_columns]
         ).reshape(manifest.n_pseudobulks, manifest.n_classes, manifest.n_grg)
@@ -777,7 +791,9 @@ class PseudobulkColumnarReader(BasePseudobulkReader):
         """Read the GR-group label column name used during generation."""
         metadata = self._load_metadata()
         if "grg_id_column" not in metadata:
-            raise KeyError(f"'grg_id_column' missing from metadata.json in {self.path}.")
+            raise KeyError(
+                f"'grg_id_column' missing from metadata.json in {self.path}."
+            )
         return str(metadata["grg_id_column"])
 
     def _read_gr_groups_mapping(self) -> Dict[str, int]:

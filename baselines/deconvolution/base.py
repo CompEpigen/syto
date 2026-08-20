@@ -25,6 +25,41 @@ class BaselineDeconvolver(ABC):
         """Convert prepared reads to the model-specific input representation."""
 
     @abstractmethod
+    def merge_inputs(self, parts: List[dict]) -> Optional[dict]:
+        """Combine ``build_input`` results computed on disjoint region sets.
+
+        Chunked runs call :meth:`build_input` once per slice of the atlas and
+        merge the pieces here, so a sample can be deconvoluted without ever
+        holding all of its reads at once.  Every baseline builds its input as
+        independent per-region entries, which is what makes this exact: the
+        merged result is what ``build_input`` would have returned for the union
+        of the slices, up to the ordering of regions.
+
+        Parameters
+        ----------
+        parts : list of dict
+            Non-empty ``build_input`` outputs, in chunk order.
+
+        Returns
+        -------
+        dict or None
+            Merged input, or None when *parts* carries no usable region.
+        """
+
+    @abstractmethod
+    def deconvolute_from_input(
+        self,
+        built_input: dict,
+        labels_dict_reversed: Dict[str, int],
+        n_labels: Optional[int] = None,
+    ):
+        """Run the model on an already-built input (see :meth:`build_input`).
+
+        Split out of :meth:`deconvolute_reads` so that chunked runs can solve
+        once, at the end, from a merged input.
+        """
+
+    @abstractmethod
     def deconvolute_reads(
         self,
         reads: pd.DataFrame,

@@ -130,9 +130,7 @@ class TestFitCalibrationSchema(unittest.TestCase):
         self.assertEqual(self.keys[0], "labels_dict_path")
 
     def test_pseudobulk_asked_before_splits(self):
-        self.assertLess(
-            self.keys.index("pseudobulk_path"), self.keys.index("splits")
-        )
+        self.assertLess(self.keys.index("pseudobulk_path"), self.keys.index("splits"))
 
     def test_deconvolvers_dir_before_deconvolvers(self):
         self.assertLess(

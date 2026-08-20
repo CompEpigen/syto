@@ -1192,9 +1192,9 @@ class MethylBert(AbstractReadClassifier):
                 eval_diagnostics.register(
                     dataset,
                     dmr_labels=data_list_column(data_list, "grg_ctype"),
-                    on_target_mask=data_list_column(
-                        data_list, "on_target_mask"
-                    ).astype(bool),
+                    on_target_mask=data_list_column(data_list, "on_target_mask").astype(
+                        bool
+                    ),
                 )
 
         self.fine_tune(

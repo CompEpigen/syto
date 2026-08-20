@@ -133,9 +133,7 @@ class TestSchema(unittest.TestCase):
         self.assertEqual(self.by_key["num_output_labels"].tier, "core")
 
     def test_pseudobulk_before_splits(self):
-        self.assertLess(
-            self.keys.index("pseudobulk_path"), self.keys.index("splits")
-        )
+        self.assertLess(self.keys.index("pseudobulk_path"), self.keys.index("splits"))
 
     def test_feature_selection_mode_is_select(self):
         spec = self.by_key["feature_selection_mode"]

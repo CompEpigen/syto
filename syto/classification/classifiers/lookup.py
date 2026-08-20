@@ -109,9 +109,7 @@ class LookupClassifier(AbstractReadClassifier):
         """Number of unique (region, signature) keys in the lookup table."""
         return len(self._lookup)
 
-    def _align_label_column(
-        self, df: Optional[pd.DataFrame]
-    ) -> Optional[pd.DataFrame]:
+    def _align_label_column(self, df: Optional[pd.DataFrame]) -> Optional[pd.DataFrame]:
         """Return *df* with its label column named ``config.label_col``.
 
         The fitting pipeline renames the configured label column to a canonical
@@ -123,9 +121,7 @@ class LookupClassifier(AbstractReadClassifier):
         untouched so the persisted config keeps the source column name."""
         if df is None or self.config.label_col in df.columns:
             return df
-        canonical = next(
-            (c for c in ("label", "soft_label") if c in df.columns), None
-        )
+        canonical = next((c for c in ("label", "soft_label") if c in df.columns), None)
         if canonical is None:
             raise KeyError(
                 f"Label column {self.config.label_col!r} is absent and no "

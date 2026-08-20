@@ -1,5 +1,4 @@
-"""Miniature but structurally faithful pseudobulk stores for tests.
-"""
+"""Miniature but structurally faithful pseudobulk stores for tests."""
 
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -30,7 +29,9 @@ def feature_columns(n_predictions: int) -> List[str]:
     )
 
 
-def make_reads(n_classes: int, n_grg: int, rows_per_group: int, seed: int) -> pd.DataFrame:
+def make_reads(
+    n_classes: int, n_grg: int, rows_per_group: int, seed: int
+) -> pd.DataFrame:
     """Build an input read frame covering every (class, GR group) pair."""
     rng = np.random.default_rng(seed)
     classes, grgs = [], []
@@ -170,7 +171,9 @@ class PseudobulkFixture:
     def build_hdf5(self, path: Optional[Path] = None) -> Path:
         """Consolidate the batches into a ``pseudobulk.h5``."""
         path = Path(path) if path else self.root / "pseudobulk.h5"
-        PseudobulkHDF5ConsolidationWriter(path).consolidate(**self._consolidate_kwargs())
+        PseudobulkHDF5ConsolidationWriter(path).consolidate(
+            **self._consolidate_kwargs()
+        )
         return path
 
     def build_columnar(

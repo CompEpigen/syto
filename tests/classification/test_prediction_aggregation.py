@@ -7,6 +7,7 @@ from syto.classification.prediction_aggregation import (
     aggregate_chuncked_predictions_weighted,
     aggregate_predictions_by_grg,
     get_final_prediction,
+    StreamingGrgAggregator,
     fill_in_missing_gr_groups,
 )
 
@@ -767,3 +768,95 @@ class TestFillInMissingGrGroups(unittest.TestCase):
             )
 
         self.assertIn("invalid_strategy", str(context.exception))
+
+
+class TestStreamingGrgAggregator(unittest.TestCase):
+    """The chunked aggregator must match the batch one, chunk layout aside."""
+
+    def setUp(self):
+        rng = np.random.default_rng(0)
+        n_reads = 240
+        self.df = pd.DataFrame(
+            {
+                "dmr_ctype_label": rng.integers(0, 5, n_reads),
+                "prediction_0": rng.random(n_reads),
+                "prediction_1": rng.random(n_reads),
+                "methylation_level": rng.random(n_reads),
+                "NCPGS": rng.integers(0, 12, n_reads),
+                "name": [f"region_{i % 37}" for i in range(n_reads)],
+            }
+        )
+        self.df["dmr_ctype"] = "ctype_" + self.df["dmr_ctype_label"].astype(str)
+        self.group_cols = ["dmr_ctype_label", "dmr_ctype"]
+
+    def _batch(self, **kwargs):
+        return aggregate_predictions_by_grg(
+            self.df,
+            group_cols=self.group_cols,
+            weight_col="NCPGS",
+            create_weight_from_cpgs=False,
+            **kwargs,
+        )
+
+    def _streamed(self, chunks, **kwargs):
+        aggregator = StreamingGrgAggregator(
+            group_cols=self.group_cols,
+            weight_col="NCPGS",
+            create_weight_from_cpgs=False,
+        )
+        for chunk in chunks:
+            aggregator.update(chunk)
+        return aggregator.finalize(**kwargs)
+
+    def _chunks_by_region(self, regions_per_chunk):
+        regions = sorted(self.df["name"].unique())
+        for start in range(0, len(regions), regions_per_chunk):
+            batch = regions[start : start + regions_per_chunk]
+            yield self.df[self.df["name"].isin(batch)]
+
+    def test_matches_batch_aggregation_for_any_chunk_size(self):
+        """Row-for-row equality with the single-shot aggregator."""
+        expected = self._batch()
+        for regions_per_chunk in (1, 4, 37):
+            with self.subTest(regions_per_chunk=regions_per_chunk):
+                result = self._streamed(self._chunks_by_region(regions_per_chunk))
+                pd.testing.assert_frame_equal(result, expected, check_like=False)
+
+    def test_matches_batch_aggregation_with_missing_label_fill_in(self):
+        """The fill-in / prior step runs once on the accumulated matrix."""
+        labels_dict = {i: f"ctype_{i}" for i in range(7)}
+        expected = self._batch(fill_in_missing_labels=True, labels_dict=labels_dict)
+        result = self._streamed(
+            self._chunks_by_region(3),
+            fill_in_missing_labels=True,
+            labels_dict=labels_dict,
+        )
+        pd.testing.assert_frame_equal(result, expected, check_like=False)
+
+    def test_empty_chunks_are_ignored(self):
+        """Regions with no overlapping reads must not disturb the sums."""
+        expected = self._batch()
+        chunks = []
+        for chunk in self._chunks_by_region(5):
+            chunks.extend([self.df.iloc[0:0], chunk])
+        result = self._streamed(chunks)
+        pd.testing.assert_frame_equal(result, expected, check_like=False)
+
+    def test_nan_semantics_match_the_batch_aggregator(self):
+        """avg skips NaN, wavg propagates it — same as pandas mean / np.average."""
+        self.df.loc[3, "methylation_level"] = np.nan
+        expected = self._batch()
+        result = self._streamed(self._chunks_by_region(2))
+        pd.testing.assert_frame_equal(result, expected, check_like=False)
+        self.assertTrue(result["methylation_level_wavg"].isna().any())
+        self.assertFalse(result["methylation_level_avg"].isna().any())
+
+    def test_finalize_without_any_chunk_raises(self):
+        """A run that never saw a read cannot invent an aggregation."""
+        aggregator = StreamingGrgAggregator(
+            group_cols=self.group_cols,
+            weight_col="NCPGS",
+            create_weight_from_cpgs=False,
+        )
+        with self.assertRaisesRegex(ValueError, "No chunks were aggregated"):
+            aggregator.finalize()

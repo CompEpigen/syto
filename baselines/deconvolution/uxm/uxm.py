@@ -167,6 +167,37 @@ class UXMDeconvolver(BaselineDeconvolver):
         arr = [self.deconvolute_single_sample(*p) for p in params]
         return arr
 
+    def merge_inputs(self, parts: List[dict]) -> Optional[dict]:
+        """Stack the per-region scaling factors and counts of each chunk."""
+        parts = [part for part in parts if part and len(part["scaling_factors"])]
+        if not parts:
+            return None
+        return {
+            "scaling_factors": pd.concat(
+                [part["scaling_factors"] for part in parts], ignore_index=True
+            ),
+            "counts": pd.concat([part["counts"] for part in parts], ignore_index=True),
+        }
+
+    def deconvolute_from_input(
+        self,
+        built_input: dict,
+        labels_dict_reversed: Dict[str, int],
+        n_labels: Optional[int] = None,
+    ) -> Optional[List[float]]:
+        proportions = self.deconvolute_multiple_samples(
+            self._atlas.atlas,
+            self._ref_cells,
+            built_input["scaling_factors"],
+            built_input["counts"],
+            sample_names=["sample"],
+        )[0]
+        if not isinstance(proportions, np.ndarray):
+            return None
+        return rearange_deconvolution_results(
+            labels_dict_reversed, proportions, self._ref_cells, n_labels=n_labels
+        )
+
     def deconvolute_reads(
         self,
         reads: pd.DataFrame,
@@ -178,15 +209,4 @@ class UXMDeconvolver(BaselineDeconvolver):
         reads_sorted = self._sort_reads(reads)
         prepared = self.prepare_reads(reads_sorted) if prepare else reads_sorted
         uxm_in = self.build_input(prepared, min_cpgs_count=min_cpgs_count)
-        proportions = self.deconvolute_multiple_samples(
-            self._atlas.atlas,
-            self._ref_cells,
-            uxm_in["scaling_factors"],
-            uxm_in["counts"],
-            sample_names=["sample"],
-        )[0]
-        if not isinstance(proportions, np.ndarray):
-            return None
-        return rearange_deconvolution_results(
-            labels_dict_reversed, proportions, self._ref_cells, n_labels=n_labels
-        )
+        return self.deconvolute_from_input(uxm_in, labels_dict_reversed, n_labels)

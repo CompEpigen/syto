@@ -347,6 +347,18 @@ class CelFiEDeconvolver(BaselineDeconvolver):
     def build_input(self, reads: pd.DataFrame) -> dict:
         return self._build_celfie_input(reads, self._atlas)
 
+    def merge_inputs(self, parts: List[dict]) -> Optional[dict]:
+        """Concatenate the per-region count vectors of each chunk."""
+        merged = {"x_meth": [], "x_cov": [], "region_names": []}
+        for part in parts:
+            if not part:
+                continue
+            for key in merged:
+                merged[key].extend(part[key])
+        if not merged["x_meth"]:
+            return None
+        return merged
+
     def deconvolute_reads(
         self,
         reads: pd.DataFrame,
@@ -358,8 +370,17 @@ class CelFiEDeconvolver(BaselineDeconvolver):
         prepared = self.prepare_reads(reads_sorted) if prepare else reads_sorted
         if prepared.empty:
             return None
-        celfie_in = self.build_input(prepared)
-        if not celfie_in["x_meth"]:
+        return self.deconvolute_from_input(
+            self.build_input(prepared), labels_dict_reversed, n_labels
+        )
+
+    def deconvolute_from_input(
+        self,
+        celfie_in: Optional[dict],
+        labels_dict_reversed: Dict[str, int],
+        n_labels: Optional[int] = None,
+    ) -> Optional[Union[List[float], List[Tuple[int, List[float]]]]]:
+        if not celfie_in or not celfie_in["x_meth"]:
             return None
         y_list, y_cov_list = self._atlas.get_meth_cov_for_regions(
             celfie_in["region_names"]
