@@ -89,6 +89,7 @@ def validate_config(config: Dict[str, Any], task: str) -> None:
         "confidence_intervals": [
             "calibration_results_dir",
             "labels_dict_path",
+            "deconvolver_names",
         ],
         "deconvolute_pseudobulk": [
             "pseudobulk_path",
