@@ -228,3 +228,6 @@ slurm-*.out
 run_multiple_jobs.sh
 # Local-only brainstorming specs & implementation plans
 docs/superpowers/
+
+# quick-start data (downloaded from the Hugging Face deposit)
+syto-data/
