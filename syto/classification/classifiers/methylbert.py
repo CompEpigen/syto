@@ -50,6 +50,7 @@ from syto.classification.fit_diagnostics import (
 )
 
 from syto.data.dataset import resolve_column
+from syto.torch_device import warn_if_cpu
 
 _module_logger = logging.getLogger(__name__)
 
@@ -987,6 +988,7 @@ class MethylBert(AbstractReadClassifier):
         Args:
             path:
         """
+        warn_if_cpu(_module_logger)
         loss = kwargs.get("loss")
         soft_labels: bool = kwargs.get("soft_labels", True)
         num_labels: int = kwargs.get("num_labels", 2)

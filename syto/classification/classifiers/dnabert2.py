@@ -2,6 +2,7 @@ import os
 import csv
 import json
 import gc
+import logging
 import random
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -57,7 +58,10 @@ from syto.classification.training_progress import use_table_progress_callback
 from syto.classification.prediction_aggregation import (
     aggregate_chuncked_predictions_weighted,
 )
+from syto.torch_device import warn_if_cpu
 from pathlib import Path
+
+_module_logger = logging.getLogger(__name__)
 
 
 def extract_signal_mask(dataset) -> np.ndarray:
@@ -1224,6 +1228,7 @@ class EpigenDnabert2(AbstractReadClassifier):
     @classmethod
     def load(cls, path: Union[str, Path, None] = None, **kwargs) -> "EpigenDnabert2":
         """Load EpigenDnabert2 from a checkpoint, or build a fresh instance if path is None."""
+        warn_if_cpu(_module_logger)
         classifier_head_implementation = kwargs.get(
             "classifier_head_implementation", "grg_attention_based"
         )

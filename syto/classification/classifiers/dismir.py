@@ -27,6 +27,7 @@ from syto.classification.classifiers.abstract_read_classifier import (
     AbstractReadClassifier,
 )
 from syto.classification.mlflow_tracking import mlflow_tracked_fit
+from syto.torch_device import DEVICE
 from syto.classification.prediction_aggregation import (
     aggregate_chuncked_predictions_weighted,
 )
@@ -513,10 +514,7 @@ class Dismir(AbstractReadClassifier):
                     self.criterion = nn.CrossEntropyLoss()
 
         # Use CUDA if available
-        if device is None:
-            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        else:
-            self.device = device
+        self.device = torch.device(DEVICE) if device is None else device
 
         # Initialize the PyTorch model
         self.train_data_path = train_data_path
@@ -1470,7 +1468,9 @@ class Dismir(AbstractReadClassifier):
         )
         # Load pre-trained weights, if a checkpoint path was provided
         if path is not None:
-            instance.model.load_state_dict(torch.load(path, weights_only=True))
+            instance.model.load_state_dict(
+                torch.load(path, map_location=DEVICE, weights_only=True)
+            )
             _module_logger.info("Dismir model loaded from checkpoint: %s", path)
         return instance
 

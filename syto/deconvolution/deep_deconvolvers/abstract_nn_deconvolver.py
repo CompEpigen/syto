@@ -14,6 +14,7 @@ import torch
 
 from syto.deconvolution.abstract_deconvolver import AbstractDeconvolver
 from syto.deconvolution.deep_deconvolvers.training import train_matrix_deconvolver
+from syto.torch_device import DEVICE
 
 _module_logger = logging.getLogger(__name__)
 
@@ -78,9 +79,7 @@ class AbstractNNDeconvolver(AbstractDeconvolver):
         self.batch_size_ = kwargs.get("batch_size", 64)
         self.lr_ = kwargs.get("lr", 1e-3)
         self.weight_decay_ = kwargs.get("weight_decay", 1e-4)
-        self.device_ = kwargs.get(
-            "device", "cuda" if torch.cuda.is_available() else "cpu"
-        )
+        self.device_ = kwargs.get("device", DEVICE)
         self.early_stopping_metric_ = kwargs.get("early_stopping_metric", "val_mae")
         self.early_stopping_patience_ = kwargs.get("early_stopping_patience", 15)
         self.scheduler_type_ = kwargs.get("scheduler_type", "plateau")
@@ -108,7 +107,7 @@ class AbstractNNDeconvolver(AbstractDeconvolver):
 
     def predict(self, X: np.ndarray, **kwargs) -> np.ndarray:
         """Predict the cell type proportions for the given input data."""
-        device = kwargs.get("device", "cuda" if torch.cuda.is_available() else "cpu")
+        device = kwargs.get("device", DEVICE)
         self.model.to(device)
         self.model.eval()
         with torch.inference_mode():
@@ -185,13 +184,18 @@ class AbstractNNDeconvolver(AbstractDeconvolver):
             n_input_features=n_input_features,
             n_targets=n_targets,
         )
-        nn_deconv.model.load_state_dict(torch.load(path, weights_only=True))
+        nn_deconv.model.load_state_dict(
+            torch.load(path, map_location=DEVICE, weights_only=True)
+        )
         nn_deconv.is_fitted = metadata["is_fitted"]
         for param, value in metadata.get("params", {}).items():
             if not param.endswith("_"):
                 param += "_"
             setattr(nn_deconv, param, value)
-        nn_deconv.model.to("cuda")
+        # The metadata records the device the model was *trained* on, which is
+        # not necessarily one this machine has.
+        nn_deconv.device_ = DEVICE
+        nn_deconv.model.to(DEVICE)
 
         return nn_deconv
 

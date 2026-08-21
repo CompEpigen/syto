@@ -20,6 +20,7 @@ import torch.nn as nn
 import joblib
 
 from syto.calibration.abstract_calibrator import AbstractCalibrator
+from syto.torch_device import DEVICE
 
 _module_logger = logging.getLogger(__name__)
 
@@ -149,7 +150,7 @@ class VectorScalingCalibrator(AbstractCalibrator):
         batch_size: int = 1000,
         patience: int = 50,
         tol: float = 1e-7,
-        device: str = "cuda",
+        device: str = DEVICE,
         verbose: bool = True,
         plateau_factor: float = 0.5,
         plateau_patience: int = 10,
@@ -637,6 +638,8 @@ class VectorScalingCalibrator(AbstractCalibrator):
                 name: torch.as_tensor(data[name]) for name in model.state_dict()
             }
             model.load_state_dict(state_dict)
-            model.to(torch.device(instance.device))
+            # instance.device came from the metadata, i.e. the device the
+            # calibrator was fitted on, which this machine may not have.
+            model.to(torch.device(DEVICE))
             instance.model_ = model
             return instance
