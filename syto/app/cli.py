@@ -245,7 +245,9 @@ def run_pseudobulk_deconvolution(
     config: Dict[str, Any], logger: logging.Logger
 ) -> None:
     """Run baseline deconvolution on a pre-generated pseudobulk HDF5 file."""
-    from syto.app.pseudobulk_deconvolution_pipeline import PseudobulkDeconvolutionPipeline
+    from syto.app.pseudobulk_deconvolution_pipeline import (
+        PseudobulkDeconvolutionPipeline,
+    )
 
     logger.info("Starting pseudobulk deconvolution pipeline")
     pipeline = PseudobulkDeconvolutionPipeline(config=config, logger=logger)
@@ -268,7 +270,6 @@ def run_confidence_intervals(config: Dict[str, Any], logger: logging.Logger) -> 
     logger.info("Starting confidence interval pipeline")
     pipeline = ConfidenceIntervalPipeline(config=config, logger=logger)
     pipeline.run()
-
 
 
 # ═══════════════════════════════════════════════════════════════════

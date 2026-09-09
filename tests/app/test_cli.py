@@ -49,9 +49,7 @@ class TestModelOverride(unittest.TestCase):
 
         for architecture in cli.MODEL_ARCHITECTURES:
             with self.subTest(architecture=architecture):
-                args = parser.parse_args(
-                    ["classifier-fit", "--model", architecture]
-                )
+                args = parser.parse_args(["classifier-fit", "--model", architecture])
                 self.assertEqual(args.model, architecture)
 
                 config = {"model": {"architecture": architecture}}

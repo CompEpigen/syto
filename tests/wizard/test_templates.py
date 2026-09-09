@@ -53,9 +53,7 @@ class TestCountPlaceholders(unittest.TestCase):
 class TestHeader(unittest.TestCase):
     def test_includes_run_command(self):
         text = templates.header("inference", "cfg/inference.yaml")
-        self.assertIn(
-            "syto inference --config cfg/inference.yaml", text
-        )
+        self.assertIn("syto inference --config cfg/inference.yaml", text)
 
     def test_classifier_named_only_for_classifier_tasks(self):
         self.assertIn(

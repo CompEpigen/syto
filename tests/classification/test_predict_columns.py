@@ -61,8 +61,9 @@ class TestDefaultIsFitColumns(unittest.TestCase):
     def test_classifier_without_an_override_falls_back(self):
         clf = _LabelFreeClassifier()
         cfg = {"model": {}}
-        self.assertEqual(clf.required_predict_columns(cfg),
-                         clf.required_fit_columns(cfg))
+        self.assertEqual(
+            clf.required_predict_columns(cfg), clf.required_fit_columns(cfg)
+        )
 
 
 if __name__ == "__main__":

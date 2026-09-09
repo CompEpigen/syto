@@ -69,8 +69,10 @@ class TestRawSplitsLoading(unittest.TestCase):
             "grg_label_column": "dmr_ctype_label",
             "classifier_type": "dismir",
             "classifier_checkpoint": "unused",
-            "classifier_config": {"grg_label_column": "dmr_ctype_label", 
-                                  "num_prediction_classes":2,},
+            "classifier_config": {
+                "grg_label_column": "dmr_ctype_label",
+                "num_prediction_classes": 2,
+            },
             "split_information": {
                 "train": {"target_proportions_path": "unused_train.npz"},
                 "valid": {"target_proportions_path": "unused_valid.npz"},
