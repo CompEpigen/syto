@@ -21,7 +21,7 @@ deconvolution step.
 - **Deconvolution Inference** for running fitted *Syto* components to deconvolute target 
 sequencing library. 
 
-For the full list of the corresponding commands, see [CLI reference](syto/app/Readme.md)
+For the full list of the corresponding commands, see [CLI reference](syto/app/Readme.md).
 
 <img src="assets/generalized_framework.png" alt="Framework" width="800"/>
 
