@@ -141,7 +141,7 @@ published dataset card.
 
 ## Citation
 
-Whenever using Syto, please cite: 
+Whenever using *Syto*, please cite: 
 
 - Rizdvanetskyi, Dmytro, Nathan Roos, and Pavlo Lutsik. "Data-Driven Soft Labeling Scales DNA Read Classification to Whole-Body Cell-Type Deconvolution." arXiv preprint arXiv:2607.04987 (2026).
 
