@@ -226,8 +226,9 @@ slurm-*.out
 
 # Local .sh
 run_multiple_jobs.sh
-# Local-only brainstorming specs & implementation plans
-docs/superpowers/
+run_inference_rrbs_v2.sh
+run_inference_U25_l4_hg19.sh
+
 
 # quick-start data (downloaded from the Hugging Face deposit)
 syto-data/
