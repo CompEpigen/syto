@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "syto"
-version = "0.5.0"
+version = "1.0.0"
 description = ""
 authors = ["Dmytro Rizdvanetskyi", "Nathan Roos"]
 readme = "README.md"
