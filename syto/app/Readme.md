@@ -49,8 +49,8 @@ syto fit-calibration --config my_calibration.yaml --dry-run
 
 ### Required keys
 
-Validation happens before any pipeline is constructed, so a bad config fails in
-under a second. Each task requires:
+Validation happens before any pipeline is constructed, so a bad config will fail to execute.
+
 
 | Command | Required config keys |
 | --- | --- |
@@ -126,19 +126,6 @@ removed in the future.
 ```bash
 syto --task fit_calibration --config c.yaml   # → syto fit-calibration --config c.yaml
 ```
-
-## Classifiers
-
-Selected in the config via `model.architecture` (`classifier-fit`) or
-`classifier.classifier_type` (`inference`):
-
-| Name | Notes |
-| --- | --- |
-| `dismir` | Syto extension of original CNN+LSTM Classifier [DISMIR](https://github.com/XWangLabTHU/DISMIR); It has two flavors `minigru` and `lstm` with `lstm` as default |
-| `methylbert` | Syto refactor of  [MethylBERT](https://github.com/CompEpigen/methylbert); `max_sequence_length` ≤ 510 |
-| `cancer_detector` |Syto implementation and extension of the [CancerDetector](https://academic.oup.com/nar/article/46/15/e89/5036349)|
-| `lookup` | 1NN Reference Lookup Classifier |
-| `epigenbert2` | Syto extension of [DNABERT-2](https://github.com/MAGICS-LAB/DNABERT_2) foundational model to support epigentic input; **in development** |
 
 ## Layout
 ```

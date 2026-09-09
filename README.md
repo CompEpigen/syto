@@ -1,8 +1,57 @@
 # Syto
 
-![Coverage](coverage-badge.svg) ![Code-style](https://img.shields.io/badge/code%20style-black-black)
+![Coverage](assets/coverage-badge.svg) ![Code-style](https://img.shields.io/badge/code%20style-black-black) ![License](https://img.shields.io/github/license/CompEpigen/syto)
 
-Repository for sequence-based long-read combined DNA-methylome classification and deconvolution of cell types using Deep Learning models.
+Repository for sequence-based, read-level combined DNA-methylome classification and deconvolution 
+of cell types using Deep Learning models.
+
+## Main Features
+
+- **Genomic sequences libraries labeling**, including *data-driven soft labeling* scheme which 
+allows to faithfully represent many-to-many relationship between epigenetic patterns and 
+associated cell types. 
+- **Read-level classifiers training** for connecting individual reads epigenetic signatures with 
+associated cell types.
+- **Pseudobulk generation** for creating in-silico mixtures of the classification enriched reads
+for deconvolution fitting and evaluation purposes. 
+- **Deconvolution fitting** for training deconvolvers using aggregated probability-simplex matrices
+as features.
+- **Calibration fitting** for (an optional) additional calibration that can be applied after 
+deconvolution step. 
+- **Deconvolution Inference** for running fitted *Syto* components to deconvolute target 
+sequencing library. 
+
+For the full list of the corresponding commands, see [CLI reference](syto/app/Readme.md)
+
+<img src="assets/generalized_framework.png" alt="Framework" width="800"/>
+
+
+### Supported Classifiers
+| Name | Notes |
+| --- | --- |
+| `dismir` | Syto extension of original CNN+LSTM Classifier [DISMIR](https://github.com/XWangLabTHU/DISMIR); It has two flavors `minigru` and `lstm` with `lstm` as default |
+| `methylbert` | Syto refactor of  [MethylBERT](https://github.com/CompEpigen/methylbert); `max_sequence_length` ≤ 510 |
+| `cancer_detector` |Syto implementation and extension of the [CancerDetector](https://academic.oup.com/nar/article/46/15/e89/5036349)|
+| `lookup` | Syto introduced 1NN Reference Lookup Classifier |
+| `epigenbert2` | Syto extension of [DNABERT-2](https://github.com/MAGICS-LAB/DNABERT_2) foundational model to support epigentic input; **in development** |
+
+### Supported Deconvolvers
+| Name | Notes | 
+| --- | --- | 
+| `xgb` | XGBoost multi-output regressor trained on the aggregated probability-simplex features against pseudobulk proportions
+| `swn` | Shallow Wide Network: single 1024-unit hidden layer (GELU, dropout 0.2) with softmax output; 
+| `mlp` | 3-layer perceptron (512 → 256 → n_features, GELU + dropout) with softmax output. 
+| `nnls` | Non-Negative Least Squares against the reference prediction matrix built from pure per-cell-type profiles (`scipy.optimize.nnls`) 
+| `psls` | Probability Simplex Least Squares: NNLS with an additional sum-to-one constraint, solved with `cvxpy` (default) or projected gradient descent (`solver_type: pgd`).
+
+### Supported Calibrators
+| Name | Notes |
+| --- | --- |
+| `linear_clip_normalize` | Per-cell-type linear regression of predicted on true proportions; calibrated values are clipped at 0 and renormalized to sum to 1. |
+| `linear_simplex_projection` | Same fitted per-cell-type linear model, but the calibrated vector is projected onto the probability simplex ([Duchi et al., 2008](https://ai.stanford.edu/~jduchi/projects/jd_ss_ys_l1.pdf)).  |
+| `vector_scaling` | Multi-class extension of Platt scaling, implemented as in [Kull et al., 2019](https://proceedings.neurips.cc/paper/2019/hash/8ca01ea920679a0fe3728441494041b9-Abstract.html).
+
+
 
 ## Installation
 
@@ -57,54 +106,22 @@ writes an inference config for one RRBS sample, and deconvolutes it:
 ./quickstart.sh
 ```
 
-It first asks you to log into Hugging Face — a free read token from
-<https://huggingface.co/settings/tokens> is enough — then fetches about 5 GB into
-`./syto-data`. Override the location with `SYTO_DATA_ROOT=/path/to/data ./quickstart.sh`.
+It first asks you to log into Hugging Face and then fetches about 5 GB into
+`./syto-data` and proceeds with inference of a single example sample. You may override the location with `SYTO_DATA_ROOT=/path/to/data ./quickstart.sh`.
 
-What it downloads, all from the `CompEpigen/syto.1.0` dataset repo:
 
-| Archive | Contents | Size |
-| --- | --- | --- |
-| `tier1-models/ood-rrbs/…_cancerdetector_uniform_v1.zip` | read classifier, five deconvolvers, their calibrators | 344 MB |
-| `tier2-pseudobulks/ood-rrbs/…_cancerdetector_uniform_v1.zip` | pseudobulks the run was fitted on, source of the cell-type prior | 3.2 GB |
-| `tier3-training-data/…_atlases_v1.zip` | cell-type atlases (hg19 / hg38) | 4.7 MB |
-| `tier4-source-data/rrbs-recovered-reads/…_U250l4hg19_v1.zip` | 522 RRBS samples as recovered reads | 1.2 GB |
-| `tier0-results/…_mappings_v1.zip` | `labels_dict.json`, the 39 cell-type label map | 12 KB |
+Once done, the users may 
 
-The archives unpack into one tree whose layout the published configs already
-expect, so every path in the generated config is relative to `syto-data/` and the
-run happens from there. Inference on one sample takes about ten seconds on a GPU and
-writes to `syto-data/outputs/quickstart/<sample>/`:
+## Inference on your own data
 
-| File | Contents |
-| --- | --- |
-| `deconvolution_results.csv` | cell-type proportions, one row per cell type × method × calibrator |
-| `deconvolution_report.pdf` | the same, as a report; a summary is also printed to the terminal |
-| `dmr_aggregated.pkl` | the per-region prediction matrix the deconvolvers consumed |
-| `quickstart_inference.yaml` | the config that produced the run |
-
-The quick-start needs no GPU: its `cancer_detector` classifier is a CPU model,
-and the neural deconvolvers and calibrators fall back to CPU, so all 20
-method x calibrator combinations run either way and give the same numbers.
-
-Rerunning is cheap: the script skips anything already unpacked. To deconvolute a
-different sample, point `input.data_path` at another parquet under
-`tier4-source-data/rrbs-recovered-reads/U250.l4.hg19/` and rerun from `syto-data`:
-
-```shell
-syto inference --config quickstart_inference.yaml
-```
-
+Custom inference config can be either obtained by modifying example from the quick-start or
+by using config wizzard (see [CLI reference](syto/app/Readme.md))
 To start from your own BAM instead of recovered reads, set `input.type: bam`,
 `input.data_path` to the BAM, and add `input.reference_path` (WGBS) or
-`input.data_type: ont`. `syto create-config` walks you through a config
-interactively.
+`input.data_type: ont`. 
 
 The hg38 and hg19 references needed to parse BAMs can additionally be downloaded
 from the [Syto deposit on Hugging Face](https://huggingface.co/datasets/CompEpigen/syto.1.0).
-Each bundle is one ~1.1 GB archive holding the genome FASTA and its index, the
-CpG coordinate tracks and the chromosome sizes; unpack it into the same data root
-the quick-start uses:
 
 ```shell
 GENOME=hg38   # or hg19
@@ -117,20 +134,25 @@ unzip -qo "syto-data/.archives/$ARCHIVE" -d syto-data
 Point `input.reference_path` at the unpacked genome, i.e.
 `tier4-source-data/reference-genomes/$GENOME/$GENOME.fa.gz` relative to `syto-data`.
 
-## Description
-
-- What is it for.
-- Supported models:
-    - Classifiers
-    - Deconvolvers
-    - Calibrators
-    - External baselines
-
-## Documentation
-
-- CLI
-- Config Wizzard
-- Running localy
-- Running on HPC
-
 ## Citation
+
+Whenever using Syto, please cite: 
+
+- Rizdvanetskyi, Dmytro, Nathan Roos, and Pavlo Lutsik. "Data-Driven Soft Labeling Scales DNA Read Classification to Whole-Body Cell-Type Deconvolution." arXiv preprint arXiv:2607.04987 (2026).
+
+Additionaly, please cite corresponding papers when relevant, depending on a choice of the underlying read classifier: 
+
+- **CancerDetector**: Li, Wenyuan, et al. "CancerDetector: ultrasensitive and non-invasive cancer detection at the resolution of individual reads using cell-free DNA methylation sequencing data." Nucleic acids research 46.15 (2018): e89-e89.
+
+- **Dismir**: LI, Jiaqi, et al. Dismir: Deep learning-based noninvasive cancer detection by integrating dna sequence and methylation information of individual cell-free dna reads. Briefings in bioinformatics, 2021, 22.6: bbab250.
+
+- **MethylBERT**: JEONG, Yunhee, et al. MethylBERT enables read-level DNA methylation pattern identification and tumour deconvolution using a Transformer-based model. Nature Communications, 2025, 16.1: 788.
+
+If you are using our implementation of the baseline methods, cite them accordingly:
+
+- **UXM**: Loyfer, Netanel, et al. "A DNA methylation atlas of normal human cell types." Nature 613.7943 (2023): 355-364. 
+- **EpiDISH**: Teschendorff, Andrew E., et al. "A comparison of reference-based algorithms for correcting cell-type heterogeneity in Epigenome-Wide Association Studies." BMC bioinformatics 18.1 (2017): 105.
+- **Houseman CP**: Houseman, Eugene Andres, et al. "DNA methylation arrays as surrogate measures of cell mixture distribution." BMC bioinformatics 13.1 (2012): 86.
+- **CelFiE**: Caggiano, Christa, et al. "Comprehensive cell type decomposition of circulating cell-free DNA with CelFiE." Nature communications 12.1 (2021): 2717.
+
+
