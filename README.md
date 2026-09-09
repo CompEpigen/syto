@@ -109,9 +109,6 @@ writes an inference config for one RRBS sample, and deconvolutes it:
 It first asks you to log into Hugging Face and then fetches about 5 GB into
 `./syto-data` and proceeds with inference of a single example sample. You may override the location with `SYTO_DATA_ROOT=/path/to/data ./quickstart.sh`.
 
-
-Once done, the users may 
-
 ## Inference on your own data
 
 Custom inference config can be either obtained by modifying example from the quick-start or
@@ -133,6 +130,14 @@ unzip -qo "syto-data/.archives/$ARCHIVE" -d syto-data
 
 Point `input.reference_path` at the unpacked genome, i.e.
 `tier4-source-data/reference-genomes/$GENOME/$GENOME.fa.gz` relative to `syto-data`.
+
+## Reproducing the paper results
+   
+[Syto deposit on Hugging Face](https://huggingface.co/datasets/CompEpigen/syto.1.0) features preprocessed input data and 
+all intermediate artifacts (e.g fitted classifiers, deconvolvers, calibrators and generated pseudobulks) to either reproduce 
+the results fully or, in more likely scenario, focus on a single experiment, specific *Syto* combination or a step in the 
+*Syto* pipeline. Each produced asset is accompanied by the corresponding `.yaml` config. For more information, see
+published dataset card.    
 
 ## Citation
 
