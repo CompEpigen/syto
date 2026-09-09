@@ -637,6 +637,15 @@ class LookupClassifier(AbstractReadClassifier):
         # column than the pipeline's top-level ``label_column``.
         return ["name", "read_start", "methylation_ids", self.config.label_col]
 
+    def required_predict_columns(self, config: dict) -> list[str]:
+        # predict() reads only the methylation signature (via
+        # _resolve_signature_column) and the read identity; it never touches
+        # config.label_col. Requiring the label here would force every caller
+        # that merely predicts to carry a ground-truth column, and would fail
+        # outright against a checkpoint whose stored label_col names a column
+        # the dataset does not have.
+        return ["name", "read_start", "methylation_ids"]
+
     def mlflow_fit_params(self) -> dict:
         return self.config.to_dict()
 

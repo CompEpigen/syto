@@ -9,8 +9,14 @@ from syto.app.pseudobulk_pipeline import PseudoBulkPipeline
 
 
 class _StubClassifier:
+    # Stands in for a real classifier, which inherits both hooks from
+    # AbstractReadClassifier. The pseudobulk generator only predicts, so it
+    # asks for the predict-time columns.
     def required_fit_columns(self, config):
         return ["input_ids", "methylation_ids", "dmr_ctype_label"]
+
+    def required_predict_columns(self, config):
+        return self.required_fit_columns(config)
 
 
 def _make_logger():

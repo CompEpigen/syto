@@ -64,6 +64,21 @@ class AbstractReadClassifier(ABC):
             f"{type(self).__name__} does not declare required_fit_columns"
         )
 
+    def required_predict_columns(self, config: dict) -> list[str]:
+        """Feature/auxiliary columns this classifier reads at *predict* time.
+
+        Prediction needs the features only so this is usually
+        the fit columns minus any label. It defaults to
+        :meth:`required_fit_columns` -- correct for classifiers whose fit
+        columns are already label-free -- and is overridden by those that read
+        a label column during fitting (see LookupClassifier).
+
+        Kept separate because callers that only predict, such as the pseudobulk
+        generator, would otherwise demand ground-truth columns from datasets
+        that need not carry them.
+        """
+        return self.required_fit_columns(config)
+
     def mlflow_fit_params(self) -> dict:
         """Architecture-relevant hyperparameters to record on an MLflow run.
 

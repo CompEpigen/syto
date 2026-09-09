@@ -358,14 +358,17 @@ class PseudoBulkPipeline:
         """Load raw training splits from the shared columnar/legacy dataset dir."""
         classifier = self._get_classifier()
         classifier_cfg = self.config.get("classifier_config", {})
-        # required_fit_columns reads grg_label_column / classifier_head_implementation
+        # required_*_columns read grg_label_column / classifier_head_implementation
         # from a fit-config's model/training sections; the pseudobulk config keeps
         # those under classifier_config, so expose it under both keys.
         fit_shim = {"model": classifier_cfg, "training": classifier_cfg}
+        # This stage classifies reads with an already-fitted model, so ask for
+        # the predict-time columns: demanding fit-time label columns here fails
+        # on datasets that legitimately do not carry them.
         return load_raw_splits(
             self.config["data_path"],
             list(self.config["split_information"].keys()),
-            classifier_required_columns=classifier.required_fit_columns(fit_shim),
+            classifier_required_columns=classifier.required_predict_columns(fit_shim),
             data_format=self.config.get("data_format", "auto"),
             split_column=self.config.get("split_column", "split"),
             min_pattern_length=self.config.get("min_pattern_length"),
