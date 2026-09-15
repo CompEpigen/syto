@@ -11,6 +11,28 @@ RECOVERED_READS_REQUIRED = {
 }
 
 
+def bam_reads_to_recovered(
+    df: pd.DataFrame, ctype: str, chrom_prefix: str = ""
+) -> pd.DataFrame:
+    """Reshape BAM-parsed reads into the recovered-reads CSV layout.
+
+    ``df`` is the output of :func:`syto.data.sequencing.bam_processing.read_bam_regions`.
+    Every read is labelled with the sample-level ``ctype``; ``chrom_prefix`` is
+    prepended to chromosome names so BAMs aligned to e.g. hs37d5 (``1``) match
+    ``chrN`` atlases.  The result feeds :func:`adapt_recovered_reads`, so both
+    input types derive ``read_end`` from the sequence length the same way.
+    """
+    return pd.DataFrame(
+        {
+            "ref_name": chrom_prefix + df["chromosome"].astype(str),
+            "ref_pos": df["read_start"].astype(int),
+            "original_seq": df["seq"],
+            "methyl_seq": df["methylation_encoding"],
+            "ctype": ctype,
+        }
+    )
+
+
 def adapt_recovered_reads(
     df: pd.DataFrame, labels_dict: dict, cell_type_match_dict: dict = None
 ) -> pd.DataFrame:

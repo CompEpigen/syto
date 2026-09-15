@@ -1,11 +1,19 @@
 """ """
 
+import logging
 from pathlib import Path
 
 import pandas as pd
+import pysam
 
-from syto.data.dataset_build.schema import adapt_recovered_reads
+from syto.data.dataset_build.schema import (
+    adapt_recovered_reads,
+    bam_reads_to_recovered,
+)
 from syto.data.dataset_build.buckets import assign_region_bucket
+from syto.data.sequencing.bam_processing import read_bam_regions
+
+logger = logging.getLogger(__name__)
 
 
 def stage_dataframe(
@@ -47,7 +55,6 @@ def stage_file(
     # Sequence / methylation patterns are numeric-looking strings (e.g.
     # "0101..." or "2222...") and must not be type-inferred to int/float.
     df = pd.read_csv(csv_path, sep=sep, dtype={"original_seq": str, "methyl_seq": str})
-    n_in = len(df)
     staged, counts = stage_dataframe(
         df,
         atlas,
@@ -56,8 +63,58 @@ def stage_file(
         sample,
         cell_type_match_dict=cell_type_match_dict,
     )
-    n_out = len(staged)
+    return _write_staged(staged, counts, sample, staged_dir, counts_dir, len(df))
 
+
+def stage_bam_file(
+    bam_path,
+    ctype,
+    atlas,
+    region_index,
+    labels_dict,
+    staged_dir,
+    counts_dir,
+    *,
+    bam_params,
+    intervals,
+    cell_type_match_dict=None,
+):
+    """Parse one BAM over the atlas intervals, stage it, and write its outputs.
+
+    Every read is labelled with the sample-level ``ctype``.  ``intervals`` use
+    the atlas' ``chrN`` names; when the BAM header has no ``chr`` prefix
+    (e.g. hs37d5) the prefix is stripped for fetching and restored on the reads.
+    """
+    sample = Path(bam_path).stem
+    with pysam.AlignmentFile(bam_path, "rb") as bam:
+        references = set(bam.references)
+    chrom_prefix = "" if any(r.startswith("chr") for r in references) else "chr"
+    if chrom_prefix:
+        intervals = [
+            (chromosome.removeprefix(chrom_prefix), start, end)
+            for chromosome, start, end in intervals
+        ]
+
+    reads = read_bam_regions({**bam_params, "bam_path": str(bam_path)}, intervals)
+    if reads is None or reads.empty:
+        logger.warning("No reads parsed from %s; nothing staged.", bam_path)
+        return {"sample": sample, "n_in": 0, "n_out": 0, "duplication_factor": 0.0}
+
+    df = bam_reads_to_recovered(reads, ctype, chrom_prefix=chrom_prefix)
+    staged, counts = stage_dataframe(
+        df,
+        atlas,
+        region_index,
+        labels_dict,
+        sample,
+        cell_type_match_dict=cell_type_match_dict,
+    )
+    return _write_staged(staged, counts, sample, staged_dir, counts_dir, len(df))
+
+
+def _write_staged(staged, counts, sample, staged_dir, counts_dir, n_in):
+    """Write per-bucket shards and the counts sidecar; return staging stats."""
+    n_out = len(staged)
     for bucket, group in staged.groupby("region_bucket"):
         out_dir = Path(staged_dir) / f"region_bucket={bucket}"
         out_dir.mkdir(parents=True, exist_ok=True)

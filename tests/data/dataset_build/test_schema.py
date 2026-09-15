@@ -2,6 +2,7 @@ import unittest
 import pandas as pd
 from syto.data.dataset_build.schema import (
     adapt_recovered_reads,
+    bam_reads_to_recovered,
     RECOVERED_READS_REQUIRED,
 )
 
@@ -38,3 +39,27 @@ class TestAdaptRecoveredReads(unittest.TestCase):
     def test_missing_required_column_raises(self):
         with self.assertRaises(ValueError):
             adapt_recovered_reads(self.df.drop(columns=["ref_pos"]), LABELS)
+
+
+class TestBamReadsToRecovered(unittest.TestCase):
+    def test_maps_bam_columns_and_labels_every_read(self):
+        bam_reads = pd.DataFrame(
+            {
+                "read_name": ["a", "b"],
+                "chromosome": ["9", "X"],
+                "read_start": [1000, 2000],
+                "read_end": [1004, 2003],  # exclusive; recomputed downstream
+                "seq": ["ACGTA", "CGCG"],
+                "methylation_encoding": ["21222", "1202"],
+            }
+        )
+        recovered = bam_reads_to_recovered(
+            bam_reads, "Medulloblastoma", chrom_prefix="chr"
+        )
+        self.assertTrue(RECOVERED_READS_REQUIRED.issubset(recovered.columns))
+        self.assertEqual(list(recovered["ref_name"]), ["chr9", "chrX"])
+
+        out = adapt_recovered_reads(recovered, {"0": "Medulloblastoma"})
+        self.assertEqual(list(out["read_end"]), [1004, 2003])  # inclusive
+        self.assertEqual(list(out["methylation_ids"]), ["21222", "1202"])
+        self.assertEqual(list(out["original_label"]), [0, 0])

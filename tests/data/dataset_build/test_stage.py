@@ -1,6 +1,11 @@
+import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import patch
+
 import pandas as pd
 from syto.data.atlases.uxm_atlases import UXMMethylationAtlas
+from syto.data.dataset_build import stage
 from syto.data.dataset_build.buckets import build_region_index
 from syto.data.dataset_build.stage import stage_dataframe
 
@@ -85,3 +90,86 @@ class TestStageDataframe(unittest.TestCase):
         row = staged[staged["name"] == "chr1:1001-1010"].iloc[0]
         self.assertEqual(row["read_start"], 1000)
         self.assertEqual(row["methylation_ids"], "22100212")  # original[2:] (offset 2)
+
+
+class _FakeBam:
+    def __init__(self, references):
+        self.references = references
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class TestStageBamFile(unittest.TestCase):
+    INTERVALS = [("chr1", 0, 3010)]
+    BAM_READS = pd.DataFrame(
+        {
+            "read_name": ["r1"],
+            "chromosome": ["1"],
+            "read_start": [1000],
+            "read_end": [1010],
+            "seq": ["ACGTACGTAC"],
+            "methylation_encoding": ["2210122100"],
+        }
+    )
+
+    def setUp(self):
+        self.atlas = UXMMethylationAtlas(
+            atlas_name="test", reference_genome="hg38", atlas_df=_atlas_df()
+        )
+        self.region_index = build_region_index(self.atlas.atlas, n_buckets=2)
+        self.tmp = tempfile.TemporaryDirectory()
+        self.staged_dir = Path(self.tmp.name) / "staged"
+        self.counts_dir = Path(self.tmp.name) / "counts"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _stage(self, references, reads):
+        with patch.object(stage, "pysam") as pysam_mock, patch.object(
+            stage, "read_bam_regions", return_value=reads
+        ) as read_mock:
+            pysam_mock.AlignmentFile.return_value = _FakeBam(references)
+            stats = stage.stage_bam_file(
+                "/data/S1_merged.mdup.bam",
+                "Gallbladder",
+                self.atlas,
+                self.region_index,
+                LABELS,
+                self.staged_dir,
+                self.counts_dir,
+                bam_params={"bam_path": None},
+                intervals=self.INTERVALS,
+            )
+        return stats, read_mock
+
+    def test_unprefixed_bam_fetches_bare_names_and_stages_prefixed_reads(self):
+        stats, read_mock = self._stage(("1", "2"), self.BAM_READS)
+
+        params, intervals = read_mock.call_args.args
+        self.assertEqual(params["bam_path"], "/data/S1_merged.mdup.bam")
+        self.assertEqual(intervals, [("1", 0, 3010)])
+
+        self.assertEqual(stats["sample"], "S1_merged.mdup")
+        self.assertEqual(stats["n_in"], 1)
+        shards = list(self.staged_dir.rglob("S1_merged.mdup.parquet"))
+        self.assertEqual(len(shards), 1)
+        staged = pd.read_parquet(shards[0])
+        self.assertEqual(list(staged["chromosome"]), ["chr1"])
+        self.assertEqual(list(staged["original_label"]), [1])
+        counts = pd.read_parquet(self.counts_dir / "S1_merged.mdup.parquet")
+        self.assertEqual(counts["n_reads"].tolist(), [1])
+
+    def test_prefixed_bam_keeps_interval_names(self):
+        reads = self.BAM_READS.assign(chromosome=["chr1"])
+        _, read_mock = self._stage(("chr1", "chr2"), reads)
+        self.assertEqual(read_mock.call_args.args[1], self.INTERVALS)
+
+    def test_empty_bam_writes_nothing(self):
+        stats, _ = self._stage(("1",), None)
+        self.assertEqual(stats["n_in"], 0)
+        self.assertFalse(self.staged_dir.exists())
+        self.assertFalse(self.counts_dir.exists())

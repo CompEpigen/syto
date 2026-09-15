@@ -256,3 +256,106 @@ class TestStagedSourceDir(unittest.TestCase):
             finals = list((d / "B" / "final").rglob("*.parquet"))
             self.assertTrue(finals)
             self.assertFalse((d / "A" / "final").exists())
+
+
+class _FakeBam:
+    references = ("1", "2")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class TestDatasetBuildFromBams(unittest.TestCase):
+    def test_bam_input_labels_samples_from_groups_file(self):
+        from unittest.mock import patch
+
+        from syto.data.dataset_build import stage
+
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            atlas = pd.DataFrame(
+                {
+                    "chr": ["chr1", "chr1"],
+                    "start": [1001, 2001],
+                    "end": [1010, 2010],
+                    "startCpG": [10, 20],
+                    "endCpG": [12, 22],
+                    "target": ["Healthy CSF", "Medulloblastoma"],
+                    "name": ["chr1:1001-1010", "chr1:2001-2010"],
+                    "direction": ["U", "U"],
+                    "Healthy CSF": [0.9, 0.1],
+                    "Medulloblastoma": [0.1, 0.9],
+                }
+            )
+            atlas.to_csv(d / "atlas.tsv", sep="\t", index=False)
+            (d / "labels.json").write_text(
+                json.dumps({"0": "Healthy CSF", "1": "Medulloblastoma"})
+            )
+            inp = d / "in"
+            inp.mkdir()
+            samples = {f"csf{i}_merged.mdup": "Healthy CSF" for i in range(3)}
+            samples.update({f"mb{i}_merged.mdup": "Medulloblastoma" for i in range(3)})
+            for name in [*samples, "outlier_merged.mdup"]:
+                (inp / f"{name}.bam").touch()
+            pd.DataFrame(
+                {"name": list(samples), "group": list(samples.values())}
+            ).to_csv(d / "groups.csv", index=False)
+
+            bam_reads = pd.DataFrame(
+                {
+                    "read_name": [f"r{i}" for i in range(4)],
+                    "chromosome": ["1"] * 4,
+                    "read_start": [1000, 1000, 2000, 2000],
+                    "read_end": [1010] * 2 + [2010] * 2,
+                    "seq": ["ACGTACGTAC"] * 4,
+                    "methylation_encoding": ["0101010101"] * 4,
+                }
+            )
+            cfg = {
+                "phase": "all",
+                "input_type": "bam",
+                "input_dir": str(inp),
+                "sample_groups_path": str(d / "groups.csv"),
+                "output_dir": str(d / "out"),
+                "atlas_path": str(d / "atlas.tsv"),
+                "atlas_cell_types": ["Healthy CSF", "Medulloblastoma"],
+                "reference_genome": "hg19",
+                "labels_dict_path": str(d / "labels.json"),
+                "n_buckets": 2,
+                "n_workers": 1,
+                "seed": 42,
+                "bam_processing": {
+                    "data_type": "wgbs",
+                    "reference_path": "ref.fa",
+                    "merge_pairs": True,
+                    "mate_fetch_padding": 100,
+                },
+                "signature": {
+                    "start_column": "read_start",
+                    "methylation_pattern_column": "methylation_ids",
+                },
+                "labelers": {"label": {"type": "hard_with_background"}},
+            }
+            with patch.object(stage, "pysam") as pysam_mock, patch.object(
+                stage, "read_bam_regions", return_value=bam_reads
+            ) as read_mock:
+                pysam_mock.AlignmentFile.return_value = _FakeBam()
+                summary = DatasetBuildPipeline(cfg, logging.getLogger("t")).run()
+
+            self.assertEqual(summary["stage"]["files"], 6)
+            params, intervals = read_mock.call_args.args
+            self.assertEqual(params["require_flags"], 3)
+            # Atlas regions padded by 100 (still disjoint), chr prefix stripped.
+            self.assertEqual(intervals, [("1", 900, 1110), ("1", 1900, 2110)])
+
+            finals = list((d / "out" / "final").rglob("*.parquet"))
+            out = pd.concat([pd.read_parquet(p) for p in finals], ignore_index=True)
+            labels = out.groupby("file")["original_label"].unique()
+            self.assertEqual(
+                {f: list(v) for f, v in labels.items()},
+                {f: [0 if g == "Healthy CSF" else 1] for f, g in samples.items()},
+            )
+            self.assertTrue(set(out["split"]).issubset({"train", "valid", "test"}))

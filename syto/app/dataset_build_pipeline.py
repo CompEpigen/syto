@@ -1,7 +1,9 @@
-"""Recovered-reads -> atlas-overlapped Parquet dataset build pipeline.
+"""Recovered-reads / BAM -> atlas-overlapped Parquet dataset build pipeline.
 
 Two phases:
-  stage    -- per-file overlap+trim+label+bucket (parallel by file)
+  stage    -- per-file overlap+trim+label+bucket (parallel by file); inputs are
+              recovered-reads CSVs (input_type: csv) or BAMs labelled per
+              sample via sample_groups_path (input_type: bam)
   finalize -- per-bucket soft/hard labels + split + compaction
 """
 
@@ -18,11 +20,15 @@ from tqdm import tqdm
 
 from syto.data.atlases.uxm_atlases import UXMMethylationAtlas
 from syto.data.dataset_build.buckets import build_region_index
-from syto.data.dataset_build.stage import stage_file
+from syto.data.dataset_build.stage import stage_bam_file, stage_file
 from syto.data.dataset_build.splits import plan_splits
 from syto.data.dataset_build.finalize import finalize_bucket
 from syto.data.dataset_build.filters import staged_counts, load_region_names
 from syto.data.labelers.archetype_labeler import ArchetypeLabeler
+from syto.data.sequencing.bam_processing import (
+    merge_fetch_intervals,
+    resolve_bam_parsing_params,
+)
 
 
 def _stage_worker(
@@ -30,6 +36,7 @@ def _stage_worker(
     *,
     reference_genome,
     atlas_path,
+    atlas_cell_types,
     region_index,
     labels_dict,
     staged_dir,
@@ -46,6 +53,7 @@ def _stage_worker(
         atlas_name="build",
         reference_genome=reference_genome,
         atlas_path=atlas_path,
+        cell_types=atlas_cell_types,
     )
     return stage_file(
         str(path),
@@ -55,6 +63,42 @@ def _stage_worker(
         staged_dir,
         counts_dir,
         sep=sep,
+        cell_type_match_dict=cell_type_match_dict,
+    )
+
+
+def _stage_bam_worker(
+    path_and_ctype,
+    *,
+    reference_genome,
+    atlas_path,
+    atlas_cell_types,
+    region_index,
+    labels_dict,
+    staged_dir,
+    counts_dir,
+    bam_params,
+    intervals,
+    cell_type_match_dict,
+):
+    """BAM counterpart of :func:`_stage_worker`; takes a ``(path, ctype)`` pair."""
+    path, ctype = path_and_ctype
+    atlas = UXMMethylationAtlas(
+        atlas_name="build",
+        reference_genome=reference_genome,
+        atlas_path=atlas_path,
+        cell_types=atlas_cell_types,
+    )
+    return stage_bam_file(
+        str(path),
+        ctype,
+        atlas,
+        region_index,
+        labels_dict,
+        staged_dir,
+        counts_dir,
+        bam_params=bam_params,
+        intervals=intervals,
         cell_type_match_dict=cell_type_match_dict,
     )
 
@@ -80,6 +124,7 @@ class DatasetBuildPipeline:
             atlas_name="build",
             reference_genome=self.config["reference_genome"],
             atlas_path=self.config["atlas_path"],
+            cell_types=self.config.get("atlas_cell_types"),
         )
 
     def _labels_dict(self):
@@ -101,32 +146,86 @@ class DatasetBuildPipeline:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         region_index.to_parquet(self.output_dir / "regions_index.parquet", index=False)
 
-        csvs = sorted(Path(self.config["input_dir"]).glob("*.csv"))
         cell_match = self.config.get("cell_type_match_dict") or {}
         n_workers = int(self.config.get("n_workers", 1))
-
-        work = partial(
-            _stage_worker,
+        common = dict(
             reference_genome=self.config["reference_genome"],
             atlas_path=self.config["atlas_path"],
+            atlas_cell_types=self.config.get("atlas_cell_types"),
             region_index=region_index,
             labels_dict=labels_dict,
             staged_dir=str(self.staged_dir),
             counts_dir=str(self.counts_dir),
-            sep=self.config.get("sep", "\t"),
             cell_type_match_dict=cell_match,
         )
+
+        input_type = self.config.get("input_type", "csv")
+        if input_type == "csv":
+            inputs = sorted(Path(self.config["input_dir"]).glob("*.csv"))
+            work = partial(_stage_worker, sep=self.config.get("sep", "\t"), **common)
+        elif input_type == "bam":
+            inputs = self._bam_inputs()
+            bam_cfg = self.config.get("bam_processing", {})
+            bam_params = resolve_bam_parsing_params(
+                bam_path=None,
+                data_type=bam_cfg.get("data_type", "wgbs"),
+                bam_cfg=bam_cfg,
+                chromosomes=bam_cfg.get("chromosomes", "all"),
+                reference_path=bam_cfg.get("reference_path"),
+            )
+            padding = (
+                int(bam_cfg.get("mate_fetch_padding", 1000))
+                if bam_params["merge_pairs"]
+                else 0
+            )
+            intervals = merge_fetch_intervals(
+                atlas.atlas, bam_params["chromosomes"], padding
+            )
+            work = partial(
+                _stage_bam_worker,
+                bam_params=bam_params,
+                intervals=intervals,
+                **common,
+            )
+        else:
+            raise ValueError(f"input_type must be 'csv' or 'bam', got {input_type!r}")
 
         if n_workers > 1:
             with ProcessPoolExecutor(max_workers=n_workers) as ex:
                 stats = list(
-                    tqdm(ex.map(work, csvs), total=len(csvs), desc="Staging files")
+                    tqdm(ex.map(work, inputs), total=len(inputs), desc="Staging files")
                 )
         else:
-            stats = [work(p) for p in tqdm(csvs, desc="Staging files")]
+            stats = [work(p) for p in tqdm(inputs, desc="Staging files")]
 
         self.logger.info("Staged %d files", len(stats))
         return {"files": len(stats), "stats": stats}
+
+    def _bam_inputs(self):
+        """``(bam_path, group)`` pairs for BAMs listed in ``sample_groups_path``.
+
+        The groups CSV has ``name`` (BAM file name without ``.bam``) and
+        ``group`` columns; BAMs not listed there are skipped.
+        """
+        groups = pd.read_csv(self.config["sample_groups_path"])
+        group_of = dict(zip(groups["name"], groups["group"]))
+        bams = sorted(Path(self.config["input_dir"]).glob("*.bam"))
+        skipped = [b.name for b in bams if b.stem not in group_of]
+        if skipped:
+            self.logger.info(
+                "Skipping %d BAM(s) not in %s: %s",
+                len(skipped),
+                self.config["sample_groups_path"],
+                ", ".join(skipped),
+            )
+        missing = sorted(set(group_of) - {b.stem for b in bams})
+        if missing:
+            self.logger.warning(
+                "%d sample(s) in the groups file have no BAM: %s",
+                len(missing),
+                ", ".join(missing),
+            )
+        return [(b, group_of[b.stem]) for b in bams if b.stem in group_of]
 
     def _run_finalize(self) -> Dict[str, Any]:
         labels_dict = self._labels_dict()
