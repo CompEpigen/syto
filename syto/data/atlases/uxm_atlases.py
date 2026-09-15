@@ -121,6 +121,7 @@ class UXMMethylationAtlas(AbstractMethylationAtlas):
         sep: str = "\t",
         ignore: Optional[List[str]] = None,
         include: Optional[List[str]] = None,
+        cell_types: Optional[List[str]] = None,
     ):
         """Initialize the UXM methylation atlas.
 
@@ -132,6 +133,10 @@ class UXMMethylationAtlas(AbstractMethylationAtlas):
             Cell-type column names to exclude from ``ref_cells``.
         include : list of str, optional
             When provided, only these cell-type columns are kept in ``ref_cells``.
+        cell_types : list of str, optional
+            Cell-type (group) columns this atlas carries.  Defaults to the
+            Loyfer ``EXPECTED_CTYPE_COLUMNS``; pass the group names for atlases
+            built from other marker sets (e.g. :meth:`from_wgbstools_markers`).
         """
         if atlas_path is not None and atlas_df is not None:
             raise ValueError("Only one of atlas_path or atlas_df should be provided.")
@@ -145,7 +150,8 @@ class UXMMethylationAtlas(AbstractMethylationAtlas):
         super().__init__()
         self.atlas_name = atlas_name
         self._reference_genome = reference_genome
-        self._check_atlas_format(self._atlas)
+        expected_cells = list(cell_types or self.EXPECTED_CTYPE_COLUMNS)
+        self._check_atlas_format(self._atlas, expected_cells)
 
         # Keep the atlas sorted by genomic position for efficient sweep queries
         self._atlas = self._atlas.sort_values(["chr", "start", "end"]).reset_index(
@@ -153,7 +159,7 @@ class UXMMethylationAtlas(AbstractMethylationAtlas):
         )
 
         # Compute filtered ref_cells once at construction time
-        all_cells = [c for c in self._atlas.columns if c in self.EXPECTED_CTYPE_COLUMNS]
+        all_cells = [c for c in self._atlas.columns if c in expected_cells]
         if ignore:
             all_cells = [c for c in all_cells if c not in ignore]
         if include:
@@ -162,6 +168,88 @@ class UXMMethylationAtlas(AbstractMethylationAtlas):
         self._atlas = self._atlas[
             self._atlas["target"].apply(lambda x: x in self._ref_cells)
         ]
+
+    # ------------------------------------------------------------------
+    # Factory: build atlas from wgbstools find_markers output
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def from_wgbstools_markers(
+        cls,
+        marker_paths: List[str],
+        atlas_name: str,
+        reference_genome: str,
+        *,
+        chrom_prefix: str = "chr",
+        output_path: Optional[str] = None,
+        sep: str = "\t",
+    ) -> "UXMMethylationAtlas":
+        """Build an atlas from ``wgbstools find_markers`` ``Markers.*.bed`` files.
+
+        find_markers writes one file per target group, with the region
+        metadata (``#chr``, ``start``, ``end``, ``startCpG``, ``endCpG``,
+        ``target``, ``region``, ``direction``) plus the mean beta of the target
+        (``tg_mean``) and of the background (``bg_mean``).  The files are
+        concatenated, ``chrom_prefix`` is prepended to chromosome names and
+        region ids, and the groups found in ``target`` become the atlas
+        cell-type columns.
+
+        find_markers does not report per-group read fractions, so the
+        cell-type columns are approximated from the means: the region's own
+        target gets ``tg_mean`` and every other group ``bg_mean``, converted
+        to the unmethylated fraction (``1 - mean``) for ``direction == "U"``.
+        Region-level consumers (read overlap, dataset staging) never read
+        these values; for exact fractions pass this atlas as ``markers`` to
+        :meth:`from_reads`.
+
+        Parameters
+        ----------
+        marker_paths : list of str
+            ``Markers.<group>.bed`` files, one per target group.
+        atlas_name, reference_genome
+            Passed through to the constructor.
+        chrom_prefix : str
+            Prepended to chromosome names, which the atlas requires as ``chrN``.
+        output_path : str, optional
+            If given, write the resulting atlas TSV to this path.
+        sep : str
+            Column separator of the marker files and the optional output.
+        """
+        if not marker_paths:
+            raise ValueError("marker_paths must list at least one Markers.*.bed file.")
+        markers = pd.concat(
+            [pd.read_csv(path, sep=sep) for path in marker_paths], ignore_index=True
+        )
+        markers = markers.rename(columns={"#chr": "chr"})
+        markers["chr"] = chrom_prefix + markers["chr"].astype(str)
+        markers["name"] = chrom_prefix + markers["region"].astype(str)
+        markers = markers.drop_duplicates(subset="name").reset_index(drop=True)
+
+        cell_types = sorted(markers["target"].unique())
+        is_unmethylated = (markers["direction"] == "U").to_numpy()
+        atlas_df = markers[cls._MARKER_COLUMNS].copy()
+        for cell_type in cell_types:
+            mean = np.where(
+                markers["target"] == cell_type, markers["tg_mean"], markers["bg_mean"]
+            )
+            atlas_df[cell_type] = np.round(np.where(is_unmethylated, 1 - mean, mean), 3)
+
+        _module_logger.info(
+            "UXM atlas '%s' from %d marker file(s): %d region(s) · groups: %s",
+            atlas_name,
+            len(marker_paths),
+            len(atlas_df),
+            ", ".join(cell_types),
+        )
+        if output_path is not None:
+            atlas_df.to_csv(output_path, sep=sep, index=False)
+
+        return cls(
+            atlas_name=atlas_name,
+            reference_genome=reference_genome,
+            atlas_df=atlas_df,
+            cell_types=cell_types,
+        )
 
     # ------------------------------------------------------------------
     # Factory: build atlas from labeled reads
@@ -365,6 +453,7 @@ class UXMMethylationAtlas(AbstractMethylationAtlas):
             atlas_df=atlas_df,
             ignore=ignore,
             include=include,
+            cell_types=cell_type_names,
         )
 
     # ------------------------------------------------------------------
@@ -382,23 +471,26 @@ class UXMMethylationAtlas(AbstractMethylationAtlas):
             )
 
     @classmethod
-    def _check_ctype_columns(cls, candidate_atlas: pd.DataFrame) -> None:
+    def _check_ctype_columns(
+        cls, candidate_atlas: pd.DataFrame, expected: Optional[List[str]] = None
+    ) -> None:
         """Check that all expected cell-type columns are present."""
-        missing_ctype_columns = set(cls.EXPECTED_CTYPE_COLUMNS) - set(
-            candidate_atlas.columns
-        )
+        expected = expected or cls.EXPECTED_CTYPE_COLUMNS
+        missing_ctype_columns = set(expected) - set(candidate_atlas.columns)
         if missing_ctype_columns:
             raise ValueError(
                 f"Atlas DataFrame is missing expected cell type columns: {missing_ctype_columns}. "
-                f"Expected cell type columns are: {cls.EXPECTED_CTYPE_COLUMNS}"
+                f"Expected cell type columns are: {expected}"
             )
 
     @classmethod
-    def _check_atlas_format(cls, candidate_atlas: pd.DataFrame) -> None:
+    def _check_atlas_format(
+        cls, candidate_atlas: pd.DataFrame, expected: Optional[List[str]] = None
+    ) -> None:
         """Check format including direction and cell-type columns."""
         super()._check_atlas_format(candidate_atlas)
         cls._check_direction(candidate_atlas)
-        cls._check_ctype_columns(candidate_atlas)
+        cls._check_ctype_columns(candidate_atlas, expected)
 
     @property
     def reference_genome(self) -> str:
