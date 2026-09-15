@@ -36,8 +36,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from syto.data import LOYFER_CELL_TYPE_MATCH_DICT
 from syto.data.sequencing.bam_processing import (
     BamRegionReader,
+    merge_fetch_intervals,
     process_bam_with_chunking,
-    resolve_merge_pairs,
+    read_bam_regions,
+    resolve_bam_parsing_params,
 )
 from syto.classification.prediction_aggregation import (
     aggregate_predictions_by_grg,
@@ -453,45 +455,13 @@ class InferencePipeline:
     def _bam_parsing_params(self) -> Dict[str, Any]:
         """Resolve every BAM-parsing knob shared by whole-file and chunked reads."""
         input_cfg = self.config["input"]
-        bam_cfg = self.config.get("bam_processing", {})
-
-        data_type = input_cfg.get("data_type")
-        if data_type == "wgbs":
-            require_flags = bam_cfg.get("require_flags", 3)
-        elif data_type == "ont":
-            self.logger.info(
-                f"ont is selected as data_type. The exclude_flags will not be used and require_flags is ovveriden to 0."
-            )
-            require_flags = 0
-        else:
-            raise ValueError(
-                "The pipeline only supports BAMS originating from WGBS or ONT"
-            )
-
-        chromosomes = input_cfg.get("chromosomes", "all")
-        if chromosomes == "all":
-            chromosomes = [f"chr{i}" for i in range(1, 23)]
-            chromosomes += ["chrX"]
-            chromosomes += ["chrY"]
-
-        return {
-            "bam_path": input_cfg["data_path"],
-            "reference_path": input_cfg.get("reference_path"),
-            "data_type": data_type,
-            "chromosomes": chromosomes,
-            "methyl_tr": bam_cfg.get("ont_methyl_tr", 122),
-            "unmethyl_tr": bam_cfg.get("ont_unmethyl_tr"),
-            "n_jobs": bam_cfg.get("n_jobs", 4),
-            "min_mapq": bam_cfg.get("min_mapq", 10),
-            "require_flags": require_flags,
-            "exclude_flags": bam_cfg.get("exclude_flags", 1796),
-            "min_cpgs": bam_cfg.get("min_cpgs", 1),
-            # ONT records sharing a read name are supplementary alignments, not
-            # mates, so merging is refused for ONT however the config reads.
-            "merge_pairs": resolve_merge_pairs(
-                data_type, bam_cfg.get("merge_pairs", True)
-            ),
-        }
+        return resolve_bam_parsing_params(
+            bam_path=input_cfg["data_path"],
+            data_type=input_cfg.get("data_type"),
+            bam_cfg=self.config.get("bam_processing", {}),
+            chromosomes=input_cfg.get("chromosomes", "all"),
+            reference_path=input_cfg.get("reference_path"),
+        )
 
     def _atlas_fetch_intervals(self) -> List[Tuple[str, int, int]]:
         """Merged 0-based intervals covering every atlas this run will consult.
@@ -513,23 +483,11 @@ class InferencePipeline:
             return []
 
         params = self._bam_parsing_params()
-        wanted = set(params["chromosomes"])
-        padding = self._mate_fetch_padding(params)
-
-        regions = pd.concat(frames, ignore_index=True)
-        regions = regions[regions["chr"].isin(wanted)]
-        regions = regions.sort_values(["chr", "start", "end"], kind="stable")
-
-        merged: List[Tuple[str, int, int]] = []
-        for chromosome, start, end in regions.itertuples(index=False):
-            # Atlas regions are 1-based inclusive; fetch wants 0-based half-open.
-            start = max(0, int(start) - 1 - padding)
-            end = int(end) + padding
-            if merged and merged[-1][0] == chromosome and start <= merged[-1][2]:
-                merged[-1] = (chromosome, merged[-1][1], max(merged[-1][2], end))
-            else:
-                merged.append((chromosome, start, end))
-        return merged
+        return merge_fetch_intervals(
+            pd.concat(frames, ignore_index=True),
+            params["chromosomes"],
+            self._mate_fetch_padding(params),
+        )
 
     def _mate_fetch_padding(self, params: Dict[str, Any]) -> int:
         """Extra span fetched around each region so mates come along.
@@ -603,45 +561,7 @@ class InferencePipeline:
         self, params: Dict[str, Any], intervals: List[Tuple[str, int, int]]
     ) -> Optional[pd.DataFrame]:
         """Parse only the reads overlapping the atlases, in one indexed pass."""
-        span = sum(end - start for _, start, end in intervals)
-        self.logger.info(
-            "Processing BAM: %s (%d merged atlas intervals, %.1f Mb; "
-            "set bam_processing.restrict_to_atlas: false to parse the whole file)",
-            params["bam_path"],
-            len(intervals),
-            span / 1e6,
-        )
-
-        def read(require_flags, exclude_flags):
-            with BamRegionReader(
-                bam_path=params["bam_path"],
-                data_type=params["data_type"],
-                reference_path=params["reference_path"],
-                methyl_tr=params["methyl_tr"],
-                unmethyl_tr=params["unmethyl_tr"],
-                min_mapq=params["min_mapq"],
-                require_flags=require_flags,
-                exclude_flags=exclude_flags,
-                min_cpgs=params["min_cpgs"],
-                merge_pairs=params["merge_pairs"],
-            ) as reader:
-                return reader.read_regions(intervals)
-
-        df = read(params["require_flags"], params["exclude_flags"])
-        if not len(df):
-            self.logger.warning(
-                "The dataset has 0 reads after applying all samtools filters. "
-                "The attempt will be made to reparse .bam without applying flag filters"
-            )
-            df = read(None, None)
-        if not len(df):
-            self.logger.warning(
-                "Setting exclude_flags=None and require_flags=None didn't help. "
-                "The processing of this file will be terminated."
-            )
-            return None
-
-        return df
+        return read_bam_regions(params, intervals, self.logger)
 
     def _load_parsed_reads(self) -> pd.DataFrame:
         """Load pre-parsed reads from a pickle file."""

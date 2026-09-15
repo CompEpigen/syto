@@ -85,6 +85,48 @@ def resolve_unmethyl_tr(methyl_tr, unmethyl_tr):
     return unmethyl_tr
 
 
+def resolve_bam_parsing_params(
+    bam_path, data_type, bam_cfg, chromosomes="all", reference_path=None
+):
+    """Resolve every BAM-parsing knob shared by whole-file and region reads.
+
+    ``bam_cfg`` is a ``bam_processing`` config block; absent keys fall back to
+    the SAMtools-like defaults of :func:`process_bam_with_chunking`.
+    """
+    if data_type == DataType.WGBS.value:
+        require_flags = bam_cfg.get("require_flags", 3)
+    elif data_type == DataType.ONT.value:
+        logger.info(
+            "ont is selected as data_type. The exclude_flags will not be used "
+            "and require_flags is ovveriden to 0."
+        )
+        require_flags = 0
+    else:
+        raise ValueError("The pipeline only supports BAMS originating from WGBS or ONT")
+
+    if chromosomes == "all":
+        chromosomes = [f"chr{i}" for i in range(1, 23)]
+        chromosomes += ["chrX"]
+        chromosomes += ["chrY"]
+
+    return {
+        "bam_path": bam_path,
+        "reference_path": reference_path,
+        "data_type": data_type,
+        "chromosomes": chromosomes,
+        "methyl_tr": bam_cfg.get("ont_methyl_tr", 122),
+        "unmethyl_tr": bam_cfg.get("ont_unmethyl_tr"),
+        "n_jobs": bam_cfg.get("n_jobs", 4),
+        "min_mapq": bam_cfg.get("min_mapq", 10),
+        "require_flags": require_flags,
+        "exclude_flags": bam_cfg.get("exclude_flags", 1796),
+        "min_cpgs": bam_cfg.get("min_cpgs", 1),
+        # ONT records sharing a read name are supplementary alignments, not
+        # mates, so merging is refused for ONT however the config reads.
+        "merge_pairs": resolve_merge_pairs(data_type, bam_cfg.get("merge_pairs", True)),
+    }
+
+
 # ============================================================
 # Data classes
 # ============================================================
@@ -567,8 +609,12 @@ def _extract_cpgs_wgbs(read, ref_fasta):
 
     read_length = len(ref_seq)
 
-    # Scan for CpGs and infer methylation from bisulfite conversion
-    if read.is_reverse:
+    # Scan for CpGs and infer methylation from bisulfite conversion.  The scan
+    # follows the strand of origin: in a
+    # directional paired-end library read2 maps opposite to read1 but carries
+    # the same conversion pattern.
+    from_bottom_strand = read.is_reverse != (read.is_paired and read.is_read2)
+    if from_bottom_strand:
         pos_in_read, meth_states = cpg_scan_wgbs_reverse(
             ref_seq.encode(), read_seq.encode()
         )
@@ -953,6 +999,90 @@ class BamRegionReader:
         if self.merge_pairs and len(df) > 0:
             df = merge_paired_reads(df, verbose=False)
         return df
+
+
+def merge_fetch_intervals(regions, chromosomes, padding=0):
+    """Merged 0-based half-open fetch intervals covering *regions*.
+
+    Parameters
+    ----------
+    regions : pd.DataFrame
+        ``chr``, ``start``, ``end`` columns, 1-based inclusive (atlas layout).
+    chromosomes : iterable of str
+        Only regions on these chromosomes are kept.
+    padding : int
+        Extra span added on both sides of each region before merging.
+
+    Returns
+    -------
+    list of (chromosome, start, end)
+        Sorted, non-overlapping intervals ready for
+        :meth:`BamRegionReader.read_regions`.
+    """
+    wanted = set(chromosomes)
+    regions = regions[["chr", "start", "end"]]
+    regions = regions[regions["chr"].isin(wanted)]
+    regions = regions.sort_values(["chr", "start", "end"], kind="stable")
+
+    merged = []
+    for chromosome, start, end in regions.itertuples(index=False):
+        # Atlas regions are 1-based inclusive; fetch wants 0-based half-open.
+        start = max(0, int(start) - 1 - padding)
+        end = int(end) + padding
+        if merged and merged[-1][0] == chromosome and start <= merged[-1][2]:
+            merged[-1] = (chromosome, merged[-1][1], max(merged[-1][2], end))
+        else:
+            merged.append((chromosome, start, end))
+    return merged
+
+
+def read_bam_regions(params, intervals, log=None):
+    """Parse only the reads overlapping *intervals*, in one indexed pass.
+
+    ``params`` is the dict from :func:`resolve_bam_parsing_params`.  When the
+    configured flag filters leave no reads, the BAM is re-read once without
+    them.  Returns ``None`` when even that yields nothing.
+    """
+    log = log or logger
+    span = sum(end - start for _, start, end in intervals)
+    log.info(
+        "Processing BAM: %s (%d merged atlas intervals, %.1f Mb; "
+        "set bam_processing.restrict_to_atlas: false to parse the whole file)",
+        params["bam_path"],
+        len(intervals),
+        span / 1e6,
+    )
+
+    def read(require_flags, exclude_flags):
+        with BamRegionReader(
+            bam_path=params["bam_path"],
+            data_type=params["data_type"],
+            reference_path=params["reference_path"],
+            methyl_tr=params["methyl_tr"],
+            unmethyl_tr=params["unmethyl_tr"],
+            min_mapq=params["min_mapq"],
+            require_flags=require_flags,
+            exclude_flags=exclude_flags,
+            min_cpgs=params["min_cpgs"],
+            merge_pairs=params["merge_pairs"],
+        ) as reader:
+            return reader.read_regions(intervals)
+
+    df = read(params["require_flags"], params["exclude_flags"])
+    if not len(df):
+        log.warning(
+            "The dataset has 0 reads after applying all samtools filters. "
+            "The attempt will be made to reparse .bam without applying flag filters"
+        )
+        df = read(None, None)
+    if not len(df):
+        log.warning(
+            "Setting exclude_flags=None and require_flags=None didn't help. "
+            "The processing of this file will be terminated."
+        )
+        return None
+
+    return df
 
 
 # ============================================================

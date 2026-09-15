@@ -21,6 +21,8 @@ class FakeRead:
         flag=3,
         is_reverse=False,
         is_unmapped=False,
+        is_paired=False,
+        is_read2=False,
         tags=None,
         forward_sequence="ACGCGT",
         query_sequence=None,
@@ -36,6 +38,8 @@ class FakeRead:
         self.flag = flag
         self.is_reverse = is_reverse
         self.is_unmapped = is_unmapped
+        self.is_paired = is_paired
+        self.is_read2 = is_read2
         self.tags = tags or {}
         self._forward_sequence = forward_sequence
         self.query_sequence = (
@@ -450,6 +454,44 @@ class TestProcessSingleReadWgbs(unittest.TestCase):
         self.assertEqual(result[0]["methylation_encoding"], "2212")
         self.assertEqual(result[0]["meth_states"], [1])
         self.assertTrue(result[0]["is_reverse"])
+
+    def test_scanner_follows_strand_of_origin_for_paired_mates(self):
+        """Read2 carries its mate's conversion pattern, so orientation is flipped.
+
+        Directional PE libraries: flags 99/147 come from the original top
+        strand (C->T, forward scan), flags 83/163 from the original bottom
+        strand (G->A, reverse scan).
+        """
+        cases = [
+            # (description, is_reverse, is_read2, expected scanner)
+            ("99 R1 forward", False, False, "cpg_scan_wgbs_forward"),
+            ("147 R2 reverse", True, True, "cpg_scan_wgbs_forward"),
+            ("83 R1 reverse", True, False, "cpg_scan_wgbs_reverse"),
+            ("163 R2 forward", False, True, "cpg_scan_wgbs_reverse"),
+        ]
+        for description, is_reverse, is_read2, expected in cases:
+            with self.subTest(description):
+                read = build_read(
+                    reference_end=104,
+                    is_reverse=is_reverse,
+                    is_paired=True,
+                    is_read2=is_read2,
+                )
+                ref_fasta = FakeFastaFile({("chr1", 100, 105): "AACGA"})
+                with patch.object(
+                    bp, "clean_cigar_sequence", return_value="AATG"
+                ), patch.object(
+                    bp, "cpg_scan_wgbs_forward", return_value=([2], [0])
+                ) as forward_mock, patch.object(
+                    bp, "cpg_scan_wgbs_reverse", return_value=([2], [0])
+                ) as reverse_mock:
+                    bp.process_single_read(read, "wgbs", ref_fasta=ref_fasta)
+
+                called = {
+                    "cpg_scan_wgbs_forward": forward_mock.called,
+                    "cpg_scan_wgbs_reverse": reverse_mock.called,
+                }
+                self.assertEqual([k for k, v in called.items() if v], [expected])
 
     def test_applies_min_cpg_filter_after_wgbs_scan(self):
         """Skip WGBS reads that do not yield enough CpG calls after scanning."""
@@ -922,6 +964,63 @@ class TestMergeMethylationEncodings(unittest.TestCase):
         self.assertEqual(stats["unmethylated"], 1)
         self.assertEqual(stats["total"], 3)
         self.assertAlmostEqual(stats["methylation_rate"], 2 / 3)
+
+
+class TestMergeFetchIntervals(unittest.TestCase):
+    """Test conversion of atlas regions into merged fetch intervals."""
+
+    def test_converts_pads_merges_and_filters_chromosomes(self):
+        """1-based inclusive regions become merged 0-based half-open intervals."""
+        regions = pd.DataFrame(
+            {
+                "chr": ["chr1", "chr1", "chr1", "chr2", "chrUn"],
+                "start": [101, 151, 1001, 11, 1],
+                "end": [200, 300, 1100, 20, 10],
+            }
+        )
+
+        self.assertEqual(
+            bp.merge_fetch_intervals(regions, ["chr1", "chr2"]),
+            [("chr1", 100, 300), ("chr1", 1000, 1100), ("chr2", 10, 20)],
+        )
+        # Padding bridges the gap on chr1 and is clipped at position 0.
+        self.assertEqual(
+            bp.merge_fetch_intervals(regions, ["chr1", "chr2"], padding=400),
+            [("chr1", 0, 1500), ("chr2", 0, 420)],
+        )
+
+
+class TestReadBamRegions(unittest.TestCase):
+    """Test the region-read entry point and its flag-filter fallback."""
+
+    PARAMS = bp.resolve_bam_parsing_params(
+        bam_path="sample.bam",
+        data_type="wgbs",
+        bam_cfg={"merge_pairs": False},
+        reference_path="ref.fa",
+    )
+
+    def test_retries_without_flag_filters_when_nothing_passes(self):
+        """An empty filtered read triggers exactly one unfiltered re-read."""
+        reads = pd.DataFrame({"read_name": ["r1"]})
+        with patch.object(bp, "BamRegionReader") as reader_cls:
+            reader = reader_cls.return_value.__enter__.return_value
+            reader.read_regions.side_effect = [pd.DataFrame(), reads]
+            result = bp.read_bam_regions(self.PARAMS, [("chr1", 0, 10)])
+
+        self.assertIs(result, reads)
+        flags = [
+            (call.kwargs["require_flags"], call.kwargs["exclude_flags"])
+            for call in reader_cls.call_args_list
+        ]
+        self.assertEqual(flags, [(3, 1796), (None, None)])
+
+    def test_returns_none_when_even_unfiltered_read_is_empty(self):
+        """No reads at all ends the file with None rather than an empty frame."""
+        with patch.object(bp, "BamRegionReader") as reader_cls:
+            reader = reader_cls.return_value.__enter__.return_value
+            reader.read_regions.return_value = pd.DataFrame()
+            self.assertIsNone(bp.read_bam_regions(self.PARAMS, [("chr1", 0, 10)]))
 
 
 if __name__ == "__main__":
