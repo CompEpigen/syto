@@ -23,12 +23,13 @@ from syto.data.dataset_build.buckets import build_region_index
 from syto.data.dataset_build.stage import stage_bam_file, stage_file
 from syto.data.dataset_build.splits import plan_splits
 from syto.data.dataset_build.finalize import finalize_bucket
-from syto.data.dataset_build.filters import staged_counts, load_region_names
-from syto.data.labelers.archetype_labeler import ArchetypeLabeler
-from syto.data.sequencing.bam_processing import (
-    merge_fetch_intervals,
-    resolve_bam_parsing_params,
+from syto.data.dataset_build.filters import (
+    staged_counts,
+    load_region_names,
+    load_region_annotations,
 )
+from syto.data.labelers.archetype_labeler import ArchetypeLabeler
+from syto.data.sequencing.bam_processing import resolve_bam_parsing_params
 
 
 def _stage_worker(
@@ -78,7 +79,7 @@ def _stage_bam_worker(
     staged_dir,
     counts_dir,
     bam_params,
-    intervals,
+    padding,
     cell_type_match_dict,
 ):
     """BAM counterpart of :func:`_stage_worker`; takes a ``(path, ctype)`` pair."""
@@ -98,7 +99,7 @@ def _stage_bam_worker(
         staged_dir,
         counts_dir,
         bam_params=bam_params,
-        intervals=intervals,
+        padding=padding,
         cell_type_match_dict=cell_type_match_dict,
     )
 
@@ -178,13 +179,10 @@ class DatasetBuildPipeline:
                 if bam_params["merge_pairs"]
                 else 0
             )
-            intervals = merge_fetch_intervals(
-                atlas.atlas, bam_params["chromosomes"], padding
-            )
             work = partial(
                 _stage_bam_worker,
                 bam_params=bam_params,
-                intervals=intervals,
+                padding=padding,
                 **common,
             )
         else:
@@ -243,6 +241,23 @@ class DatasetBuildPipeline:
         region_names = (
             load_region_names(finalize_atlas_path) if finalize_atlas_path else None
         )
+
+        # Atlas columns to carry onto every read, e.g. {cluster: cluster_label}
+        # for a classifier head that attends per customly named block
+        annotation_columns = self.config.get("region_annotations") or {}
+        region_annotations = None
+        if annotation_columns:
+            region_annotations, mappings = load_region_annotations(
+                finalize_atlas_path or self.config["atlas_path"], annotation_columns
+            )
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+            (self.output_dir / "region_annotations.json").write_text(
+                json.dumps(mappings, indent=2)
+            )
+            for dest, mapping in mappings.items():
+                self.logger.info(
+                    "Region annotation %r: %d distinct value(s)", dest, len(mapping)
+                )
         filtering_active = region_names is not None or bool(min_pattern_length)
 
         if filtering_active:
@@ -281,6 +296,7 @@ class DatasetBuildPipeline:
                 signature_config=signature_config,
                 global_prior=global_prior,
                 region_names=region_names,
+                region_annotations=region_annotations,
                 min_pattern_length=min_pattern_length,
                 pattern_column=pattern_column,
                 fit_splits=fit_splits,

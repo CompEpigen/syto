@@ -346,10 +346,14 @@ class TestDatasetBuildFromBams(unittest.TestCase):
                 summary = DatasetBuildPipeline(cfg, logging.getLogger("t")).run()
 
             self.assertEqual(summary["stage"]["files"], 6)
-            params, intervals = read_mock.call_args.args
+            params, _ = read_mock.call_args.args
             self.assertEqual(params["require_flags"], 3)
-            # Atlas regions padded by 100 (still disjoint), chr prefix stripped.
-            self.assertEqual(intervals, [("1", 900, 1110), ("1", 1900, 2110)])
+            # One padded fetch per region bucket, with the chr prefix stripped.
+            self.assertEqual(read_mock.call_count, 6 * 2)
+            self.assertEqual(
+                [call.args[1] for call in read_mock.call_args_list[:2]],
+                [[("1", 900, 1110)], [("1", 1900, 2110)]],
+            )
 
             finals = list((d / "out" / "final").rglob("*.parquet"))
             out = pd.concat([pd.read_parquet(p) for p in finals], ignore_index=True)
@@ -359,3 +363,28 @@ class TestDatasetBuildFromBams(unittest.TestCase):
                 {f: [0 if g == "Healthy CSF" else 1] for f, g in samples.items()},
             )
             self.assertTrue(set(out["split"]).issubset({"train", "valid", "test"}))
+
+
+class TestRegionAnnotations(unittest.TestCase):
+    """Atlas columns can be carried onto reads for a classifier head to key on."""
+
+    def test_annotation_is_dense_encoded_and_mapping_saved(self):
+        from syto.data.dataset_build.filters import load_region_annotations
+
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            atlas = pd.DataFrame(
+                {
+                    "name": ["r0", "r1", "r2"],
+                    # deliberately non-contiguous: an embedding head needs 0..K-1
+                    "cluster": [7, 42, 7],
+                }
+            )
+            atlas.to_csv(d / "atlas.tsv", sep="\t", index=False)
+
+            table, mappings = load_region_annotations(
+                str(d / "atlas.tsv"), {"cluster": "cluster_label"}
+            )
+            self.assertEqual(list(table["cluster_label"]), [0, 1, 0])
+            self.assertEqual(mappings["cluster_label"], {0: 7, 1: 42})
+            self.assertEqual(sorted(table.columns), ["cluster_label", "name"])
