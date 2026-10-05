@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-10-05
+
+### Added
+
+- `UXMMethylationAtlas.from_block_table` builds atlas regions from one or more
+  block tables: `wgbstools find_markers` output (`#chr` and `region` are read
+  as `chr` and `name`) or post-processed tables whose target and direction
+  live in custom columns (`target_column`, `direction_column`; `hypo`/`hyper`
+  are accepted for `U`/`M`). Extra columns such as cluster ids or scores are
+  kept in the atlas.
+- `region_annotations` option for the `build_dataset` finalize phase: maps
+  atlas columns to dataset columns (e.g. `cluster: cluster_label`), encoded as
+  integers starting at 0 and written onto every read. The code-to-value
+  mapping is saved as `region_annotations.json` in the output directory.
+- The pseudobulk pipeline accepts `atlas_cell_types`, for atlases whose groups
+  are not the 39 Loyfer cell types, and passes `classifier_config.num_grg_labels`
+  to the classifier, so checkpoints trained with a different number of GRG
+  groups load.
+- BAM parsing resolves contig names whichever way the `chr` prefix is spelled,
+  so hs37d5-named BAMs (`1`) work against `chrN` atlases and hg19-named
+  reference FASTAs in inference as well as in dataset building.
+
+### Changed
+
+- `build_dataset` stages a BAM one region bucket at a time instead of in a
+  single pass, so only one bucket's reads are held in memory. As a result, a
+  BAM sample's `n_reads` counts staged rows rather than every parsed read, and
+  `n_in` counts a read once per bucket that fetches it.
+- `UXMMethylationAtlas.from_reads` keeps the extra region columns of `markers`
+  (e.g. cluster ids), so they stay available for filtering and read
+  annotation.
+
+### Deprecated
+
+- `UXMMethylationAtlas.from_wgbstools_markers` is now an alias of
+  `from_block_table` and warns on use. Its cell-type columns are left empty
+  instead of being estimated from find_markers' mean betas; build the atlas
+  with `from_block_table`, then fill the columns from reads with `from_reads`.
+
+### Fixed
+
+- WGBS reads were silently dropped when the reference FASTA and the BAM
+  spelled contig names differently (e.g. hs37d5 BAM, hg19 FASTA): every
+  reference lookup failed and each read was discarded.
+- Inference on a BAM that yields no reads now stops with an error naming the
+  likely causes (unsorted or unindexed BAM, contigs not overlapping the atlas,
+  wrong `input.reference_path`) instead of failing further downstream.
+- MethylBERT training with `grg_label_column` pointing at a column other than
+  `dmr_ctype_label` now also loads the `grg_ctype_label` column from columnar
+  datasets.
+
+
 ## [1.1.0] - 2026-09-15
 
 ### Added
@@ -127,7 +179,8 @@ First tagged release (as methyldl).
 - Bootstrap confidence intervals.
 - End-to-end inference integration.
 
-[Unreleased]: https://github.com/CompEpigen/syto/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/CompEpigen/syto/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/CompEpigen/syto/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/CompEpigen/syto/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/CompEpigen/syto/compare/v0.5.0...v1.0.0
 [0.5.0]: https://github.com/CompEpigen/syto/releases/tag/v0.5.0
