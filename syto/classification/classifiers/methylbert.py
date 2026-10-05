@@ -1087,6 +1087,10 @@ class MethylBert(AbstractReadClassifier):
         cols = ["input_ids", "methylation_ids", "original_label"]
         if self.num_grg_labels is not None:
             cols.append(training.get("grg_label_column", "dmr_ctype_label"))
+        # prepare_methylbert_list() always reads the ctype column too, which is
+        # a different column whenever grg_label_column points elsewhere (e.g. a
+        # block cluster). Declare it so the columnar loader projects it in.
+        cols.append(training.get("grg_ctype_label", "dmr_ctype_label"))
         return cols
 
     def mlflow_fit_params(self) -> dict:
