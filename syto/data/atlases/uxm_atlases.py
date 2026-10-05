@@ -1,6 +1,7 @@
 """ """
 
 import logging
+import warnings
 from typing import Dict, List, Optional, Union
 
 import numpy as np
@@ -136,7 +137,7 @@ class UXMMethylationAtlas(AbstractMethylationAtlas):
         cell_types : list of str, optional
             Cell-type (group) columns this atlas carries.  Defaults to the
             Loyfer ``EXPECTED_CTYPE_COLUMNS``; pass the group names for atlases
-            built from other marker sets (e.g. :meth:`from_wgbstools_markers`).
+            built from other marker sets (e.g. :meth:`from_block_table`).
         """
         if atlas_path is not None and atlas_df is not None:
             raise ValueError("Only one of atlas_path or atlas_df should be provided.")
@@ -152,6 +153,7 @@ class UXMMethylationAtlas(AbstractMethylationAtlas):
         self._reference_genome = reference_genome
         expected_cells = list(cell_types or self.EXPECTED_CTYPE_COLUMNS)
         self._check_atlas_format(self._atlas, expected_cells)
+        self._cell_types: List[str] = expected_cells
 
         # Keep the atlas sorted by genomic position for efficient sweep queries
         self._atlas = self._atlas.sort_values(["chr", "start", "end"]).reset_index(
@@ -170,79 +172,109 @@ class UXMMethylationAtlas(AbstractMethylationAtlas):
         ]
 
     # ------------------------------------------------------------------
-    # Factory: build atlas from wgbstools find_markers output
+    # Factory: build atlas regions from block / marker tables
     # ------------------------------------------------------------------
 
+    DIRECTION_ALIASES = {"hypo": "U", "hyper": "M", "U": "U", "M": "M"}
+
     @classmethod
-    def from_wgbstools_markers(
+    def from_block_table(
         cls,
-        marker_paths: List[str],
+        blocks_paths: Union[str, List[str]],
         atlas_name: str,
         reference_genome: str,
         *,
+        target_column: str = "target",
+        direction_column: str = "direction",
         chrom_prefix: str = "chr",
         output_path: Optional[str] = None,
         sep: str = "\t",
     ) -> "UXMMethylationAtlas":
-        """Build an atlas from ``wgbstools find_markers`` ``Markers.*.bed`` files.
+        """Build the region set of a UXM atlas from one or more block tables.
 
-        find_markers writes one file per target group, with the region
-        metadata (``#chr``, ``start``, ``end``, ``startCpG``, ``endCpG``,
-        ``target``, ``region``, ``direction``) plus the mean beta of the target
-        (``tg_mean``) and of the background (``bg_mean``).  The files are
-        concatenated, ``chrom_prefix`` is prepended to chromosome names and
-        region ids, and the groups found in ``target`` become the atlas
-        cell-type columns.
+        The tables are typically ``wgbstools find_markers`` output (one
+        ``Markers.<group>.bed`` per target group, concatenated here), which
+        already carries every region attribute (``#chr``, ``start``, ``end``,
+        ``startCpG``, ``endCpG``, ``region``, ``target``, ``direction``);
+        ``region`` is taken as the atlas ``name``.  The target and direction
+        are read from ``target_column`` / ``direction_column``, so tables
+        post-processed with their own assignment (e.g. a block cluster's
+        dominant group and its ``hypo``/``hyper`` direction) work too.
+        Columns beyond the atlas schema (cluster id, scores, find_markers
+        statistics) are carried through, so a later run can filter regions or
+        annotate reads on them.
 
-        find_markers does not report per-group read fractions, so the
-        cell-type columns are approximated from the means: the region's own
-        target gets ``tg_mean`` and every other group ``bg_mean``, converted
-        to the unmethylated fraction (``1 - mean``) for ``direction == "U"``.
-        Region-level consumers (read overlap, dataset staging) never read
-        these values; for exact fractions pass this atlas as ``markers`` to
-        :meth:`from_reads`.
+        Only regions are defined here: the cell-type columns (one per
+        distinct target) are left empty (NaN).  That is enough for read
+        staging, but UXM deconvolution needs the per-cell-type U/M read
+        fractions, which only reads provide — pass the result as ``markers``
+        to :meth:`from_reads` to fill them.
 
         Parameters
         ----------
-        marker_paths : list of str
-            ``Markers.<group>.bed`` files, one per target group.
+        blocks_paths : str or list of str
+            Block table(s) with ``chr`` (or ``#chr``), ``start``, ``end``,
+            ``startCpG``, ``endCpG``, ``name`` (or ``region``), plus the target
+            and direction columns.  Several tables are concatenated; a region
+            listed more than once keeps its first occurrence.
         atlas_name, reference_genome
             Passed through to the constructor.
+        target_column : str
+            Column holding each region's target group.
+        direction_column : str
+            Column holding each region's direction, ``U``/``M`` or
+            ``hypo``/``hyper``.
         chrom_prefix : str
-            Prepended to chromosome names, which the atlas requires as ``chrN``.
+            Prepended to chromosome names and region names, as the atlas
+            requires ``chrN``.
         output_path : str, optional
             If given, write the resulting atlas TSV to this path.
         sep : str
-            Column separator of the marker files and the optional output.
+            Column separator of the block tables and the optional output.
         """
-        if not marker_paths:
-            raise ValueError("marker_paths must list at least one Markers.*.bed file.")
-        markers = pd.concat(
-            [pd.read_csv(path, sep=sep) for path in marker_paths], ignore_index=True
-        )
-        markers = markers.rename(columns={"#chr": "chr"})
-        markers["chr"] = chrom_prefix + markers["chr"].astype(str)
-        markers["name"] = chrom_prefix + markers["region"].astype(str)
-        markers = markers.drop_duplicates(subset="name").reset_index(drop=True)
+        if isinstance(blocks_paths, str):
+            blocks_paths = [blocks_paths]
+        if not blocks_paths:
+            raise ValueError("blocks_paths must list at least one block table.")
+        blocks = pd.concat(
+            [pd.read_csv(path, sep=sep) for path in blocks_paths], ignore_index=True
+        ).rename(columns={"#chr": "chr"})
+        if "name" not in blocks.columns and "region" in blocks.columns:
+            blocks = blocks.rename(columns={"region": "name"})
+        blocks["chr"] = chrom_prefix + blocks["chr"].astype(str)
+        blocks["name"] = chrom_prefix + blocks["name"].astype(str)
+        blocks = blocks.drop_duplicates(subset="name").reset_index(drop=True)
 
-        cell_types = sorted(markers["target"].unique())
-        is_unmethylated = (markers["direction"] == "U").to_numpy()
-        atlas_df = markers[cls._MARKER_COLUMNS].copy()
-        for cell_type in cell_types:
-            mean = np.where(
-                markers["target"] == cell_type, markers["tg_mean"], markers["bg_mean"]
+        unknown = set(blocks[direction_column]) - set(cls.DIRECTION_ALIASES)
+        if unknown:
+            raise ValueError(
+                f"Unknown {direction_column} value(s): {unknown}. "
+                f"Expected one of {sorted(cls.DIRECTION_ALIASES)}."
             )
-            atlas_df[cell_type] = np.round(np.where(is_unmethylated, 1 - mean, mean), 3)
+        blocks["direction"] = blocks[direction_column].map(cls.DIRECTION_ALIASES)
+        blocks["target"] = blocks[target_column]
+        cell_types = sorted(blocks["target"].unique())
+
+        extras = [
+            c
+            for c in blocks.columns
+            if c not in cls._MARKER_COLUMNS + [target_column, direction_column]
+        ]
+        atlas_df = blocks[cls._MARKER_COLUMNS + extras].copy()
+        for cell_type in cell_types:
+            atlas_df[cell_type] = np.nan
 
         _module_logger.info(
-            "UXM atlas '%s' from %d marker file(s): %d region(s) · groups: %s",
+            "UXM atlas regions '%s' from %d table(s): %d block(s) · "
+            "%d target(s): %s (cell-type columns empty; fill them with from_reads)",
             atlas_name,
-            len(marker_paths),
+            len(blocks_paths),
             len(atlas_df),
+            len(cell_types),
             ", ".join(cell_types),
         )
         if output_path is not None:
-            atlas_df.to_csv(output_path, sep=sep, index=False)
+            atlas_df.to_csv(output_path, sep=sep, index=False, na_rep="NA")
 
         return cls(
             atlas_name=atlas_name,
@@ -250,6 +282,19 @@ class UXMMethylationAtlas(AbstractMethylationAtlas):
             atlas_df=atlas_df,
             cell_types=cell_types,
         )
+
+    @classmethod
+    def from_wgbstools_markers(
+        cls, marker_paths: List[str], atlas_name: str, reference_genome: str, **kwargs
+    ) -> "UXMMethylationAtlas":
+        """Deprecated alias of :meth:`from_block_table`.
+        """
+        warnings.warn(
+            "from_wgbstools_markers is deprecated; use from_block_table",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return cls.from_block_table(marker_paths, atlas_name, reference_genome, **kwargs)
 
     # ------------------------------------------------------------------
     # Factory: build atlas from labeled reads
@@ -314,8 +359,10 @@ class UXMMethylationAtlas(AbstractMethylationAtlas):
         markers : UXMMethylationAtlas | pd.DataFrame | str
             Source of the region metadata (``chr``, ``start``, ``end``,
             ``startCpG``, ``endCpG``, ``target``, ``name``, ``direction``).
-            Accepts an existing atlas object, a DataFrame, or a path to a TSV.
-            Any pre-existing cell-type columns are ignored and recomputed.
+            Accepts an existing atlas object, a DataFrame, or a path to a TSV,
+            e.g. the region set from :meth:`from_block_table`.  Pre-existing
+            cell-type columns are dropped and recomputed; any other columns
+            (cluster ids, scores) are carried through.
         min_cpgs : int
             Minimum called CpGs a read must cover in the region to be counted.
         methyl_tr, unmethyl_tr : float
@@ -351,8 +398,22 @@ class UXMMethylationAtlas(AbstractMethylationAtlas):
             raise ValueError(
                 f"markers is missing required region columns: {missing_marker_cols}"
             )
+
+        int_labels: Dict[int, str] = {int(k): v for k, v in labels_dict.items()}
+        cell_type_names = list(dict.fromkeys(int_labels.values()))
+
+        # Region attributes beyond the schema (e.g. a block's cluster) are
+        # kept; old cell-type columns are dropped and recomputed below.
+        old_cell_types = set(cell_type_names) | set(marker_df["target"])
+        if isinstance(markers, cls):
+            old_cell_types |= set(markers._cell_types)
+        extras = [
+            c
+            for c in marker_df.columns
+            if c not in cls._MARKER_COLUMNS and c not in old_cell_types
+        ]
         region_df = (
-            marker_df[cls._MARKER_COLUMNS]
+            marker_df[cls._MARKER_COLUMNS + extras]
             .drop_duplicates(subset="name")
             .reset_index(drop=True)
         )
@@ -363,9 +424,6 @@ class UXMMethylationAtlas(AbstractMethylationAtlas):
         missing = required - set(reads.columns)
         if missing:
             raise ValueError(f"reads DataFrame is missing required columns: {missing}")
-
-        int_labels: Dict[int, str] = {int(k): v for k, v in labels_dict.items()}
-        cell_type_names = list(dict.fromkeys(int_labels.values()))
 
         _module_logger.info(
             "Building UXM atlas '%s' from %d reads over %d region(s) · "
@@ -431,7 +489,7 @@ class UXMMethylationAtlas(AbstractMethylationAtlas):
         wide = wide.reset_index()
 
         atlas_df = region_df.merge(wide, on="name", how="left")
-        atlas_df = atlas_df[cls._MARKER_COLUMNS + cell_type_names]
+        atlas_df = atlas_df[cls._MARKER_COLUMNS + extras + cell_type_names]
 
         n_covered = int(agg["value"].notna().sum())
         _module_logger.info(

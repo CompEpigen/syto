@@ -186,6 +186,9 @@ class PseudoBulkPipeline:
             reference_genome="hg38" if "hg38" in atlas_path else "hg19",
             atlas_path=atlas_path,
             sep="\t",
+            # Atlases built from other marker sets carry their own groups
+            # instead of the 39 Loyfer cell types (see from_block_table).
+            cell_types=self.config.get("atlas_cell_types"),
         )
 
         splits_data = prepare_splits_for_pseudobulk(
@@ -235,6 +238,15 @@ class PseudoBulkPipeline:
                 soft_labels=classifier_config.get("soft_labels", True),
                 dismir_flavor=classifier_config.get("dismir_flavor", "lstm"),
                 batch_size=classifier_config.get("batch_size"),
+                # The GRG attention head sizes an embedding by this, so a
+                # checkpoint trained on a different number of groups fails to
+                # load without it. Passed only when configured: the classifiers
+                # read it with a default, which an explicit None would defeat.
+                **(
+                    {"num_grg_labels": classifier_config["num_grg_labels"]}
+                    if classifier_config.get("num_grg_labels") is not None
+                    else {}
+                ),
             )
         return self._classifier
 
