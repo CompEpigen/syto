@@ -72,6 +72,14 @@ class FakeAlignmentFile:
         self.references = tuple(references or [])
         self.lengths = tuple(lengths or [])
         self._fetch_reads = list(fetch_reads or [])
+        self.fetched = []
+
+    def has_index(self):
+        """Report an index so region-driven reading is allowed."""
+        return True
+
+    def close(self):
+        """Release the fake handle."""
 
     def __enter__(self):
         """Enter the fake context manager."""
@@ -87,6 +95,9 @@ class FakeAlignmentFile:
 
     def fetch(self, chrom, start, end):
         """Return the configured reads for a genomic fetch call."""
+        if self.references and chrom not in self.references:
+            raise ValueError(f"invalid contig {chrom}")
+        self.fetched.append((chrom, start, end))
         return iter(self._fetch_reads)
 
 
@@ -1021,6 +1032,91 @@ class TestReadBamRegions(unittest.TestCase):
             reader = reader_cls.return_value.__enter__.return_value
             reader.read_regions.return_value = pd.DataFrame()
             self.assertIsNone(bp.read_bam_regions(self.PARAMS, [("chr1", 0, 10)]))
+
+
+class TestMatchContigName(unittest.TestCase):
+    """Test resolution of contig names across chr-prefixed and bare headers."""
+
+    def test_returns_the_name_unchanged_when_the_header_already_has_it(self):
+        """An exact hit wins before any prefix juggling is attempted."""
+        self.assertEqual(bp.match_contig_name("chr1", {"chr1", "1"}), "chr1")
+
+    def test_strips_the_chr_prefix_for_a_bare_header(self):
+        """An hg19 atlas region resolves against an hs37d5 BAM header."""
+        self.assertEqual(bp.match_contig_name("chr1", {"1", "2", "MT"}), "1")
+
+    def test_adds_the_chr_prefix_for_a_prefixed_header(self):
+        """A bare request resolves against a UCSC-style header."""
+        self.assertEqual(bp.match_contig_name("X", {"chrX"}), "chrX")
+
+    def test_returns_none_when_the_contig_is_absent_under_either_spelling(self):
+        """A genuinely missing contig is reported, not silently aliased."""
+        self.assertIsNone(bp.match_contig_name("chr23", {"chr1", "1"}))
+
+
+class TestContigAliasedFasta(unittest.TestCase):
+    """Test the reference FASTA wrapper that tolerates prefix mismatches."""
+
+    def test_translates_the_contig_name_on_fetch(self):
+        """A bare BAM contig reaches a chr-prefixed FASTA."""
+        inner = FakeFastaFile({("chr1", 100, 107): "ACGTAAA"})
+        inner.references = ("chr1", "chr2")
+        fasta = bp.ContigAliasedFasta(inner)
+
+        self.assertEqual(fasta.fetch("1", 100, 107), "ACGTAAA")
+
+    def test_raises_when_the_contig_is_absent_under_either_spelling(self):
+        """An unresolvable contig raises rather than returning a wrong slice."""
+        inner = FakeFastaFile()
+        inner.references = ("chr1",)
+        fasta = bp.ContigAliasedFasta(inner)
+
+        with self.assertRaises(KeyError):
+            fasta.fetch("chrUn", 0, 10)
+
+    def test_closes_the_wrapped_handle(self):
+        """Closing the wrapper releases the underlying FASTA."""
+        inner = FakeFastaFile()
+        inner.references = ("chr1",)
+        bp.ContigAliasedFasta(inner).close()
+        self.assertTrue(inner.closed)
+
+
+class TestBamRegionReaderContigNaming(unittest.TestCase):
+    """Test that chr-named atlas regions reach a bare-named (hs37d5) BAM."""
+
+    def _reader(self, references, fetch_reads):
+        """Build a reader over a fake BAM with the given header and reads."""
+        bam = FakeAlignmentFile(references=references, fetch_reads=fetch_reads)
+        with patch.object(bp.pysam, "AlignmentFile", return_value=bam):
+            reader = bp.BamRegionReader(
+                bam_path="sample.bam", data_type="ont", merge_pairs=False
+            )
+        return reader, bam
+
+    def test_fetches_the_bare_contig_and_relabels_reads_to_the_request(self):
+        """chr1 regions fetch as 1, and reads come back labelled chr1."""
+        read = FakeRead(
+            reference_name="1",
+            tags={"MM": "C+m?,0;", "ML": [255]},
+            forward_sequence="ACGCGT",
+        )
+        reader, bam = self._reader(("1", "2"), [read])
+
+        with reader:
+            df = reader.read_regions([("chr1", 100, 200)])
+
+        self.assertEqual(bam.fetched, [("1", 100, 200)])
+        self.assertEqual(list(df["chromosome"].unique()), ["chr1"])
+
+    def test_skips_contigs_absent_under_either_spelling(self):
+        """An unresolvable region is skipped instead of raising."""
+        reader, bam = self._reader(("1", "2"), [])
+
+        with reader:
+            reader.read_regions([("chr9", 0, 10)])
+
+        self.assertEqual(bam.fetched, [])
 
 
 if __name__ == "__main__":

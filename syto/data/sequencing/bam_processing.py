@@ -52,6 +52,62 @@ UNKNOWN = 2
 CG_ASCII = np.array([ord("C"), ord("G")], dtype=np.uint8)
 
 
+# ============================================================
+# Contig naming
+# ============================================================
+
+
+def match_contig_name(name, available):
+    """Return *name* as spelled in *available*, or ``None`` when truly absent.
+
+    hg19 and the 1000G build hs37d5 share the GRCh37 primary assembly, so a
+    region on ``chr1`` and a BAM contig named ``1`` describe the same
+    coordinates; only the ``chr`` prefix differs.  Atlases are ``chrN``-named,
+    so every request is resolved against whatever spelling the BAM or reference
+    FASTA actually carries instead of being dropped.
+    """
+    if name in available:
+        return name
+    alias = name[3:] if name.startswith("chr") else f"chr{name}"
+    return alias if alias in available else None
+
+
+class ContigAliasedFasta:
+    """A reference FASTA that tolerates ``chr``-prefix mismatches.
+
+    WGBS methylation calls fetch the reference under the BAM's own contig
+    names, so an hs37d5 BAM (``1``) read against an hg19 FASTA (``chr1``) fails
+    every lookup -- silently, because :func:`process_single_read` drops any
+    read whose reference fetch raises.  Wrapping the handle resolves each
+    contig to the FASTA's spelling once and caches it.
+    """
+
+    def __init__(self, fasta):
+        """Wrap an open ``pysam.FastaFile``-like handle."""
+        self._fasta = fasta
+        self._resolved = {}
+
+    @property
+    def references(self):
+        """Contig names as the underlying FASTA spells them."""
+        return self._fasta.references
+
+    def fetch(self, contig, start=None, end=None):
+        """Fetch a reference slice, resolving *contig* to the FASTA's naming."""
+        if contig not in self._resolved:
+            self._resolved[contig] = match_contig_name(
+                contig, set(self._fasta.references)
+            )
+        resolved = self._resolved[contig]
+        if resolved is None:
+            raise KeyError(f"{contig} is not present in the reference FASTA")
+        return self._fasta.fetch(resolved, start, end)
+
+    def close(self):
+        """Release the wrapped FASTA handle."""
+        self._fasta.close()
+
+
 def resolve_merge_pairs(data_type, merge_pairs):
     """Force paired-end merging off for ONT.
 
@@ -816,7 +872,7 @@ def process_tabular_chunk(task):
     if task.data_type == DataType.WGBS.value:
         if task.reference_path is None:
             raise ValueError("Reference genome path required for WGBS data")
-        ref_fasta = pysam.FastaFile(task.reference_path)
+        ref_fasta = ContigAliasedFasta(pysam.FastaFile(task.reference_path))
 
     with pysam.AlignmentFile(task.bam_path, "rb") as bam:
         for read in bam.fetch(task.chromosome, task.chunk_start, task.chunk_end):
@@ -930,7 +986,7 @@ class BamRegionReader:
             )
         self._references = set(self._bam.references)
         self._ref_fasta = (
-            pysam.FastaFile(reference_path)
+            ContigAliasedFasta(pysam.FastaFile(reference_path))
             if data_type == DataType.WGBS.value
             else None
         )
@@ -970,9 +1026,11 @@ class BamRegionReader:
         records = []
         seen = set()
         for chromosome, start, end in regions:
-            if chromosome not in self._references:
+            # Atlas regions are chrN-named; the BAM may be hs37d5-named (N).
+            fetch_name = match_contig_name(chromosome, self._references)
+            if fetch_name is None:
                 continue
-            for read in self._bam.fetch(chromosome, int(start), int(end)):
+            for read in self._bam.fetch(fetch_name, int(start), int(end)):
                 # A read overlapping several regions of this batch is fetched
                 # once per region; keep the first parse only.
                 identity = (read.query_name, read.reference_start, read.flag)
@@ -980,20 +1038,23 @@ class BamRegionReader:
                     continue
                 seen.add(identity)
 
-                records.extend(
-                    process_single_read(
-                        read=read,
-                        data_type=self.data_type,
-                        methyl_tr=self.methyl_tr,
-                        unmethyl_tr=self.unmethyl_tr,
-                        ref_fasta=self._ref_fasta,
-                        interesting_chromosomes=None,
-                        min_mapq=self.min_mapq,
-                        require_flags=self.require_flags,
-                        exclude_flags=self.exclude_flags,
-                        min_cpgs=self.min_cpgs,
-                    )
+                parsed = process_single_read(
+                    read=read,
+                    data_type=self.data_type,
+                    methyl_tr=self.methyl_tr,
+                    unmethyl_tr=self.unmethyl_tr,
+                    ref_fasta=self._ref_fasta,
+                    interesting_chromosomes=None,
+                    min_mapq=self.min_mapq,
+                    require_flags=self.require_flags,
+                    exclude_flags=self.exclude_flags,
+                    min_cpgs=self.min_cpgs,
                 )
+                if fetch_name != chromosome:
+                    # Report the caller's spelling so reads rejoin the atlas.
+                    for record in parsed:
+                        record["chromosome"] = chromosome
+                records.extend(parsed)
 
         df = pd.DataFrame(records)
         if self.merge_pairs and len(df) > 0:
@@ -1036,22 +1097,27 @@ def merge_fetch_intervals(regions, chromosomes, padding=0):
     return merged
 
 
-def read_bam_regions(params, intervals, log=None):
+def read_bam_regions(params, intervals, log=None, verbose=True):
     """Parse only the reads overlapping *intervals*, in one indexed pass.
 
     ``params`` is the dict from :func:`resolve_bam_parsing_params`.  When the
     configured flag filters leave no reads, the BAM is re-read once without
     them.  Returns ``None`` when even that yields nothing.
+
+    ``verbose=False`` drops the progress line and demotes the empty-result
+    warnings to debug, for callers that read one BAM in many small batches.
     """
     log = log or logger
     span = sum(end - start for _, start, end in intervals)
-    log.info(
-        "Processing BAM: %s (%d merged atlas intervals, %.1f Mb; "
-        "set bam_processing.restrict_to_atlas: false to parse the whole file)",
-        params["bam_path"],
-        len(intervals),
-        span / 1e6,
-    )
+    if verbose:
+        log.info(
+            "Processing BAM: %s (%d merged atlas intervals, %.1f Mb; "
+            "set bam_processing.restrict_to_atlas: false to parse the whole file)",
+            params["bam_path"],
+            len(intervals),
+            span / 1e6,
+        )
+    warn = log.warning if verbose else log.debug
 
     def read(require_flags, exclude_flags):
         with BamRegionReader(
@@ -1070,13 +1136,13 @@ def read_bam_regions(params, intervals, log=None):
 
     df = read(params["require_flags"], params["exclude_flags"])
     if not len(df):
-        log.warning(
+        warn(
             "The dataset has 0 reads after applying all samtools filters. "
             "The attempt will be made to reparse .bam without applying flag filters"
         )
         df = read(None, None)
     if not len(df):
-        log.warning(
+        warn(
             "Setting exclude_flags=None and require_flags=None didn't help. "
             "The processing of this file will be terminated."
         )
@@ -1182,13 +1248,20 @@ def process_bam_with_chunking(
     with pysam.AlignmentFile(bam_path, "rb") as bam:
         chr_lengths = {ref: length for ref, length in zip(bam.references, bam.lengths)}
 
-    # Generate genomic chunks for parallel processing
-    tasks = []
+    # Requested chromosomes are chrN-named; the BAM may be hs37d5-named (N).
+    # Map each request onto the header's spelling, keeping the requested one to
+    # label the output with.
+    requested_by_actual = {}
     for chromosome in chromosomes:
-        if chromosome not in chr_lengths:
+        actual = match_contig_name(chromosome, chr_lengths)
+        if actual is None:
             logger.warning("%s not found in BAM file", chromosome)
             continue
+        requested_by_actual[actual] = chromosome
 
+    # Generate genomic chunks for parallel processing
+    tasks = []
+    for chromosome in requested_by_actual:
         chr_len = chr_lengths[chromosome]
         for start in range(0, chr_len, chunk_size_genomic):
             end = min(start + chunk_size_genomic, chr_len)
@@ -1198,7 +1271,7 @@ def process_bam_with_chunking(
                     chunk_start=start,
                     chunk_end=end,
                     bam_path=bam_path,
-                    interesting_chromosomes=chromosomes,
+                    interesting_chromosomes=list(requested_by_actual),
                     methyl_tr=methyl_tr,
                     unmethyl_tr=unmethyl_tr,
                     data_type=data_type,
@@ -1228,6 +1301,13 @@ def process_bam_with_chunking(
 
     # Convert to DataFrame
     df = pd.DataFrame(all_data)
+
+    if len(df) and any(
+        actual != requested for actual, requested in requested_by_actual.items()
+    ):
+        df["chromosome"] = (
+            df["chromosome"].map(requested_by_actual).fillna(df["chromosome"])
+        )
 
     # Optionally merge paired-end reads into fragments
     if merge_pairs and len(df) > 0:
