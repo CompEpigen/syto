@@ -104,7 +104,6 @@ class _FakeBam:
 
 
 class TestStageBamFile(unittest.TestCase):
-    INTERVALS = [("chr1", 0, 3010)]
     BAM_READS = pd.DataFrame(
         {
             "read_name": ["r1"],
@@ -141,20 +140,30 @@ class TestStageBamFile(unittest.TestCase):
                 LABELS,
                 self.staged_dir,
                 self.counts_dir,
-                bam_params={"bam_path": None},
-                intervals=self.INTERVALS,
+                bam_params={"bam_path": None, "chromosomes": ["chr1"]},
+                padding=10,
             )
         return stats, read_mock
+
+    def test_reads_one_bucket_at_a_time_over_padded_regions(self):
+        """Each bucket is fetched separately so only its reads are in memory."""
+        _, read_mock = self._stage(("1", "2"), self.BAM_READS)
+
+        # Two regions in two buckets -> one padded fetch each, in bucket order.
+        self.assertEqual(read_mock.call_count, 2)
+        intervals = [call.args[1] for call in read_mock.call_args_list]
+        self.assertEqual(intervals, [[("1", 990, 1020)], [("1", 1990, 2020)]])
 
     def test_unprefixed_bam_fetches_bare_names_and_stages_prefixed_reads(self):
         stats, read_mock = self._stage(("1", "2"), self.BAM_READS)
 
-        params, intervals = read_mock.call_args.args
+        params, _ = read_mock.call_args.args
         self.assertEqual(params["bam_path"], "/data/S1_merged.mdup.bam")
-        self.assertEqual(intervals, [("1", 0, 3010)])
 
         self.assertEqual(stats["sample"], "S1_merged.mdup")
-        self.assertEqual(stats["n_in"], 1)
+        # The read overlaps one region, so it is staged once out of two fetches.
+        self.assertEqual(stats["n_in"], 2)
+        self.assertEqual(stats["n_out"], 1)
         shards = list(self.staged_dir.rglob("S1_merged.mdup.parquet"))
         self.assertEqual(len(shards), 1)
         staged = pd.read_parquet(shards[0])
@@ -166,7 +175,7 @@ class TestStageBamFile(unittest.TestCase):
     def test_prefixed_bam_keeps_interval_names(self):
         reads = self.BAM_READS.assign(chromosome=["chr1"])
         _, read_mock = self._stage(("chr1", "chr2"), reads)
-        self.assertEqual(read_mock.call_args.args[1], self.INTERVALS)
+        self.assertEqual(read_mock.call_args_list[0].args[1], [("chr1", 990, 1020)])
 
     def test_empty_bam_writes_nothing(self):
         stats, _ = self._stage(("1",), None)
