@@ -49,6 +49,7 @@ def finalize_bucket(
     signature_config,
     global_prior=None,
     region_names=None,
+    region_annotations=None,
     min_pattern_length=None,
     pattern_column="pattern",
     fit_splits=None,
@@ -65,6 +66,10 @@ def finalize_bucket(
 
     if region_names is not None:
         df = filter_by_atlas_regions(df, region_names)
+    if region_annotations is not None:
+        # Carry atlas-level region attributes (e.g. the block's cluster) onto
+        # every read, so a classifier head can key on them.
+        df = df.merge(region_annotations, on="name", how="left")
     if min_pattern_length:
         df = filter_by_pattern_length(df, pattern_column, min_pattern_length)
     if df.empty:

@@ -29,6 +29,31 @@ def load_region_names(atlas_path: str, sep: str = "\t") -> set:
     return set(names)
 
 
+def load_region_annotations(atlas_path, columns, sep="\t"):
+    """Build a per-region annotation table from atlas columns, densely encoded.
+
+    ``columns`` maps an atlas column to the dataset column it becomes (e.g.
+    ``{"cluster": "cluster_label"}``). Values are factorized to contiguous
+    integers starting at 0, which is what an embedding-based classifier head
+    needs, and the code -> value mapping is returned alongside so the encoding
+    can be read back.
+    """
+    atlas = pd.read_csv(atlas_path, sep=sep, usecols=["name"] + list(columns))
+    out = atlas[["name"]].copy()
+    mappings = {}
+    for source, dest in columns.items():
+        values = atlas[source]
+        codes, uniques = pd.factorize(values, sort=True)
+        out[dest] = codes
+        mappings[dest] = {int(code): _plain(value) for code, value in enumerate(uniques)}
+    return out, mappings
+
+
+def _plain(value):
+    """Convert a numpy scalar to a plain Python value for JSON serialization."""
+    return value.item() if hasattr(value, "item") else value
+
+
 def staged_counts(
     staged_dir: str,
     *,
