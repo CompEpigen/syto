@@ -376,6 +376,14 @@ class InferencePipeline:
                 )
             else:
                 self.processed_reads = self._process_bam()
+                if self.processed_reads is None or not len(self.processed_reads):
+                    raise ValueError(
+                        f"No reads were parsed from {input_cfg['data_path']}. "
+                        "Check that the BAM is coordinate-sorted and indexed, that "
+                        "its contigs overlap the atlas regions, and that "
+                        "input.reference_path points at the assembly the BAM was "
+                        "aligned to."
+                    )
         elif input_cfg["type"] == "parsed_reads":
             self.processed_reads = self._load_parsed_reads()
         elif input_cfg["type"] == "predicted_reads":
