@@ -15,6 +15,7 @@ the dataset carries many label columns.
 
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from syto.data.dataset import resolve_column
@@ -170,10 +171,27 @@ def load_columnar_split(
         part = fragment.to_table(columns=read_columns, filter=split_filter).to_pandas()
         if split_column not in columns:
             part = part.drop(columns=[split_column])
-        parts.append(per_fragment(part))
+        parts.append(_detach_array_cells(per_fragment(part)))
     if not parts:
         return pd.DataFrame(columns=columns)
     return pd.concat(parts, ignore_index=True)
+
+
+def _detach_array_cells(df):
+    """Copy array-valued cells (e.g. soft-label lists) out of their shared buffer.
+
+    ``to_pandas`` turns a list column into per-row numpy *views* of one buffer
+    spanning the whole part file, so keeping a few rows of a reduced part would
+    pin the entire part's buffer (~0.5 GB per U250 part). Copying the kept
+    cells lets that buffer be freed.
+    """
+    for col in df.columns:
+        if df[col].dtype != object or df.empty:
+            continue
+        first = df[col].iloc[0]
+        if isinstance(first, np.ndarray) and not first.flags.owndata:
+            df[col] = [np.array(v, copy=True) for v in df[col]]
+    return df
 
 
 #: Default identity of a read for de-duplication: its region, its start and its

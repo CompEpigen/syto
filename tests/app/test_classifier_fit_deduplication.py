@@ -107,6 +107,19 @@ class TestPerFragmentLoading(unittest.TestCase):
         self.assertEqual(len(df), 2)
         self.assertEqual(list(df.columns), ["input_ids"])
 
+    def test_kept_list_cells_do_not_pin_the_part_buffer(self):
+        with tempfile.TemporaryDirectory() as d:
+            _dataset(d)
+            df = load_columnar_split(
+                Path(d) / "final",
+                "train",
+                declared_columns=["soft_label"],
+                per_fragment=lambda part: part.head(1),
+            )
+        for cell in df["soft_label"]:
+            self.assertTrue(cell.flags.owndata)
+        self.assertEqual([list(c) for c in df["soft_label"]], [[0.5, 0.5], [0.9, 0.1]])
+
 
 class TestTrainDeduplication(unittest.TestCase):
     def _run(self, supports_read_counts=True, **overrides):
