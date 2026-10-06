@@ -27,6 +27,8 @@ from syto.classification.fit_data import (
     load_columnar_split,
     apply_label_rename,
     apply_pattern_length_filter,
+    deduplicate_reads,
+    DEFAULT_DEDUP_KEYS,
 )
 
 
@@ -73,6 +75,12 @@ class ClassifierFittingPipeline:
         # sampled, so models that chunk reads (MethylBert) see proportionally
         # more examples than this number.
         self.valid_subsample = config.get("valid_subsample")
+        # Collapse identical train reads into one row carrying a ``read_count``
+        # multiplicity, which the classifier turns into sampling or loss
+        # weights. Only the train split: validation stays read-for-read, so its
+        # metrics remain comparable with non-deduplicated runs.
+        self.deduplicate_train = bool(config.get("deduplicate_train", False))
+        self.dedup_keys = list(config.get("dedup_keys") or DEFAULT_DEDUP_KEYS)
         self.seed = config.get("seed", 42)
 
         datasets = config.get("datasets", ["all"])
@@ -150,6 +158,15 @@ class ClassifierFittingPipeline:
         declared_columns = classifier.required_fit_columns(self.config)
         if self.label_column:
             declared_columns = declared_columns + [self.label_column]
+
+        if self.deduplicate_train and not getattr(
+            classifier, "supports_read_counts", False
+        ):
+            raise ValueError(
+                f"deduplicate_train is set but the {self.model_arch!r} classifier "
+                "does not consume read counts; training on de-duplicated reads "
+                "without them would silently change the objective."
+            )
 
         try:
             train_df = self._load_split(dataset_path, "train", fmt, declared_columns)
@@ -324,31 +341,70 @@ class ClassifierFittingPipeline:
             "split_column": self.split_column,
             "label_column": self.label_column,
             "min_pattern_length": self.min_pattern_length,
+            "deduplicate_train": self.deduplicate_train,
+            "dedup_keys": self.dedup_keys if self.deduplicate_train else None,
             "max_sequence_length": self.config.get("max_sequence_length"),
             "model": classifier.mlflow_fit_params(),
         }
 
     def _load_split(self, dataset_path, split, fmt, declared_columns):
-        """Load one split, projecting/filtering for columnar and renaming the label."""
+        """Load one split, projecting/filtering for columnar and renaming the label.
+
+        Filtering (and, for a de-duplicated train split, collapsing) runs per
+        part file, so peak RAM is bounded by one part rather than the split.
+        """
+        deduplicate = self.deduplicate_train and split == "train"
+        reduce_part = self._part_reducer(declared_columns, deduplicate)
         if fmt == "legacy":
-            df = load_legacy_split(dataset_path, split)
+            df = reduce_part(load_legacy_split(dataset_path, split))
         else:
+            load_columns = declared_columns + (
+                [k for k in self.dedup_keys if k not in declared_columns]
+                if deduplicate
+                else []
+            )
             df = load_columnar_split(
                 dataset_path,
                 split,
-                declared_columns=declared_columns,
+                declared_columns=load_columns,
                 split_column=self.split_column,
+                per_fragment=reduce_part,
             )
             if df.empty:
                 raise FileNotFoundError(
                     f"No rows for split {split!r} in {dataset_path}"
                 )
 
-        if self.min_pattern_length:
-            df = apply_pattern_length_filter(df, self.min_pattern_length)
+        if deduplicate:
+            self.logger.info(
+                "De-duplicated %s split: %d reads -> %d unique rows",
+                split,
+                int(df["read_count"].sum()),
+                len(df),
+            )
 
         if self.label_column:
             df = apply_label_rename(
                 df, self.label_column, self.model_cfg.get("soft_labels", False)
             )
         return df
+
+    def _part_reducer(self, declared_columns, deduplicate):
+        """Per-part transform: pattern-length filter, then optional de-duplication.
+
+        Key columns loaded only to de-duplicate on are dropped afterwards. A
+        group split across part files is merely collapsed less; its counts stay
+        exact either way.
+        """
+        extra_keys = [k for k in self.dedup_keys if k not in declared_columns]
+
+        def reduce_part(part):
+            if self.min_pattern_length:
+                part = apply_pattern_length_filter(part, self.min_pattern_length)
+            if deduplicate:
+                part = deduplicate_reads(part, self.dedup_keys).drop(
+                    columns=extra_keys
+                )
+            return part
+
+        return reduce_part

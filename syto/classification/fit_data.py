@@ -125,7 +125,14 @@ def apply_pattern_length_filter(
     return filter_by_pattern_length(df, col, min_pattern_length).reset_index(drop=True)
 
 
-def load_columnar_split(dataset_dir, split, *, declared_columns, split_column="split"):
+def load_columnar_split(
+    dataset_dir,
+    split,
+    *,
+    declared_columns,
+    split_column="split",
+    per_fragment=None,
+):
     """Read one split from a columnar (split-as-column) parquet dataset.
 
     Projects to only the resolved ``declared_columns`` and pushes the
@@ -133,6 +140,10 @@ def load_columnar_split(dataset_dir, split, *, declared_columns, split_column="s
     columns nor other splits are materialised. ``partitioning=None`` makes the
     reader ignore ``region_bucket=*`` directory names (the value is also present
     as a real column in each part file), avoiding an ambiguous-field clash.
+
+    ``per_fragment``, if given, is applied to each part file's rows before they
+    are concatenated, so a reducing transform (filter, de-duplication) bounds
+    peak RAM by one part file rather than the whole split.
     """
     import pyarrow.dataset as pads  # local import keeps module import cheap
 
@@ -147,14 +158,58 @@ def load_columnar_split(dataset_dir, split, *, declared_columns, split_column="s
     columns = resolve_fit_columns(declared_columns, available)
     read_columns = columns + ([split_column] if split_column not in columns else [])
 
-    table = dataset.to_table(
-        columns=read_columns,
-        filter=pads.field(split_column) == split,
-    )
-    df = table.to_pandas()
-    if split_column not in columns:
-        df = df.drop(columns=[split_column])
-    return df
+    split_filter = pads.field(split_column) == split
+    if per_fragment is None:
+        df = dataset.to_table(columns=read_columns, filter=split_filter).to_pandas()
+        if split_column not in columns:
+            df = df.drop(columns=[split_column])
+        return df
+
+    parts = []
+    for fragment in dataset.get_fragments():
+        part = fragment.to_table(columns=read_columns, filter=split_filter).to_pandas()
+        if split_column not in columns:
+            part = part.drop(columns=[split_column])
+        parts.append(per_fragment(part))
+    if not parts:
+        return pd.DataFrame(columns=columns)
+    return pd.concat(parts, ignore_index=True)
+
+
+#: Default identity of a read for de-duplication: its region, its start and its
+#: full sequence and methylation pattern. Every input the classifiers see and
+#: every data-driven label (a function of region + signature) is determined by
+#: these, so merged rows are interchangeable.
+DEFAULT_DEDUP_KEYS = ["name", "read_start", "input_ids", "methylation_ids"]
+
+#: Column carrying the multiplicity of each de-duplicated read.
+READ_COUNT_COLUMN = "read_count"
+
+
+def deduplicate_reads(df, keys, *, count_column=READ_COUNT_COLUMN):
+    """Collapse rows identical on ``keys`` into one, recording the multiplicity.
+
+    Keeps the first row of each group and adds ``count_column`` with the group
+    size. Columns outside ``keys`` must be constant within a group (true for
+    the default keys, see ``DEFAULT_DEDUP_KEYS``); the first value is kept. If
+    ``df`` already carries ``count_column`` (an earlier, partial
+    de-duplication), counts are summed rather than re-counted.
+    """
+    missing = [k for k in keys if k not in df.columns]
+    if missing:
+        raise ValueError(
+            f"De-duplication keys absent from the data: {missing}; "
+            f"available columns: {list(df.columns)}"
+        )
+    groups = df.groupby(keys, sort=False, dropna=False)
+    first = (groups.cumcount() == 0).to_numpy()
+    if count_column in df.columns:
+        counts = groups[count_column].transform("sum")
+    else:
+        counts = groups[keys[0]].transform("size")
+    out = df[first].copy()
+    out[count_column] = counts.to_numpy()[first].astype("int64")
+    return out.reset_index(drop=True)
 
 
 def columnar_schema_names(dataset_dir):
