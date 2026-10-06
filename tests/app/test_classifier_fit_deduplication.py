@@ -116,8 +116,11 @@ class TestPerFragmentLoading(unittest.TestCase):
                 declared_columns=["soft_label"],
                 per_fragment=lambda part: part.head(1),
             )
+        # Each kept cell's backing buffer holds only the kept rows (one row of
+        # two float64 per part), not the whole part file's labels.
         for cell in df["soft_label"]:
-            self.assertTrue(cell.flags.owndata)
+            base = cell if cell.base is None else cell.base
+            self.assertEqual(base.nbytes, 2 * 8)
         self.assertEqual([list(c) for c in df["soft_label"]], [[0.5, 0.5], [0.9, 0.1]])
 
 

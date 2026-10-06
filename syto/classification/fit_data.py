@@ -15,7 +15,6 @@ the dataset carries many label columns.
 
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
 from syto.data.dataset import resolve_column
@@ -171,27 +170,24 @@ def load_columnar_split(
         part = fragment.to_table(columns=read_columns, filter=split_filter).to_pandas()
         if split_column not in columns:
             part = part.drop(columns=[split_column])
-        parts.append(_detach_array_cells(per_fragment(part)))
+        parts.append(_compact(per_fragment(part)))
     if not parts:
         return pd.DataFrame(columns=columns)
     return pd.concat(parts, ignore_index=True)
 
 
-def _detach_array_cells(df):
-    """Copy array-valued cells (e.g. soft-label lists) out of their shared buffer.
+def _compact(df):
+    """Rebuild ``df`` in fresh buffers holding only its own rows.
 
-    ``to_pandas`` turns a list column into per-row numpy *views* of one buffer
-    spanning the whole part file, so keeping a few rows of a reduced part would
-    pin the entire part's buffer (~0.5 GB per U250 part). Copying the kept
-    cells lets that buffer be freed.
+    ``to_pandas`` backs a whole part file with shared buffers (list columns
+    become per-row views of one array; columns sharing a pandas block keep it
+    whole), so a few rows kept from a reduced part can pin the entire part,
+    ~0.4 GB per U250 part. A round trip through a new Arrow table copies just
+    the kept rows and drops every reference to the original buffers.
     """
-    for col in df.columns:
-        if df[col].dtype != object or df.empty:
-            continue
-        first = df[col].iloc[0]
-        if isinstance(first, np.ndarray) and not first.flags.owndata:
-            df[col] = [np.array(v, copy=True) for v in df[col]]
-    return df
+    import pyarrow as pa  # local import keeps module import cheap
+
+    return pa.Table.from_pandas(df, preserve_index=False).to_pandas()
 
 
 #: Default identity of a read for de-duplication: its region, its start and its
