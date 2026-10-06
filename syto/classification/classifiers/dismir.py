@@ -836,9 +836,12 @@ class Dismir(AbstractReadClassifier):
                 compact_inputs=compact_inputs,
             )
 
-        train_counts = None
-        if train_df is not None and READ_COUNT_COLUMN in train_df.columns:
-            train_counts = train_df[READ_COUNT_COLUMN].to_numpy(dtype=np.float64)
+        def _counts(df):
+            if df is None or READ_COUNT_COLUMN not in df.columns:
+                return None
+            return df[READ_COUNT_COLUMN].to_numpy(dtype=np.float64)
+
+        train_counts, valid_counts = _counts(train_df), _counts(valid_df)
 
         if use_grg:
             self.train_x, self.train_y, self.train_grg = _get_data(
@@ -893,6 +896,16 @@ class Dismir(AbstractReadClassifier):
         loss_counts = train_counts is not None and count_weighting == "loss"
         if loss_counts:
             train_tensors.append(torch.from_numpy(train_counts).float())
+        # Validation rows always carry their count when they have one: the
+        # model is deterministic in eval mode, so count-weighted loss and
+        # metrics over unique rows equal those over every read.
+        if valid_counts is not None:
+            valid_tensors.append(torch.from_numpy(valid_counts).float())
+            _module_logger.info(
+                "Validating on %d unique rows standing for %d reads",
+                len(valid_counts),
+                int(valid_counts.sum()),
+            )
         train_dataset = torch.utils.data.TensorDataset(*train_tensors)
         valid_dataset = torch.utils.data.TensorDataset(*valid_tensors)
 
@@ -921,6 +934,7 @@ class Dismir(AbstractReadClassifier):
         self._mean_train_count = float(train_counts.mean()) if loss_counts else None
         self._compact_inputs = compact_inputs
         self._loss_counts = loss_counts
+        self._valid_counts = valid_counts is not None
 
         return self._training_loop(
             train_loader,
@@ -1017,7 +1031,7 @@ class Dismir(AbstractReadClassifier):
             train_dir,
         )
 
-    def _compute_epoch_metrics(self, all_outputs, all_labels, prefix):
+    def _compute_epoch_metrics(self, all_outputs, all_labels, prefix, all_weights=None):
         """
         Compute sklearn metrics from accumulated epoch outputs.
 
@@ -1029,6 +1043,8 @@ class Dismir(AbstractReadClassifier):
                          per batch, concatenated along dim 0.
             all_labels:  list of numpy arrays – ground-truth labels per batch.
             prefix:      'train' or 'val' – prepended to each metric key.
+            all_weights: optional list of per-batch sample weights (read
+                         counts of de-duplicated rows).
 
         Returns:
             dict with keys like '{prefix}_f1', '{prefix}_precision', etc.
@@ -1036,11 +1052,12 @@ class Dismir(AbstractReadClassifier):
         outputs = np.concatenate(all_outputs, axis=0)
         labels = np.concatenate(all_labels, axis=0)
         eval_pred = (outputs, labels)
+        weights = np.concatenate(all_weights, axis=0) if all_weights else None
 
         if self.soft_labels:
-            metrics = compute_metrics_soft_labels(eval_pred)
+            metrics = compute_metrics_soft_labels(eval_pred, sample_weight=weights)
         else:
-            metrics = compute_metrics(eval_pred)
+            metrics = compute_metrics(eval_pred, sample_weight=weights)
 
         return {f"{prefix}_{k}": v for k, v in metrics.items()}
 
@@ -1158,17 +1175,27 @@ class Dismir(AbstractReadClassifier):
             val_correct, val_total = 0, 0
             val_all_outputs = []
             val_all_labels = []
+            val_all_weights = []
+            valid_counts = getattr(self, "_valid_counts", False)
 
             with torch.no_grad():
                 for batch in valid_loader:
-                    X_val, y_val, grg_val, _ = self._unpack_batch(batch, use_grg)
+                    X_val, y_val, grg_val, val_w = self._unpack_batch(
+                        batch, use_grg, with_counts=valid_counts
+                    )
                     if use_grg:
                         val_outputs, _ = self.model(X_val, grg_ids=grg_val)
                     else:
                         val_outputs = self.model(X_val)
 
-                    v_loss = criterion(val_outputs, y_val)
-                    val_loss += v_loss.item() * X_val.size(0)
+                    # Every row weighs its read count (1 without counts), so
+                    # the loss, accuracy and metrics are per-read averages.
+                    if val_w is None:
+                        val_w = torch.ones(X_val.size(0), device=X_val.device)
+                    else:
+                        val_all_weights.append(val_w.cpu().numpy())
+                    v_loss = self._per_row_loss(criterion, val_outputs, y_val)
+                    val_loss += (v_loss * val_w).sum().item()
 
                     # Collect outputs for metrics
                     batch_val_outputs = val_outputs.detach()
@@ -1186,18 +1213,19 @@ class Dismir(AbstractReadClassifier):
                             )
                         else:
                             val_preds = (val_outputs >= 0.5).float().squeeze()
-                        val_correct += (val_preds == y_val.squeeze()).sum().item()
+                        val_hits = val_preds == y_val.squeeze()
                     else:
                         val_preds = val_outputs.argmax(dim=1)
                         if self.soft_labels:
                             y_val = y_val.argmax(dim=1)
-                        val_correct += (val_preds == y_val).sum().item()
-                    val_total += y_val.size(0)
+                        val_hits = val_preds == y_val
+                    val_correct += (val_hits.reshape(-1) * val_w).sum().item()
+                    val_total += val_w.sum().item()
 
-            val_loss /= len(valid_loader.dataset)
+            val_loss /= val_total
             val_acc = val_correct / val_total
             val_metrics = self._compute_epoch_metrics(
-                val_all_outputs, val_all_labels, "val"
+                val_all_outputs, val_all_labels, "val", val_all_weights
             )
             epoch_time = time.time() - session_start_time
 
@@ -1275,19 +1303,27 @@ class Dismir(AbstractReadClassifier):
 
         With counts, per-row losses are weighted by ``count / mean_count`` and
         averaged, an unbiased estimate of the duplicated dataset's mean loss
-        (and of its gradient). ``criterion``'s reduction is switched to
-        ``"none"`` for the call and restored afterwards.
+        (and of its gradient).
         """
         if counts is None:
             return criterion(outputs, targets)
+        per_row = self._per_row_loss(criterion, outputs, targets)
+        return (per_row * counts).mean() / self._mean_train_count
+
+    @staticmethod
+    def _per_row_loss(criterion, outputs, targets):
+        """Unreduced loss, one value per row (averaged over any trailing dims).
+
+        ``criterion``'s reduction is switched to ``"none"`` for the call and
+        restored afterwards; its ``"mean"`` equals the mean of these values.
+        """
         reduction = criterion.reduction
         criterion.reduction = "none"
         try:
             per_row = criterion(outputs, targets)
         finally:
             criterion.reduction = reduction
-        per_row = per_row.reshape(per_row.shape[0], -1).mean(dim=1)
-        return (per_row * counts).mean() / self._mean_train_count
+        return per_row.reshape(per_row.shape[0], -1).mean(dim=1)
 
     def _training_loop_variable_length(
         self,

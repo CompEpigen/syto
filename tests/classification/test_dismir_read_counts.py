@@ -147,6 +147,47 @@ class TestCountWeightedLoss(unittest.TestCase):
         torch.testing.assert_close(full_grad, dedup_grad, rtol=1e-4, atol=1e-6)
 
 
+class TestDeduplicatedValidation(unittest.TestCase):
+    def _history(self, valid):
+        rng = np.random.default_rng(6)
+        train = _reads_df(40, rng)
+        torch.manual_seed(0)
+        model = _model()
+        with tempfile.TemporaryDirectory() as d:
+            model.train(
+                train_dir=d,
+                epochs=2,
+                batch_size=8,
+                optimizer_type="ADAM",
+                lr=1e-3,
+                verbose=0,
+                train_df=train,
+                valid_df=valid,
+                compact_inputs=True,
+            )
+        return model.history
+
+    def test_count_weighted_validation_equals_expanded_validation(self):
+        rng = np.random.default_rng(7)
+        valid = _reads_df(15, rng, counts=rng.integers(1, 7, size=15))
+        dedup, expanded = self._history(valid), self._history(_expand(valid))
+        # Average precision is excluded: in the expanded pass identical reads
+        # get probabilities differing by float noise (~1e-7, depending on batch
+        # position), which splits tied thresholds and moves AP. With exact ties
+        # restored, the expanded AP equals the count-weighted one (see
+        # TestSampleWeightedMetrics in test_evaluation.py).
+        val_keys = [
+            k
+            for k in expanded[0]
+            if k.startswith("val_") and k != "val_average_precision"
+        ]
+        self.assertIn("val_f1", val_keys)
+        for a, b in zip(dedup, expanded):
+            for key in val_keys:
+                self.assertAlmostEqual(a[key], b[key], places=5, msg=key)
+            self.assertAlmostEqual(a["train_loss"], b["train_loss"], places=6)
+
+
 class TestCountWeightedSampler(unittest.TestCase):
     def test_epoch_length_defaults_to_total_reads(self):
         self.assertEqual(len(CountWeightedSampler([1, 4, 5])), 10)
@@ -197,10 +238,10 @@ class TestTrainingWithReadCounts(unittest.TestCase):
         seen = []
         original = Dismir._compute_epoch_metrics
 
-        def spy(model, all_outputs, all_labels, prefix):
+        def spy(model, all_outputs, all_labels, prefix, all_weights=None):
             if prefix == "train":
                 seen.append(sum(len(o) for o in all_outputs))
-            return original(model, all_outputs, all_labels, prefix)
+            return original(model, all_outputs, all_labels, prefix, all_weights)
 
         with patch.object(Dismir, "_compute_epoch_metrics", autospec=True) as m:
             m.side_effect = spy

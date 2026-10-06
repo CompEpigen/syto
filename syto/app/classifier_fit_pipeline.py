@@ -16,6 +16,7 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import numpy as np
 import yaml
 
 from syto.classification.classifiers.lazy_classifier_factory import (
@@ -29,6 +30,7 @@ from syto.classification.fit_data import (
     apply_pattern_length_filter,
     deduplicate_reads,
     DEFAULT_DEDUP_KEYS,
+    READ_COUNT_COLUMN,
 )
 
 
@@ -75,11 +77,13 @@ class ClassifierFittingPipeline:
         # sampled, so models that chunk reads (MethylBert) see proportionally
         # more examples than this number.
         self.valid_subsample = config.get("valid_subsample")
-        # Collapse identical train reads into one row carrying a ``read_count``
-        # multiplicity, which the classifier turns into sampling or loss
-        # weights. Only the train split: validation stays read-for-read, so its
-        # metrics remain comparable with non-deduplicated runs.
+        # Collapse identical reads into one row carrying a ``read_count``
+        # multiplicity. On train the classifier turns counts into sampling or
+        # loss weights; on valid into count-weighted loss and metrics, which
+        # equal the read-for-read values (the model is deterministic in eval
+        # mode) at a fraction of the prediction cost.
         self.deduplicate_train = bool(config.get("deduplicate_train", False))
+        self.deduplicate_valid = bool(config.get("deduplicate_valid", False))
         self.dedup_keys = list(config.get("dedup_keys") or DEFAULT_DEDUP_KEYS)
         self.seed = config.get("seed", 42)
 
@@ -159,13 +163,14 @@ class ClassifierFittingPipeline:
         if self.label_column:
             declared_columns = declared_columns + [self.label_column]
 
-        if self.deduplicate_train and not getattr(
+        if (self.deduplicate_train or self.deduplicate_valid) and not getattr(
             classifier, "supports_read_counts", False
         ):
             raise ValueError(
-                f"deduplicate_train is set but the {self.model_arch!r} classifier "
-                "does not consume read counts; training on de-duplicated reads "
-                "without them would silently change the objective."
+                "deduplicate_train/deduplicate_valid is set but the "
+                f"{self.model_arch!r} classifier does not consume read counts; "
+                "de-duplicated reads without them would silently change the "
+                "objective and the metrics."
             )
 
         try:
@@ -178,15 +183,8 @@ class ClassifierFittingPipeline:
         try:
             val_df = self._load_split(dataset_path, "valid", fmt, declared_columns)
             self.logger.info(f"Loaded valid split: {len(val_df)} rows")
-            if self.valid_subsample and len(val_df) > int(self.valid_subsample):
-                val_df = val_df.sample(
-                    n=int(self.valid_subsample), random_state=self.seed
-                ).reset_index(drop=True)
-                self.logger.info(
-                    "Subsampled valid split to %d rows (seed %d)",
-                    len(val_df),
-                    self.seed,
-                )
+            if self.valid_subsample:
+                val_df = self._subsample_valid(val_df, int(self.valid_subsample))
         except FileNotFoundError:
             self.logger.warning(
                 "No valid split found, continuing without validation data"
@@ -221,6 +219,34 @@ class ClassifierFittingPipeline:
     # ═══════════════════════════════════════════════════════════════
     #  Helpers
     # ═══════════════════════════════════════════════════════════════
+
+    def _subsample_valid(self, val_df, n_reads):
+        """Keep a random ``n_reads`` reads of the valid split (seeded).
+
+        On a de-duplicated split the draw is over reads, not unique rows: a
+        multivariate hypergeometric draw thins each row's ``read_count`` exactly
+        as sampling ``n_reads`` reads without replacement from the duplicated
+        split would.
+        """
+        if READ_COUNT_COLUMN not in val_df.columns:
+            if len(val_df) <= n_reads:
+                return val_df
+            out = val_df.sample(n=n_reads, random_state=self.seed)
+        else:
+            counts = val_df[READ_COUNT_COLUMN].to_numpy()
+            if counts.sum() <= n_reads:
+                return val_df
+            drawn = np.random.default_rng(self.seed).multivariate_hypergeometric(
+                counts, n_reads
+            )
+            out = val_df.assign(**{READ_COUNT_COLUMN: drawn})[drawn > 0]
+        self.logger.info(
+            "Subsampled valid split to %d reads in %d rows (seed %d)",
+            n_reads,
+            len(out),
+            self.seed,
+        )
+        return out.reset_index(drop=True)
 
     def _dump_effective_config(self, out_dir: Path) -> None:
         """Write the effective (post-override) config into the fit output dir.
@@ -342,7 +368,12 @@ class ClassifierFittingPipeline:
             "label_column": self.label_column,
             "min_pattern_length": self.min_pattern_length,
             "deduplicate_train": self.deduplicate_train,
-            "dedup_keys": self.dedup_keys if self.deduplicate_train else None,
+            "deduplicate_valid": self.deduplicate_valid,
+            "dedup_keys": (
+                self.dedup_keys
+                if self.deduplicate_train or self.deduplicate_valid
+                else None
+            ),
             "max_sequence_length": self.config.get("max_sequence_length"),
             "model": classifier.mlflow_fit_params(),
         }
@@ -353,7 +384,9 @@ class ClassifierFittingPipeline:
         Filtering (and, for a de-duplicated train split, collapsing) runs per
         part file, so peak RAM is bounded by one part rather than the split.
         """
-        deduplicate = self.deduplicate_train and split == "train"
+        deduplicate = {"train": self.deduplicate_train, "valid": self.deduplicate_valid}.get(
+            split, False
+        )
         reduce_part = self._part_reducer(declared_columns, deduplicate)
         if fmt == "legacy":
             df = reduce_part(load_legacy_split(dataset_path, split))

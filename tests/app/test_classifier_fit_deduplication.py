@@ -166,6 +166,29 @@ class TestTrainDeduplication(unittest.TestCase):
         with self.assertRaises(ValueError):
             self._run(supports_read_counts=False, deduplicate_train=True)
 
+    def test_valid_is_collapsed_when_requested(self):
+        kwargs = self._run(deduplicate_valid=True)
+        self.assertEqual(sorted(kwargs["val_df"]["read_count"]), [2, 4])
+        self.assertNotIn("read_count", kwargs["train_df"].columns)
+
+    def test_valid_dedup_alone_still_needs_count_support(self):
+        with self.assertRaises(ValueError):
+            self._run(supports_read_counts=False, deduplicate_valid=True)
+
+    def test_valid_subsample_draws_reads_not_rows(self):
+        val = self._run(deduplicate_valid=True, valid_subsample=3, seed=1)["val_df"]
+        self.assertEqual(int(val["read_count"].sum()), 3)
+        self.assertTrue((val["read_count"] > 0).all())
+
+    def test_valid_subsample_above_read_total_is_a_no_op(self):
+        val = self._run(deduplicate_valid=True, valid_subsample=6)["val_df"]
+        self.assertEqual(sorted(val["read_count"]), [2, 4])
+
+    def test_valid_subsample_is_deterministic_for_a_seed(self):
+        first = self._run(deduplicate_valid=True, valid_subsample=3, seed=2)
+        second = self._run(deduplicate_valid=True, valid_subsample=3, seed=2)
+        pd.testing.assert_frame_equal(first["val_df"], second["val_df"])
+
 
 if __name__ == "__main__":
     unittest.main()
