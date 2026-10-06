@@ -45,6 +45,11 @@ class ClassifierFittingPipeline:
         self.config = config
         self.logger = logger
 
+        # Optional per-epoch hook, set programmatically by an external driver
+        # (e.g. the Optuna tuner in Scripts/). Not a config key: it is a
+        # callable, and the effective config is dumped as YAML.
+        self.epoch_callback = None
+
         self.model_cfg = config.get("model", {})
         self.training_cfg = config.get("training", {})
         output_cfg = config.get("output", {})
@@ -62,6 +67,13 @@ class ClassifierFittingPipeline:
         self.split_column = config.get("split_column", "split")
         self.label_column = config.get("label_column")
         self.min_pattern_length = config.get("min_pattern_length")
+        # Evaluate on a random subset of the validation split. A full pass over
+        # a large valid split can cost more than the training it interrupts;
+        # subsampling keeps a frequent eval cadence affordable. Reads are
+        # sampled, so models that chunk reads (MethylBert) see proportionally
+        # more examples than this number.
+        self.valid_subsample = config.get("valid_subsample")
+        self.seed = config.get("seed", 42)
 
         datasets = config.get("datasets", ["all"])
         if isinstance(datasets, str):
@@ -72,22 +84,47 @@ class ClassifierFittingPipeline:
     #  Public API
     # ═══════════════════════════════════════════════════════════════
 
-    def run(self) -> None:
-        """Fit the configured classifier on each requested dataset."""
+    def run(self) -> Dict[str, Dict[str, Any]]:
+        """Fit the configured classifier on each requested dataset.
+
+        Returns ``{dataset_name: best_epoch_metrics}``. The selected epoch is the
+        best one seen during the fit, not the last: with early stopping the saved
+        checkpoint is the best epoch, so reporting the last would describe a
+        model that was never written. Datasets whose classifier exposes no
+        ``history`` are omitted.
+        """
+        self.logger.info("Seeding RNGs with seed %d", self.seed_everything())
         self._configure_mlflow()
 
         self.logger.info(
             f"Starting classifier fit workflow for architecture: {self.model_arch}"
         )
 
+        summary: Dict[str, Dict[str, Any]] = {}
         for dataset_name in self.datasets:
-            self._fit_dataset(dataset_name)
+            best = self._fit_dataset(dataset_name)
+            if best is not None:
+                summary[dataset_name] = best
+        return summary
+
+    def _best_epoch_record(self, history) -> Optional[Dict[str, Any]]:
+        """Pick the best record from a fit ``history`` by the configured metric."""
+        metric = self.config.get("best_metric", "val_loss")
+        mode = self.config.get("best_mode", "min" if metric.endswith("loss") else "max")
+        usable = [h for h in (history or []) if h.get(metric) is not None]
+        if not usable:
+            return None
+        pick = min if mode == "min" else max
+        best = dict(pick(usable, key=lambda h: h[metric]))
+        best["best_epoch"] = best.get("epoch")
+        best["best_metric"] = metric
+        return best
 
     # ═══════════════════════════════════════════════════════════════
     #  Per-dataset fitting
     # ═══════════════════════════════════════════════════════════════
 
-    def _fit_dataset(self, dataset_name: str) -> None:
+    def _fit_dataset(self, dataset_name: str) -> Optional[Dict[str, Any]]:
         """Detect layout, load only fit-relevant columns, and fit the classifier."""
         if dataset_name == "all":
             dataset_path = self.data_path
@@ -119,11 +156,20 @@ class ClassifierFittingPipeline:
             self.logger.info(f"Loaded train split: {len(train_df)} rows")
         except FileNotFoundError as e:
             self.logger.error(f"Error loading train data: {e}")
-            return
+            return None
 
         try:
             val_df = self._load_split(dataset_path, "valid", fmt, declared_columns)
             self.logger.info(f"Loaded valid split: {len(val_df)} rows")
+            if self.valid_subsample and len(val_df) > int(self.valid_subsample):
+                val_df = val_df.sample(
+                    n=int(self.valid_subsample), random_state=self.seed
+                ).reset_index(drop=True)
+                self.logger.info(
+                    "Subsampled valid split to %d rows (seed %d)",
+                    len(val_df),
+                    self.seed,
+                )
         except FileNotFoundError:
             self.logger.warning(
                 "No valid split found, continuing without validation data"
@@ -148,10 +194,12 @@ class ClassifierFittingPipeline:
             mlflow_extra_params=self._mlflow_extra_params(classifier),
             mlflow_extra_artifacts=self._mlflow_extra_artifacts(),
             track_with_mlflow=self.mlflow_cfg.get("enabled", True),
+            epoch_callback=self.epoch_callback,
             **self.training_cfg,
         )
 
         self.logger.info(f"Finished processing {dataset_name}")
+        return self._best_epoch_record(getattr(classifier, "history", None))
 
     # ═══════════════════════════════════════════════════════════════
     #  Helpers
@@ -212,6 +260,25 @@ class ClassifierFittingPipeline:
         if experiment_name:
             mlflow.set_experiment(experiment_name)
 
+    def seed_everything(self) -> int:
+        """Seed Python, NumPy and torch RNGs from ``seed`` for reproducible fits.
+
+        Without this the model initialisation and batch order differ run to run,
+        so two fits of the same config can land far apart -- which makes a
+        hyperparameter sweep unreadable. Returns the seed actually applied.
+        """
+        import random
+
+        import numpy as np
+        import torch
+
+        seed = int(self.seed)
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+        return seed
+
     def _classifier_kwargs(self) -> Dict[str, Any]:
         """Build the kwargs passed to ``read_classifier_factory`` / the classifier's ``__init__``."""
         model_cfg = self.model_cfg
@@ -229,6 +296,11 @@ class ClassifierFittingPipeline:
                 "cancer_detector_prior_type", "uniform"
             ),
             "soft_labels": model_cfg.get("soft_labels", False),
+            # Architecture/loss knobs for hyperparameter tuning. Defaults match
+            # the values that were hardcoded before they became configurable, so
+            # omitting them reproduces earlier runs.
+            "dropout_prob": model_cfg.get("dropout_prob", 0.2),
+            "penalty_scale": model_cfg.get("penalty_scale", 1.0),
             "batch_size": self.config.get("prediction_batch_size", 2200),
             # LookupClassifier.LabelConfig fields, forwarded as-is. Unused by
             # other architectures and filtered by LabelConfig.from_dict.

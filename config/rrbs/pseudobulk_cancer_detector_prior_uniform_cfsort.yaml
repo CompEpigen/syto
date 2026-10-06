@@ -2,7 +2,7 @@
 # Pseudo-Bulk Mixture Generation Configuration
 # ──────────────────────────────────────────────────────────────────
 # Usage:
-#   python App/main.py --task generate_pseudobulk --config App/config/pseudobulk_cancer_detector.yaml
+#   syto generate-pseudobulk --config config/pseudobulk_cancer_detector.yaml
 
 # ── Classifier ────────────────────────────────────────────────────
 # Which classifier was used (or should be used) to predict reads
@@ -35,7 +35,7 @@ classifier_config:
   # dismir_flavor: lstm
 
 # ── Labels & atlas ────────────────────────────────────────────────
-labels_dict_path: App/labels_dict.json
+labels_dict_path: syto/app/labels_dict.json
 atlas_path: /data/leuven/389/vsc38912/Projects/methyldl/Data/Atlas.U25.l4.hg38.full.tsv
 num_labels: 39
 

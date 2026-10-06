@@ -2,7 +2,7 @@
 # Deconvolution Model Fitting Configuration
 # ──────────────────────────────────────────────────────────────────
 # Usage:
-#   python App/main.py --config App/config/deconvolution_fitting_cancer_detector_uniform_cfsort.yaml --task fit_deconvolution 
+#   python syto/app/cli.py --config config/deconvolution_fitting_cancer_detector_uniform_cfsort.yaml --task fit_deconvolution 
 
 # ── Input data ──────────────────────────────────────────────────
 # Paths to predicted splits (output of pseudobulk pipeline stage 3)
@@ -15,7 +15,7 @@ predicted_splits:
 ios_full_matrices_path: /staging/leuven/stg_00118/methylDL/experiments/cfsort_rrbs/CancerDetector/uniform_prior_cfsort/ios_full_matrices.npz
 
 # ── Labels ──────────────────────────────────────────────────────
-labels_dict_path: App/labels_dict.json
+labels_dict_path: syto/app/labels_dict.json
 num_input_labels: 39
 num_output_labels: 39
 

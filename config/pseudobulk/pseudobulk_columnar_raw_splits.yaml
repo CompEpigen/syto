@@ -35,7 +35,7 @@ classifier_config:
     col_label: hard_label_with_background
     num_prediction_classes: 40
 
-labels_dict_path: App/labels_dict.json
+labels_dict_path: syto/app/labels_dict.json
 num_labels: 39
 labeling_scheme: hard_labels
 

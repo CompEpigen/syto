@@ -474,6 +474,8 @@ class Dismir(AbstractReadClassifier):
         num_grg_labels=None,
         grg_label_column=None,
         soft_labels=False,
+        dropout_prob=0.2,
+        penalty_scale=1.0,
     ):
         self.max_sequence_length = max_sequence_length
         self.num_labels = num_labels
@@ -509,7 +511,9 @@ class Dismir(AbstractReadClassifier):
                     _module_logger.info(
                         "Soft Labels were selected as labeling scheme. The model will be trained with ConfidenceWeightedCrossEntropy"
                     )
-                    self.criterion = ConfidenceWeightedCrossEntropy(num_labels)
+                    self.criterion = ConfidenceWeightedCrossEntropy(
+                        num_labels, penalty_scale=penalty_scale
+                    )
                 else:
                     self.criterion = nn.CrossEntropyLoss()
 
@@ -528,6 +532,7 @@ class Dismir(AbstractReadClassifier):
             num_labels,
             classifier_type=classifier_type,
             num_grg_labels=num_grg_labels,
+            dropout_prob=dropout_prob,
         ).to(self.device)
 
     def conv_onehot(self, dna_seq, c_methylation_seq):
@@ -623,10 +628,30 @@ class Dismir(AbstractReadClassifier):
         reset_history=False,
         train_df=None,
         valid_df=None,
+        epoch_callback=None,
+        monitor_metric="val_loss",
+        monitor_mode=None,
     ):
+        """Enhanced training method with support for variable-length sequences.
+
+        ``epoch_callback`` is called with each epoch's history record once the
+        epoch's validation metrics are in. Returning ``False`` stops training --
+        the hook an external hyperparameter tuner uses to prune a trial that is
+        clearly not going to win. Only the fixed-length path supports it; the
+        variable-length path has no grg_attention_based implementation.
         """
-        Enhanced training method with support for variable-length sequences.
-        """
+        # Which metric drives checkpointing and early stopping. Defaults to
+        # val_loss (the historical behaviour). A tuner sweeping penalty_scale
+        # must override it: that parameter rescales the loss, so val_loss is
+        # incomparable across trials while val_f1 is not.
+        if monitor_mode is None:
+            monitor_mode = "min" if monitor_metric.endswith("loss") else "max"
+        if monitor_mode not in ("min", "max"):
+            raise ValueError(f"monitor_mode must be 'min' or 'max', got {monitor_mode!r}")
+        self.monitor_metric_used = monitor_metric
+        self.monitor_mode_used = monitor_mode
+        self.best_monitored_epoch = None
+
         if reset_history:
             self.history = []
         if variable_length:
@@ -658,6 +683,9 @@ class Dismir(AbstractReadClassifier):
                 nesterov,
                 train_df,
                 valid_df,
+                epoch_callback=epoch_callback,
+                monitor_metric=monitor_metric,
+                monitor_mode=monitor_mode,
             )
 
     def _train_fixed_length(
@@ -674,6 +702,9 @@ class Dismir(AbstractReadClassifier):
         nesterov,
         train_df=None,
         valid_df=None,
+        epoch_callback=None,
+        monitor_metric="val_loss",
+        monitor_mode="min",
     ):
         """
         Fixed-length training method with GRG support.
@@ -760,6 +791,9 @@ class Dismir(AbstractReadClassifier):
             verbose,
             train_dir,
             "fixed",
+            epoch_callback=epoch_callback,
+            monitor_metric=monitor_metric,
+            monitor_mode=monitor_mode,
         )
 
     def _train_variable_length(
@@ -895,9 +929,12 @@ class Dismir(AbstractReadClassifier):
         verbose,
         train_dir,
         mode,
+        epoch_callback=None,
+        monitor_metric="val_loss",
+        monitor_mode="min",
     ):
         """Standard training loop for fixed-length sequences with GRG support."""
-        best_val_loss = float("inf")
+        best_monitored = float("inf") if monitor_mode == "min" else float("-inf")
         patience_counter = 0
         session_start_time = time.time()
         use_grg = self.classifier_type == "grg_attention_based"
@@ -1051,9 +1088,23 @@ class Dismir(AbstractReadClassifier):
                     epoch, epochs, train_loss, val_loss, val_metrics
                 )
 
-            # Early stopping
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
+            # Early stopping, on whichever metric is being monitored. The
+            # checkpoint follows the same metric, so the weights on disk are
+            # always the best epoch by the criterion the caller selected.
+            if monitor_metric not in epoch_record:
+                raise ValueError(
+                    f"monitor_metric {monitor_metric!r} is not among the epoch "
+                    f"metrics: {sorted(epoch_record)}"
+                )
+            monitored = epoch_record[monitor_metric]
+            improved = (
+                monitored < best_monitored
+                if monitor_mode == "min"
+                else monitored > best_monitored
+            )
+            if improved:
+                best_monitored = monitored
+                self.best_monitored_epoch = epoch
                 patience_counter = 0
                 torch.save(
                     self.model.state_dict(), os.path.join(train_dir, "weight.pt")
@@ -1064,6 +1115,14 @@ class Dismir(AbstractReadClassifier):
             if patience_counter >= patience:
                 if verbose > 0:
                     _module_logger.info("Early stopping triggered.")
+                break
+
+            # External hook (e.g. an Optuna pruner) sees the completed epoch
+            # and may stop the run. Called after checkpointing so a stopped
+            # trial still leaves its best weights on disk.
+            if epoch_callback is not None and epoch_callback(epoch_record) is False:
+                if verbose > 0:
+                    _module_logger.info("Training stopped by epoch_callback.")
                 break
 
     def _training_loop_variable_length(
@@ -1465,6 +1524,8 @@ class Dismir(AbstractReadClassifier):
             num_grg_labels=kwargs.get("num_grg_labels", 39),
             grg_label_column=grg_label_column,
             soft_labels=kwargs.get("soft_labels", False),
+            dropout_prob=kwargs.get("dropout_prob", 0.2),
+            penalty_scale=kwargs.get("penalty_scale", 1.0),
         )
         # Load pre-trained weights, if a checkpoint path was provided
         if path is not None:
@@ -1593,6 +1654,9 @@ class Dismir(AbstractReadClassifier):
             variable_length=kwargs.get("variable_length", False),
             reset_history=kwargs.get("reset_history", False),
             verbose=kwargs.get("verbose", 1),
+            epoch_callback=kwargs.get("epoch_callback"),
+            monitor_metric=kwargs.get("monitor_metric", "val_loss"),
+            monitor_mode=kwargs.get("monitor_mode"),
         )
         return self
 

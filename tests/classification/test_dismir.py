@@ -829,3 +829,202 @@ class TestDismirSoftLabels(DismirTestBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestDismirTunableHyperparameters(DismirTestBase):
+    """dropout_prob and penalty_scale must be settable, not pinned to defaults."""
+
+    def _make(self, **kwargs):
+        return Dismir(
+            max_sequence_length=self.max_sequence_length,
+            train_data_path=self.train_path,
+            test_data_path=self.test_path,
+            valid_data_path=self.valid_path,
+            num_labels=4,
+            classifier_type="grg_attention_based",
+            num_grg_labels=20,
+            grg_label_column="cluster_label",
+            **kwargs,
+        )
+
+    def test_dropout_prob_reaches_encoder_dropout_layers(self):
+        clf = self._make(dropout_prob=0.45)
+        self.assertAlmostEqual(clf.model.drop1.p, 0.45)
+        self.assertAlmostEqual(clf.model.drop2.p, 0.45)
+
+    def test_dropout_prob_reaches_grg_attention_head(self):
+        clf = self._make(dropout_prob=0.45)
+        self.assertAlmostEqual(clf.model.grg_classifier.attn_dropout.p, 0.45)
+
+    def test_dropout_prob_defaults_to_two_tenths(self):
+        self.assertAlmostEqual(self._make().model.drop1.p, 0.2)
+
+    def test_penalty_scale_reaches_soft_label_criterion(self):
+        clf = self._make(soft_labels=True, penalty_scale=0.25)
+        self.assertAlmostEqual(clf.criterion.penalty_scale, 0.25)
+
+    def test_penalty_scale_defaults_to_one(self):
+        clf = self._make(soft_labels=True)
+        self.assertAlmostEqual(clf.criterion.penalty_scale, 1.0)
+
+    def test_load_forwards_dropout_prob_and_penalty_scale(self):
+        clf = Dismir.load(
+            None,
+            seq_length=self.max_sequence_length,
+            num_labels=4,
+            num_grg_labels=20,
+            grg_label_column="cluster_label",
+            soft_labels=True,
+            dropout_prob=0.35,
+            penalty_scale=0.5,
+        )
+        self.assertAlmostEqual(clf.model.drop1.p, 0.35)
+        self.assertAlmostEqual(clf.criterion.penalty_scale, 0.5)
+
+
+class TestDismirEpochCallback(DismirTestBase):
+    """An epoch hook lets an external tuner observe and prune a run."""
+
+    def _model(self):
+        return Dismir(
+            max_sequence_length=128,
+            train_data_path=self.train_path,
+            test_data_path=self.test_path,
+            valid_data_path=self.valid_path,
+            device=torch.device("cuda"),
+            classifier_type="grg_attention_based",
+            num_grg_labels=100,
+            grg_label_column="dmr_label",
+        )
+
+    def _train(self, model, callback, epochs=3):
+        model.train(
+            train_dir=self.temp_dir,
+            epochs=epochs,
+            batch_size=8,
+            patience=99,
+            variable_length=False,
+            verbose=0,
+            epoch_callback=callback,
+        )
+
+    def test_callback_receives_one_record_per_epoch(self):
+        seen = []
+        model = self._model()
+        self._train(model, lambda rec: seen.append(rec) or True, epochs=3)
+        self.assertEqual([r["epoch"] for r in seen], [1, 2, 3])
+        self.assertIn("val_loss", seen[0])
+
+    def test_callback_returning_false_stops_training(self):
+        seen = []
+        model = self._model()
+        self._train(model, lambda rec: seen.append(rec) is None and rec["epoch"] < 2,
+                    epochs=5)
+        self.assertEqual([r["epoch"] for r in seen], [1, 2])
+        self.assertEqual(len(model.history), 2)
+
+    def test_training_without_callback_is_unaffected(self):
+        model = self._model()
+        self._train(model, None, epochs=2)
+        self.assertEqual(len(model.history), 2)
+
+
+class TestDismirFitForwardsEpochCallback(DismirTestBase):
+    """fit_classificaton is the pipeline's entry point, so the hook must survive it."""
+
+    def test_fit_classificaton_forwards_epoch_callback_to_train(self):
+        model = Dismir(
+            max_sequence_length=128,
+            train_data_path=self.train_path,
+            test_data_path=self.test_path,
+            valid_data_path=self.valid_path,
+            device=torch.device("cuda"),
+            classifier_type="grg_attention_based",
+            num_grg_labels=100,
+            grg_label_column="dmr_label",
+        )
+        captured = {}
+        original = model.train
+        model.train = lambda **kw: captured.update(kw)
+
+        def hook(_record):
+            return True
+
+        model.fit_classificaton(
+            train_df=pd.read_parquet(self.train_path),
+            val_df=pd.read_parquet(self.valid_path),
+            output_dir=self.temp_dir,
+            epoch_callback=hook,
+            track_with_mlflow=False,
+        )
+        model.train = original
+        self.assertIs(captured.get("epoch_callback"), hook)
+
+
+class TestDismirMonitorMetric(DismirTestBase):
+    """Checkpointing/early stopping must be able to follow a metric other than loss.
+
+    penalty_scale rescales the loss, so val_loss is not comparable across
+    hyperparameter trials; a tuner needs to select on the metric it optimises.
+    """
+
+    def _model(self):
+        return Dismir(
+            max_sequence_length=128,
+            train_data_path=self.train_path,
+            test_data_path=self.test_path,
+            valid_data_path=self.valid_path,
+            device=torch.device("cuda"),
+            classifier_type="grg_attention_based",
+            num_grg_labels=100,
+            grg_label_column="dmr_label",
+            soft_labels=False,
+        )
+
+    def test_monitor_metric_defaults_to_val_loss(self):
+        model = self._model()
+        seen = []
+        model.train(train_dir=self.temp_dir, epochs=2, batch_size=8, patience=99,
+                    variable_length=False, verbose=0,
+                    epoch_callback=lambda r: seen.append(r) or True)
+        self.assertEqual(model.monitor_metric_used, "val_loss")
+        self.assertEqual(model.monitor_mode_used, "min")
+
+    def test_monitor_metric_can_follow_val_f1_maximised(self):
+        model = self._model()
+        model.train(train_dir=self.temp_dir, epochs=2, batch_size=8, patience=99,
+                    variable_length=False, verbose=0,
+                    monitor_metric="val_f1", monitor_mode="max")
+        self.assertEqual(model.monitor_metric_used, "val_f1")
+        self.assertEqual(model.monitor_mode_used, "max")
+
+    def test_checkpoint_follows_the_monitored_metric(self):
+        """The saved epoch must be the best one by the monitored metric."""
+        model = self._model()
+        model.train(train_dir=self.temp_dir, epochs=4, batch_size=8, patience=99,
+                    variable_length=False, verbose=0,
+                    monitor_metric="val_f1", monitor_mode="max")
+        best = max(model.history, key=lambda h: h["val_f1"])
+        self.assertEqual(model.best_monitored_epoch, best["epoch"])
+
+    def test_unknown_monitor_metric_is_rejected(self):
+        model = self._model()
+        with self.assertRaises(ValueError):
+            model.train(train_dir=self.temp_dir, epochs=1, batch_size=8, patience=99,
+                        variable_length=False, verbose=0,
+                        monitor_metric="val_nonsense", monitor_mode="max")
+
+    def test_fit_classificaton_forwards_monitor_metric(self):
+        model = self._model()
+        captured = {}
+        model.train = lambda **kw: captured.update(kw)
+        model.fit_classificaton(
+            train_df=pd.read_parquet(self.train_path),
+            val_df=pd.read_parquet(self.valid_path),
+            output_dir=self.temp_dir,
+            monitor_metric="val_f1",
+            monitor_mode="max",
+            track_with_mlflow=False,
+        )
+        self.assertEqual(captured.get("monitor_metric"), "val_f1")
+        self.assertEqual(captured.get("monitor_mode"), "max")

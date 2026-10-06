@@ -1,6 +1,6 @@
 # Inference Configuration
 # This configuration provides settings for running the inference pipeline.
-#  python App/main.py --task inference --config App/config/rrbs/inference.yaml
+#  syto inference --config config/rrbs/inference.yaml
 
 # Classifier Configuration
 # Only required when syto classification-based deconvolution is enabled
@@ -20,7 +20,7 @@ classifier:
 checkpoint_path: /home/luna.kuleuven.be/u0169940/Repos/syto/tmp/classifier_fit_test/dismir/SoftLabelsForRRBSsplits_205files_pooled_Jaccard_hg38_mincpg_4_minlen_10_d041/weight.pt
 # Labels dictionary: JSON file mapping int label -> cell type name
 # e.g. {"0": "B-cells", "1": "T-cells", ...}
-labels_dict_path: App/labels_dict.json
+labels_dict_path: syto/app/labels_dict.json
 
 # Features mask in npz format - used to select features from the aggregated dmr matrix to be used with deconvolution models
 features_mask_path: /data/dmytro/Experiments/ExtendedProportions/rrbs/Hg19_LookupClassifier_HardLabels/pseudobulk/fitted_deconvolvers_unifrorm_multinomial_all_top156features/features_mask_0.9999999999999994_cutoff.npz
@@ -54,11 +54,45 @@ bam_processing:
   exclude_flags: 1796
   min_cpgs: 4
   merge_pairs: true
+  # Parse only the reads overlapping the atlases (syto + every enabled
+  # baseline) instead of walking the whole BAM. Needs an indexed BAM; the
+  # atlas footprint is a fraction of a percent of the genome, so this is the
+  # difference between a whole-genome read table and a few thousand fetches.
+  # Set to false to restore the whole-file parse.
+  restrict_to_atlas: true
+  # Extra bp fetched around each region so that, when merge_pairs is on, a
+  # mate landing outside every atlas region still arrives to be merged.
+  mate_fetch_padding: 1000
   ont_methyl_tr: 180 #~0.7
+  # ML calls at/below ont_unmethyl_tr are unmethylated, above
+  # ont_methyl_tr are methylated; anything in between is too uncertain
+  # and gets the 'unknown' token 2. Set equal to ont_methyl_tr to disable.
+  ont_unmethyl_tr: 75 #~0.29
 
 # MethylBERT prediction parameters
 max_sequence_length: 150
 prediction_batch_size: 2200
+
+# Chunked (low-memory) classification + aggregation.
+# When disabled (default) every read is classified up front and the DMR matrix
+# is built from the full prediction table, which is what runs large samples out
+# of memory. When enabled, stages 2-4 run one slice of the atlas at a time and
+# the matrix is accumulated incrementally; the result is identical.
+#   chunk_by: region -> batches of regions_per_chunk individual DMRs
+#   chunk_by: grg    -> one GR group (one feature-matrix row) at a time
+#   stream_bam: true -> stage 1 too: each chunk fetches its own reads from the
+#     BAM (needs an indexed BAM), so the full read table is never built. The
+#     chunks are then planned over the union of the syto atlas and every
+#     baseline atlas, so one pass feeds all of them and each read's tags are
+#     decoded once; this requires chunk_by: region. Mates are merged only
+#     within a chunk. Set it to false to keep the whole-file parse.
+chunked_inference:
+  enabled: false
+  chunk_by: region
+  regions_per_chunk: 25
+  stream_bam: true
+  progress_bar: true
+
 
 # If enabled, the final dmr prediction matrix will be augmented with 0-predictions rows for every missing cell-specific region
 fill_in_missing_labels: true
@@ -67,7 +101,7 @@ missing_label_strategy: prior_blending # prior_blending, zeroes or prior_imputat
 # Path to pseudobulk HDF5 produced by generate_pseudobulk.
 # Required when missing_label_strategy is prior_blending or prior_imputation —
 # the uniform prior is read from the pure_profiles stored inside this file.
-pseudobulk_h5_path: /home/luna.kuleuven.be/u0169940/Repos/syto/tmp/pseudobulk_generation/pseudobulk.h5
+pseudobulk_path: /home/luna.kuleuven.be/u0169940/Repos/syto/tmp/pseudobulk_generation/pseudobulk.h5
 
 # Split from which to read the uniform prior (default: train).
 # pure_profiles_split: train

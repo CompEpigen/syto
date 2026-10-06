@@ -5,14 +5,14 @@
 # This configuration drives the reworked deconvolution fitting pipeline
 # (App/deconvolution_pipeline.py) which consumes the single consolidated
 # `pseudobulk.h5` file produced by the new PseudobulkGenerator
-# (see App/pseudobulk_pipeline.py and App/config/pseudobulk/pseudobulk_v2_template.yaml).
+# (see App/pseudobulk_pipeline.py and config/pseudobulk/pseudobulk_v2_template.yaml).
 #
 # Both the pseudobulk samples (model inputs/outputs) and the pure cell-type
 # profiles (used for feature selection and the least-squares reference matrix)
 # are read directly from this HDF5 file.
 #
 # Usage:
-#   python App/main.py --task fit_deconvolution --config App/config/deconvolution/new_deconvolution_template.yaml
+#   syto fit-deconvolution --config config/deconvolution/new_deconvolution_template.yaml
 
 # ══════════════════════════════════════════════════════════════════════════════
 # INPUT DATA
@@ -22,7 +22,7 @@
 # It must contain, per split:
 #   - outputs/{split}/pseudobulks/i_{idx}/{aggregated_features,target_proportions,...}
 #   - outputs/{split}/pure_profiles/{feature_matrices,uniform_prior,...}
-pseudobulk_h5_path: /mnt/data/syto_experiments/mlflow/198121009408531961/1f0aaa3947bb4732a945e76aed3a5864/artifacts/pseudobulk_generation/pseudobulk.h5
+pseudobulk_path: /mnt/data/syto_experiments/mlflow/198121009408531961/1f0aaa3947bb4732a945e76aed3a5864/artifacts/pseudobulk_generation/pseudobulk.h5
 
 # Splits to load from the HDF5 file. The first split is used as the reference
 # (train) split for least-squares deconvolvers; "valid" is used to compute the
@@ -32,7 +32,7 @@ splits: [train, valid, test]
 # ══════════════════════════════════════════════════════════════════════════════
 # LABELS
 # ══════════════════════════════════════════════════════════════════════════════
-labels_dict_path: App/labels_dict.json
+labels_dict_path: syto/app/labels_dict.json
 # Number of prediction classes (input features per GR group): selects
 # prediction_0_wavg ... prediction_{num_input_labels-1}_wavg from the HDF5.
 num_input_labels: 39

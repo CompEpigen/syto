@@ -2,7 +2,7 @@
 # Pseudo-Bulk Mixture Generation Configuration
 # ──────────────────────────────────────────────────────────────────
 # Usage:
-#   python App/main.py --task generate_pseudobulk --config App/config/pseudobulk.yaml
+#   syto generate-pseudobulk --config config/pseudobulk.yaml
 
 # ── Classifier ────────────────────────────────────────────────────
 # Which classifier was used (or should be used) to predict reads
@@ -44,7 +44,7 @@ classifier_config:
   # dismir_flavor: lstm
 
 # ── Labels & atlas ────────────────────────────────────────────────
-labels_dict_path: App/labels_dict.json
+labels_dict_path: syto/app/labels_dict.json
 atlas_path: /home/luna.kuleuven.be/u0169940/Repos/UXM_deconv/supplemental/Atlas.U25.l4.hg38.full.tsv
 num_labels: 39
 
