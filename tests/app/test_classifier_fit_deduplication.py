@@ -182,6 +182,31 @@ class TestTrainDeduplication(unittest.TestCase):
         with self.assertRaises(ValueError):
             self._run(supports_read_counts=False, deduplicate_train=True)
 
+    def test_reads_with_different_grg_labels_are_not_merged(self):
+        # A region marking two cell types carries each read once per cell type.
+        with tempfile.TemporaryDirectory() as d:
+            shared = _rows("r1", 10, "ACGTACGT", "01010101", "train", 3)
+            other = dict(shared, dmr_ctype_label=[7] * 3)
+            _bucket(d, 0, _concat(shared, other, _rows("r1", 10, "ACGTACGT", "01010101", "valid", 1)))
+            pipeline = ClassifierFittingPipeline(
+                _config(d, deduplicate_train=True), logging.getLogger("t")
+            )
+            classifier = MagicMock()
+            classifier.supports_read_counts = True
+            classifier.required_fit_columns.return_value = [
+                "input_ids",
+                "methylation_ids",
+                "dmr_ctype_label",
+            ]
+            with patch(
+                "syto.app.classifier_fit_pipeline.read_classifier_factory",
+                return_value=classifier,
+            ):
+                pipeline.run()
+            train = classifier.fit_classificaton.call_args.kwargs["train_df"]
+        self.assertEqual(sorted(train["dmr_ctype_label"]), [0, 7])
+        self.assertEqual(train["read_count"].tolist(), [3, 3])
+
     def test_valid_is_collapsed_when_requested(self):
         kwargs = self._run(deduplicate_valid=True)
         self.assertEqual(sorted(kwargs["val_df"]["read_count"]), [2, 4])

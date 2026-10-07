@@ -425,9 +425,14 @@ class ClassifierFittingPipeline:
     def _part_reducer(self, declared_columns, deduplicate):
         """Per-part transform: pattern-length filter, then optional de-duplication.
 
-        Key columns loaded only to de-duplicate on are dropped afterwards. A
-        group split across part files is merely collapsed less; its counts stay
-        exact either way.
+        Besides ``dedup_keys``, every scalar column loaded for the classifier
+        (e.g. the GRG label, a hard label) joins the key, so rows the model
+        would see differently are never merged -- an atlas region marking two
+        cell types carries each read twice, once per GRG label. List-valued
+        columns (soft labels) are not hashable and must be determined by the
+        keys. Key columns loaded only to de-duplicate on are dropped
+        afterwards. A group split across part files is merely collapsed less;
+        its counts stay exact either way.
         """
         extra_keys = [k for k in self.dedup_keys if k not in declared_columns]
 
@@ -435,9 +440,19 @@ class ClassifierFittingPipeline:
             if self.min_pattern_length:
                 part = apply_pattern_length_filter(part, self.min_pattern_length)
             if deduplicate:
-                part = deduplicate_reads(part, self.dedup_keys).drop(
-                    columns=extra_keys
-                )
+                keys = self.dedup_keys + [
+                    c
+                    for c in part.columns
+                    if c not in self.dedup_keys and not _is_list_valued(part[c])
+                ]
+                part = deduplicate_reads(part, keys).drop(columns=extra_keys)
             return part
 
         return reduce_part
+
+
+def _is_list_valued(column) -> bool:
+    """Whether a column holds per-row sequences (e.g. soft-label vectors)."""
+    if column.dtype != object or column.empty:
+        return False
+    return isinstance(column.iloc[0], (list, tuple, np.ndarray))
