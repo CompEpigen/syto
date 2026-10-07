@@ -177,6 +177,26 @@ class TestBlockPrediction(unittest.TestCase):
         self.assertEqual(clf.predict_split.call_count, 4)
         pd.testing.assert_frame_equal(blocks, whole)
 
+    def test_reordered_block_output_is_placed_by_read_name(self):
+        clf = MagicMock()
+        clf.predict_split.side_effect = lambda df, **_: df.assign(
+            prediction_0=df["x"] * 2.0
+        ).iloc[::-1]
+        df = pd.DataFrame({"x": np.arange(10.0)})
+        out = self._pipeline(4)._predict_in_blocks(clf, df, {})
+        np.testing.assert_array_equal(out["prediction_0"], np.arange(10.0) * 2)
+
+    def test_reads_without_prediction_are_dropped(self):
+        clf = MagicMock()
+        clf.predict_split.side_effect = lambda df, **_: df.assign(
+            prediction_0=df["x"] * 2.0
+        )[df["x"] != 5]
+        df = pd.DataFrame({"x": np.arange(10.0)})
+        out = self._pipeline(4)._predict_in_blocks(clf, df, {})
+        self.assertNotIn(5.0, out["x"].tolist())
+        self.assertEqual(len(out), 9)
+        np.testing.assert_array_equal(out["prediction_0"], out["x"] * 2)
+
     def test_read_names_are_unique_across_blocks(self):
         df = pd.DataFrame({"x": np.arange(7)})
         out = self._pipeline(2)._predict_in_blocks(self._classifier(), df, {})

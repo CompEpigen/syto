@@ -231,25 +231,49 @@ class PseudoBulkPipeline:
         return splits_data
 
     def _predict_in_blocks(self, classifier, df, classifier_config):
-        """Run ``predict_split`` on consecutive row blocks and concatenate.
+        """Run ``predict_split`` on consecutive row blocks, filling preallocated columns.
 
-        A ``read_name`` unique across the split is assigned first, so per-block
-        results never collide. Without ``prediction_block_size`` the split is
-        predicted in one call, as before.
+        Bounds the classifier's input encoding to one block, and never holds
+        more than one block's output frame: the columns each block adds are
+        written into arrays spanning the split, placed by a ``read_name`` that
+        is unique across the split (assigned here when absent). Reads a block's
+        prediction drops are dropped from the result too, matching the inner
+        merge in ``predict_split``. Without ``prediction_block_size`` the split
+        is predicted in one call, as before.
         """
         block = self.prediction_block_size
         if not block or len(df) <= block:
             return classifier.predict_split(df, **classifier_config)
-        if "read_name" not in df.columns:
-            df = df.assign(read_name=np.arange(len(df)))
-        parts = []
-        for start in range(0, len(df), block):
-            stop = min(start + block, len(df))
-            self.logger.info(f"    block {start}-{stop} of {len(df)}")
-            parts.append(
-                classifier.predict_split(df.iloc[start:stop].copy(), **classifier_config)
+        result = df.copy(deep=False)
+        if "read_name" not in result.columns:
+            result["read_name"] = np.arange(len(result))
+        position_of = pd.Index(result["read_name"])
+        if not position_of.is_unique:
+            raise ValueError("read_name must be unique across the split")
+
+        added, filled = {}, np.zeros(len(result), dtype=bool)
+        for start in range(0, len(result), block):
+            stop = min(start + block, len(result))
+            self.logger.info(f"    block {start}-{stop} of {len(result)}")
+            part = result.iloc[start:stop]
+            out = classifier.predict_split(part.copy(), **classifier_config)
+            if not added:
+                for col in out.columns.difference(part.columns, sort=False):
+                    added[col] = np.empty(len(result), dtype=out[col].dtype)
+            rows = position_of.get_indexer(out["read_name"])
+            for col, values in added.items():
+                values[rows] = out[col].to_numpy()
+            filled[rows] = True
+            del out
+
+        for col, values in added.items():
+            result[col] = values
+        if not filled.all():
+            self.logger.warning(
+                "    %d reads got no prediction and are dropped", int((~filled).sum())
             )
-        return pd.concat(parts, ignore_index=True)
+            result = result[filled].reset_index(drop=True)
+        return result
 
     def _get_classifier(self):
         """Build (once) and cache the read-level classifier."""
