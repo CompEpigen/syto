@@ -200,6 +200,30 @@ DEFAULT_DEDUP_KEYS = ["name", "read_start", "input_ids", "methylation_ids"]
 READ_COUNT_COLUMN = "read_count"
 
 
+def dedup_keys_for(df, base_keys):
+    """``base_keys`` plus every other scalar column of ``df``.
+
+    Any column a consumer reads (a GRG label, a class label, ...) joins the key,
+    so rows it would treat differently are never merged -- an atlas region
+    marking two cell types carries each read twice, once per label. List-valued
+    columns (soft labels) are not hashable and must be determined by the keys;
+    so must ``READ_COUNT_COLUMN``, which is summed, not keyed.
+    """
+    return list(base_keys) + [
+        c
+        for c in df.columns
+        if c not in base_keys and c != READ_COUNT_COLUMN and not _is_list_valued(df[c])
+    ]
+
+
+def _is_list_valued(column) -> bool:
+    """Whether a column holds per-row sequences (e.g. soft-label vectors)."""
+    if column.dtype != object or column.empty:
+        return False
+    first = column.iloc[0]
+    return isinstance(first, (list, tuple)) or hasattr(first, "__array__")
+
+
 def deduplicate_reads(df, keys, *, count_column=READ_COUNT_COLUMN):
     """Collapse rows identical on ``keys`` into one, recording the multiplicity.
 

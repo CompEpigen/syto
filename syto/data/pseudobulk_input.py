@@ -18,7 +18,15 @@ from syto.classification.fit_data import (
     load_legacy_split,
     load_columnar_split,
     apply_pattern_length_filter,
+    deduplicate_reads,
+    dedup_keys_for,
+    DEFAULT_DEDUP_KEYS,
 )
+
+#: Columns not loaded when de-duplicating: the generator never reads them, and
+#: as keys they would stop identical reads of different samples (same cell
+#: type) from merging.
+DEDUP_EXCLUDED_COLUMNS = ["file"]
 
 # Columns the pseudobulk pipeline always needs from a raw split; a columnar
 # dataset missing any of these hard-fails in load_columnar_split. They drive
@@ -100,12 +108,20 @@ def load_raw_splits(
     data_format: str = "auto",
     split_column: str = "split",
     min_pattern_length: Optional[int] = None,
+    deduplicate: bool = False,
 ) -> Dict[str, pd.DataFrame]:
     """Load raw training splits from a legacy or columnar dataset directory.
 
     Detects the on-disk layout once, then per split reads it (projecting the
     declared columns for columnar), applies the optional ``min_pattern_length``
     filter, and derives ``NCPGS`` when absent.
+
+    With ``deduplicate``, identical reads are collapsed into one row carrying a
+    ``read_count`` (see ``fit_data.deduplicate_reads``): the key is
+    ``DEFAULT_DEDUP_KEYS`` plus every other scalar column loaded (class label,
+    GRG labels, ...), so rows the pipeline would treat differently are never
+    merged. Filtering and collapsing run per part file, bounding peak RAM by
+    one part. ``DEDUP_EXCLUDED_COLUMNS`` are not loaded in this mode.
     """
     data_path = Path(data_path)
     fmt = detect_format(data_path, override=data_format, split_column=split_column)
@@ -119,6 +135,17 @@ def load_raw_splits(
 
         available = columnar_schema_names(data_path)
         declared = build_declared_columns(classifier_required_columns, available)
+        if deduplicate:
+            declared = [c for c in declared if c not in DEDUP_EXCLUDED_COLUMNS]
+            declared += [k for k in DEFAULT_DEDUP_KEYS if k not in declared]
+
+    def reduce_part(part: pd.DataFrame) -> pd.DataFrame:
+        if min_pattern_length:
+            part = apply_pattern_length_filter(part, min_pattern_length)
+        if deduplicate:
+            part = part.drop(columns=[c for c in DEDUP_EXCLUDED_COLUMNS if c in part])
+            part = deduplicate_reads(part, dedup_keys_for(part, DEFAULT_DEDUP_KEYS))
+        return part
 
     splits: Dict[str, pd.DataFrame] = {}
     for split in split_names:
@@ -130,13 +157,16 @@ def load_raw_splits(
                 split,
                 declared_columns=declared,
                 split_column=split_column,
+                # De-duplication reduces each part as it is read; otherwise
+                # the split is filtered whole below, after the emptiness check.
+                per_fragment=reduce_part if deduplicate else None,
             )
             if df.empty:
                 raise FileNotFoundError(
                     f"No rows for split {split!r} in columnar dataset {data_path}"
                 )
-        if min_pattern_length:
-            df = apply_pattern_length_filter(df, min_pattern_length)
+        if not deduplicate or fmt == "legacy":
+            df = reduce_part(df)
         df = ensure_ncpgs(df)
         splits[split] = df
     return splits
