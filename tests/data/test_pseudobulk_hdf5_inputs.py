@@ -24,6 +24,7 @@ def _df(n=11):
             "prediction_0": rng.random(n),
             "name": [f"chr1:{i}" for i in range(n)],
             "read_count": rng.integers(1, 9, n),
+            "is_cell_informative_region": rng.random(n) > 0.5,  # bool: not numeric
         }
     )
 
@@ -60,6 +61,16 @@ class TestChunkedInputWriting(unittest.TestCase):
         np.testing.assert_array_equal(whole[1], chunked[1])
         self.assertEqual(whole[2], chunked[2])
         self.assertEqual(whole[3], chunked[3])
+
+    def test_column_selection_matches_select_dtypes(self):
+        df = _df()
+        with tempfile.TemporaryDirectory() as d:
+            _, _, attrs, dtype = _write(4, Path(d) / "d.h5", df)
+        expected_num = df.select_dtypes(include=[np.number]).columns.tolist()
+        expected_str = df.select_dtypes(include=[object]).columns.tolist()
+        self.assertEqual(attrs["numeric_columns"], expected_num)
+        self.assertEqual(attrs["string_columns"], expected_str)
+        self.assertEqual(dtype, df[expected_num].values.dtype)
 
     def test_content_matches_the_frame(self):
         df = _df()
