@@ -626,6 +626,9 @@ class PseudobulkHDF5BatchWriter:
 class PseudobulkHDF5ConsolidationWriter:
     """Consolidates batch files into the final HDF5 output."""
 
+    #: Rows per write when storing the input DataFrames (bounds peak RAM).
+    INPUT_WRITE_CHUNK_ROWS = 1_000_000
+
     def __init__(
         self,
         output_path: Path,
@@ -712,25 +715,37 @@ class PseudobulkHDF5ConsolidationWriter:
             numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
             string_cols = df.select_dtypes(include=[object]).columns.tolist()
 
+            # Both tables are written in row chunks into preallocated datasets,
+            # so converting a large split never copies it whole (one copy of a
+            # 23M-row U250 split exhausted RAM). Shapes, dtypes and compression
+            # match writing the full arrays at once.
             # Store numeric columns
             if numeric_cols:
-                split_grp.create_dataset(
+                numeric = df[numeric_cols]
+                dataset = split_grp.create_dataset(
                     "numeric_data",
-                    data=df[numeric_cols].values,
+                    shape=(len(df), len(numeric_cols)),
+                    dtype=np.result_type(*numeric.dtypes),
                     compression=PseudobulkHDF5Schema.COMPRESSION,
                     compression_opts=PseudobulkHDF5Schema.COMPRESSION_LEVEL,
                 )
+                for start in range(0, len(df), self.INPUT_WRITE_CHUNK_ROWS):
+                    stop = start + self.INPUT_WRITE_CHUNK_ROWS
+                    dataset[start:stop] = numeric.iloc[start:stop].values
                 split_grp.attrs["numeric_columns"] = numeric_cols
 
             # Store string columns as variable-length strings
             if string_cols:
                 str_dtype = h5py.special_dtype(vlen=str)
-                str_data = df[string_cols].astype(str).values
-                split_grp.create_dataset(
+                strings = df[string_cols]
+                dataset = split_grp.create_dataset(
                     "string_data",
-                    data=str_data,
+                    shape=(len(df), len(string_cols)),
                     dtype=str_dtype,
                 )
+                for start in range(0, len(df), self.INPUT_WRITE_CHUNK_ROWS):
+                    stop = start + self.INPUT_WRITE_CHUNK_ROWS
+                    dataset[start:stop] = strings.iloc[start:stop].astype(str).values
                 split_grp.attrs["string_columns"] = string_cols
 
             split_grp.attrs["n_rows"] = len(df)
