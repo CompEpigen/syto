@@ -227,11 +227,14 @@ class PseudobulkGenerator:
 
         # Initialize checkpoint manager
         self.checkpoint_manager = CheckpointManager(self.output_directory, self.logger)
-        # Pre-heating checkpoints for target splits
+        # Pre-heating checkpoints for target splits. An existing checkpoint is
+        # kept: recreating it would forget its completed batches, so a resumed
+        # run that skips completed splits would consolidate none of them.
         for split_name, proportions in self.target_proportions_per_split.items():
-            _ = self.checkpoint_manager.create_split_checkpoint(
-                split_name, len(proportions), batch_size
-            )
+            if self.checkpoint_manager.load_split_checkpoint(split_name) is None:
+                self.checkpoint_manager.create_split_checkpoint(
+                    split_name, len(proportions), batch_size
+                )
 
         # Pre-compute indices and numpy arrays for each split
         self._precompute_group_indices()

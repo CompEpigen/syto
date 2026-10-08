@@ -20,6 +20,7 @@ from syto.data.pseudobulk_hdf5_utils import (
     GenerationMetadata,
     GenerationParameters,
     PseudobulkHDF5BatchWriter,
+    PseudobulkHDF5ConsolidationWriter,
 )
 
 # pylint: disable=protected-access
@@ -743,6 +744,82 @@ class TestGenerateSingleSplit(unittest.TestCase):
 
         checkpoint = generator.checkpoint_manager.load_split_checkpoint("train")
         self.assertEqual(sorted(checkpoint.completed_batches), [0, 1, 2])
+
+
+
+class TestResumeAfterConsolidationFailure(unittest.TestCase):
+    """A run that dies while consolidating must consolidate every batch on resume."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.output_dir = Path(self.temp_dir)
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir)
+
+    def _generator(self):
+        np.random.seed(0)
+        df = build_realistic_split_dataframe(labels=[0, 1], n_gr_groups=3, n_reads_per_group=30)
+        return PseudobulkGenerator(
+            splits_df={"train": df},
+            output_directory=self.output_dir,
+            target_proportions_per_split={
+                "train": np.array([[0.5, 0.5], [0.3, 0.7], [0.7, 0.3], [0.2, 0.8]])
+            },
+            batch_size=2,
+            n_workers=1,
+            metadata=GenerationMetadata(
+                grg_id_column="name",
+                labeling_scheme="test",
+                classifier="test",
+                data_watermark="test",
+            ),
+            parameters=GenerationParameters(
+                cell_types_mapping={"class_0": 0, "class_1": 1},
+                gr_groups_mapping={"0": 0, "1": 1, "2": 2},
+                substitution_method="uniform_number",
+                grg_sampling_method="uniform_multinomial",
+            ),
+            n_reads_to_sample=50,
+        )
+
+    def test_resume_consolidates_all_batches(self):
+        from unittest.mock import patch
+        import h5py
+
+        with patch.object(
+            PseudobulkHDF5ConsolidationWriter, "consolidate", side_effect=MemoryError
+        ):
+            with self.assertRaises(MemoryError):
+                self._generator().run()
+
+        path = self._generator().run()  # fresh instance, as after a crash
+        with h5py.File(path, "r") as f:
+            self.assertEqual(len(f["outputs/train/pseudobulks"]), 4)
+
+    def test_consolidation_refuses_incomplete_checkpoint_and_keeps_batches(self):
+        generator = self._generator()
+        generator.checkpoint_manager.create_config(
+            parameters_hash=generator.parameters.to_hash(),
+            splits_order=["train"],
+            n_pseudobulks_per_split={"train": 4},
+        )
+        generator._generate_single_split("train")
+        checkpoint = generator.checkpoint_manager.load_split_checkpoint("train")
+        checkpoint.completed_batches = [0]  # as the old reset left it, worse
+        generator.checkpoint_manager.save_split_checkpoint(checkpoint)
+        writer = PseudobulkHDF5ConsolidationWriter(self.output_dir / "pseudobulk.h5")
+        with self.assertRaises(ValueError):
+            writer.consolidate(
+                checkpoint_manager=generator.checkpoint_manager,
+                metadata=generator.metadata,
+                parameters=generator.parameters,
+                input_dfs=generator.splits_df,
+                pure_profiles={},
+            )
+        batches = generator.checkpoint_manager.get_split_batches_dir("train")
+        self.assertEqual(len(list(batches.glob("batch_*.h5"))), 2)
+        self.assertFalse((self.output_dir / "pseudobulk.h5").exists())
 
 
 if __name__ == "__main__":

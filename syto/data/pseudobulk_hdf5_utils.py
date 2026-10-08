@@ -651,7 +651,22 @@ class PseudobulkHDF5ConsolidationWriter:
         input_dfs: Dict[str, pd.DataFrame],
         pure_profiles: Dict[str, PureProfileResult],
     ) -> Path:
-        """Consolidate all batch files into final HDF5."""
+        """Consolidate all batch files into final HDF5.
+
+        Refuses (before writing anything) when a split's checkpoint lists fewer
+        completed batches than it has: the caller deletes the batch files after
+        consolidating, so an incomplete consolidation would lose them.
+        """
+        config = checkpoint_manager.load_config()
+        for split_name in config.splits_order:
+            checkpoint = checkpoint_manager.load_split_checkpoint(split_name)
+            done = 0 if checkpoint is None else len(checkpoint.completed_batches)
+            total = None if checkpoint is None else checkpoint.total_batches
+            if checkpoint is None or done != total:
+                raise ValueError(
+                    f"Split {split_name!r} has {done} of {total} batches recorded "
+                    "as completed; refusing to consolidate (batch files are kept)."
+                )
         temp_path = self.output_path.with_suffix(".h5.tmp")
 
         try:
