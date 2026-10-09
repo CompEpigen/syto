@@ -581,6 +581,7 @@ class UXMMethylationAtlas(AbstractMethylationAtlas):
         trim: bool = True,
         labels_dict: Optional[Dict] = None,
         cell_type_match_dict: Optional[Dict[str, str]] = None,
+        annotation_columns: Optional[List[str]] = None,
     ) -> pd.DataFrame:
         """Overlap, trim, and optionally annotate reads with DMR labels.
 
@@ -604,10 +605,20 @@ class UXMMethylationAtlas(AbstractMethylationAtlas):
             ``dmr_ctype``, ``dmr_ctype_matched``, ``dmr_ctype_label``.
         cell_type_match_dict : dict, optional
             Atlas cell-type name → project cell-type name alias mapping.
+        annotation_columns : list of str, optional
+            Further atlas columns copied onto each read with its region's
+            target (e.g. a GR-group label a classifier head keys on). Joined on
+            ``(name, target)``, so a region marking several cell types gives
+            each of its per-target read copies that row's own values. Requires
+            ``labels_dict``.
         """
+        if annotation_columns and labels_dict is None:
+            raise ValueError("annotation_columns requires labels_dict")
         df = super().prepare_reads(df, trim=trim)
         if labels_dict is not None:
-            df = self._annotate_dmr_labels(df, labels_dict, cell_type_match_dict or {})
+            df = self._annotate_dmr_labels(
+                df, labels_dict, cell_type_match_dict or {}, annotation_columns or []
+            )
         return df
 
     def _annotate_dmr_labels(
@@ -615,8 +626,13 @@ class UXMMethylationAtlas(AbstractMethylationAtlas):
         df: pd.DataFrame,
         labels_dict: Dict,
         cell_type_match_dict: Dict[str, str],
+        annotation_columns: Optional[List[str]] = None,
     ) -> pd.DataFrame:
-        """Join atlas targets and map to integer label indices."""
+        """Join atlas targets (and any ``annotation_columns``) and map to label indices."""
+        annotation_columns = list(annotation_columns or [])
+        missing = [c for c in annotation_columns if c not in self._atlas.columns]
+        if missing:
+            raise ValueError(f"Annotation columns absent from the atlas: {missing}")
         labels_dict_reversed: Dict[str, int] = {
             v: int(k) for k, v in labels_dict.items()
         }
@@ -625,12 +641,20 @@ class UXMMethylationAtlas(AbstractMethylationAtlas):
         # previously annotated and already carry these columns).
         stale_cols = [
             c
-            for c in ("target", "dmr_ctype", "dmr_ctype_matched", "dmr_ctype_label")
+            for c in (
+                "target",
+                "dmr_ctype",
+                "dmr_ctype_matched",
+                "dmr_ctype_label",
+                *annotation_columns,
+            )
             if c in df.columns
         ]
         if stale_cols:
             df = df.drop(columns=stale_cols)
-        df = pd.merge(df, self._atlas[["name", "target"]], on="name", how="left")
+        df = pd.merge(
+            df, self._atlas[["name", "target", *annotation_columns]], on="name", how="left"
+        )
         df.rename(columns={"target": "dmr_ctype"}, inplace=True)
 
         df["dmr_ctype_matched"] = df["dmr_ctype"].apply(

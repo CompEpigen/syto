@@ -276,6 +276,23 @@ class InferencePipeline:
                 f"Loaded syto atlas with {len(self.atlas.atlas)} regions from {atlas_path}"
             )
 
+        # Atlas columns carried onto every read alongside its target, e.g. the
+        # GR-group label a grg_attention_based classifier keys on when that is
+        # not dmr_ctype_label (see UXMMethylationAtlas.prepare_reads).
+        self.region_annotation_columns: List[str] = list(
+            self.syto_cfg.get("region_annotation_columns") or []
+        )
+        if self.region_annotation_columns and self.atlas is not None:
+            missing = [
+                c for c in self.region_annotation_columns
+                if c not in self.atlas.atlas.columns
+            ]
+            if missing:
+                raise ValueError(
+                    f"region_annotation_columns {missing} are absent from the syto "
+                    f"atlas {self.syto_cfg['atlas_path']}"
+                )
+
         # ── Load baseline deconvolvers ───────────────────────────────
         self._baseline_deconvolvers = self._load_baseline_deconvolvers()
 
@@ -648,6 +665,7 @@ class InferencePipeline:
             trim=True,
             labels_dict=self.labels_dict,
             cell_type_match_dict=self.cell_type_match_dict,
+            annotation_columns=getattr(self, "region_annotation_columns", None),
         )
         if len(prepared) == 0:
             return prepared
@@ -674,6 +692,13 @@ class InferencePipeline:
                 "classifier_head_implementation", "grg_attention_based"
             ),
             grg_label_column=classifier_cfg.get("grg_label_column", "dmr_ctype_label"),
+            # GR-group embedding size; must match the checkpoint when the head
+            # keys on a finer grouping than one group per cell type.
+            **(
+                {"num_grg_labels": classifier_cfg["num_grg_labels"]}
+                if classifier_cfg.get("num_grg_labels") is not None
+                else {}
+            ),
             dismir_flavor=classifier_cfg.get("dismir_flavor", "lstm"),
             cancer_detector_prior_type=classifier_cfg.get(
                 "cancer_detector_prior_type", "uniform"
