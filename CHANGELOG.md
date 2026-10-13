@@ -7,6 +7,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-10-13
+
+### Added
+
+- Classifier fitting on de-duplicated reads. `deduplicate_train` collapses
+  identical reads of each training part into one row carrying a `read_count`;
+  Dismir turns the counts into sampling weights (`count_weighting: sampler`,
+  with `samples_per_epoch`) or loss weights (`count_weighting: loss`).
+  `deduplicate_valid` does the same for the validation split, with
+  count-weighted loss and metrics that equal the read-by-read values. The
+  de-duplication key (`dedup_keys`) includes every scalar classifier column,
+  such as a GRG label, so reads seen differently are never merged.
+- Pseudobulk generation on de-duplicated reads (`deduplicate_reads`): raw
+  splits are loaded de-duplicated, reads are sampled in proportion to their
+  counts, and each unique read is predicted once. `prediction_block_size`
+  bounds how many reads the classifier encodes per call.
+- `valid_subsample` evaluates classifier fitting on a seeded random subset of
+  the validation reads.
+- `best_metric` and `best_mode` select the epoch reported as best by the
+  classifier fit (default `val_loss`, minimised).
+- Dismir options: `dropout_prob` and `penalty_scale` (defaults match the
+  previous fixed values), `monitor_metric` and `monitor_mode` (the metric that
+  drives early stopping and the saved checkpoint), and `compact_inputs`
+  (`uint8` codes instead of one-hot tensors).
+- `UXMMethylationAtlas.with_region_groups` splits each target's regions into
+  groups of similar atlas profile (e.g. with
+  `BalancedRegionClusterer(group_size=25)`) and writes them as an atlas
+  column, optionally with integer codes matching `build_dataset`'s
+  `region_annotations` encoding. Groups are named `<target>__k`, where `__0`
+  holds the regions most specific to the target.
+- Inference carries extra atlas columns onto each read
+  (`region_annotation_columns`, e.g. a GR-group label the classifier head keys
+  on) and passes `num_grg_labels` to the classifier.
+
+### Changed
+
+- Classifier fitting seeds Python, NumPy and torch from `seed` (default 42), so
+  repeated fits of one config give the same model.
+- `BalancedRegionClusterer.fit_predict` takes a feature matrix and returns
+  cluster ids; the per-target atlas logic it used to contain moved to
+  `UXMMethylationAtlas.with_region_groups`.
+- Lower memory use on large datasets such as U250: reduced parquet parts no
+  longer hold references to whole-part buffers, HDF5 consolidation writes in row
+  chunks instead of copying whole splits, and block-wise prediction fills
+  preallocated columns.
+
+### Fixed
+
+- Resuming a pseudobulk run no longer recreates existing split checkpoints,
+  which made it forget completed batches and consolidate none of them.
+  Consolidation now refuses to run while a split is incomplete, so its batch
+  files are kept.
+- Region groups are ranked on imputed atlas values. Previously a single missing
+  value in a target's own column sent its group last, so group numbers did not
+  follow specificity for most U250 targets. Group membership is unchanged.
+
 ## [1.2.0] - 2026-10-05
 
 ### Added
@@ -179,7 +235,8 @@ First tagged release (as methyldl).
 - Bootstrap confidence intervals.
 - End-to-end inference integration.
 
-[Unreleased]: https://github.com/CompEpigen/syto/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/CompEpigen/syto/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/CompEpigen/syto/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/CompEpigen/syto/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/CompEpigen/syto/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/CompEpigen/syto/compare/v0.5.0...v1.0.0
