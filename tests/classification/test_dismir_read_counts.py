@@ -137,7 +137,11 @@ class TestCountWeightedLoss(unittest.TestCase):
             loss.backward()
             self.assertEqual(criterion.reduction, "mean")  # restored
             grad = torch.cat(
-                [p.grad.flatten() for p in model.model.parameters() if p.grad is not None]
+                [
+                    p.grad.flatten()
+                    for p in model.model.parameters()
+                    if p.grad is not None
+                ]
             )
             return loss.item(), grad
 

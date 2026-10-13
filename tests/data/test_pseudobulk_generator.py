@@ -746,7 +746,6 @@ class TestGenerateSingleSplit(unittest.TestCase):
         self.assertEqual(sorted(checkpoint.completed_batches), [0, 1, 2])
 
 
-
 class TestResumeAfterConsolidationFailure(unittest.TestCase):
     """A run that dies while consolidating must consolidate every batch on resume."""
 
@@ -759,7 +758,9 @@ class TestResumeAfterConsolidationFailure(unittest.TestCase):
 
     def _generator(self):
         np.random.seed(0)
-        df = build_realistic_split_dataframe(labels=[0, 1], n_gr_groups=3, n_reads_per_group=30)
+        df = build_realistic_split_dataframe(
+            labels=[0, 1], n_gr_groups=3, n_reads_per_group=30
+        )
         return PseudobulkGenerator(
             splits_df={"train": df},
             output_directory=self.output_dir,

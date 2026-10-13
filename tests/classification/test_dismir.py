@@ -918,8 +918,9 @@ class TestDismirEpochCallback(DismirTestBase):
     def test_callback_returning_false_stops_training(self):
         seen = []
         model = self._model()
-        self._train(model, lambda rec: seen.append(rec) is None and rec["epoch"] < 2,
-                    epochs=5)
+        self._train(
+            model, lambda rec: seen.append(rec) is None and rec["epoch"] < 2, epochs=5
+        )
         self.assertEqual([r["epoch"] for r in seen], [1, 2])
         self.assertEqual(len(model.history), 2)
 
@@ -984,35 +985,62 @@ class TestDismirMonitorMetric(DismirTestBase):
     def test_monitor_metric_defaults_to_val_loss(self):
         model = self._model()
         seen = []
-        model.train(train_dir=self.temp_dir, epochs=2, batch_size=8, patience=99,
-                    variable_length=False, verbose=0,
-                    epoch_callback=lambda r: seen.append(r) or True)
+        model.train(
+            train_dir=self.temp_dir,
+            epochs=2,
+            batch_size=8,
+            patience=99,
+            variable_length=False,
+            verbose=0,
+            epoch_callback=lambda r: seen.append(r) or True,
+        )
         self.assertEqual(model.monitor_metric_used, "val_loss")
         self.assertEqual(model.monitor_mode_used, "min")
 
     def test_monitor_metric_can_follow_val_f1_maximised(self):
         model = self._model()
-        model.train(train_dir=self.temp_dir, epochs=2, batch_size=8, patience=99,
-                    variable_length=False, verbose=0,
-                    monitor_metric="val_f1", monitor_mode="max")
+        model.train(
+            train_dir=self.temp_dir,
+            epochs=2,
+            batch_size=8,
+            patience=99,
+            variable_length=False,
+            verbose=0,
+            monitor_metric="val_f1",
+            monitor_mode="max",
+        )
         self.assertEqual(model.monitor_metric_used, "val_f1")
         self.assertEqual(model.monitor_mode_used, "max")
 
     def test_checkpoint_follows_the_monitored_metric(self):
         """The saved epoch must be the best one by the monitored metric."""
         model = self._model()
-        model.train(train_dir=self.temp_dir, epochs=4, batch_size=8, patience=99,
-                    variable_length=False, verbose=0,
-                    monitor_metric="val_f1", monitor_mode="max")
+        model.train(
+            train_dir=self.temp_dir,
+            epochs=4,
+            batch_size=8,
+            patience=99,
+            variable_length=False,
+            verbose=0,
+            monitor_metric="val_f1",
+            monitor_mode="max",
+        )
         best = max(model.history, key=lambda h: h["val_f1"])
         self.assertEqual(model.best_monitored_epoch, best["epoch"])
 
     def test_unknown_monitor_metric_is_rejected(self):
         model = self._model()
         with self.assertRaises(ValueError):
-            model.train(train_dir=self.temp_dir, epochs=1, batch_size=8, patience=99,
-                        variable_length=False, verbose=0,
-                        monitor_metric="val_nonsense", monitor_mode="max")
+            model.train(
+                train_dir=self.temp_dir,
+                epochs=1,
+                batch_size=8,
+                patience=99,
+                variable_length=False,
+                verbose=0,
+                monitor_metric="val_nonsense",
+                monitor_mode="max",
+            )
 
     def test_fit_classificaton_forwards_monitor_metric(self):
         model = self._model()

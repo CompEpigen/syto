@@ -295,7 +295,9 @@ class TestSampleWeightedMetrics(unittest.TestCase):
     def _assert_weighted_equals_expanded(self, fn, num_classes, soft):
         proba, labels, counts = self._data(num_classes, soft)
         weighted = fn((proba, labels), sample_weight=counts)
-        expanded = fn((np.repeat(proba, counts, axis=0), np.repeat(labels, counts, axis=0)))
+        expanded = fn(
+            (np.repeat(proba, counts, axis=0), np.repeat(labels, counts, axis=0))
+        )
         self.assertEqual(weighted.keys(), expanded.keys())
         for key in expanded:
             self.assertAlmostEqual(weighted[key], expanded[key], places=6, msg=key)

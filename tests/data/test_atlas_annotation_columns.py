@@ -29,7 +29,9 @@ def _atlas():
             "grg_cluster25_label": [3, 4, 7],
         }
     )
-    return UXMMethylationAtlas("t", "hg19", atlas_df=df, cell_types=["GroupA", "GroupB"])
+    return UXMMethylationAtlas(
+        "t", "hg19", atlas_df=df, cell_types=["GroupA", "GroupB"]
+    )
 
 
 def _reads():
@@ -41,7 +43,9 @@ class TestAnnotationColumns(unittest.TestCase):
         out = _atlas()._annotate_dmr_labels(
             _reads(), LABELS, {}, ["grg_cluster25_label"]
         )
-        got = sorted(zip(out["name"], out["dmr_ctype_label"], out["grg_cluster25_label"]))
+        got = sorted(
+            zip(out["name"], out["dmr_ctype_label"], out["grg_cluster25_label"])
+        )
         # r1 is copied once per target, each copy with its own row's label.
         self.assertEqual(got, [("r0", 0, 3), ("r0", 0, 3), ("r1", 0, 4), ("r1", 1, 7)])
 
@@ -96,14 +100,19 @@ class TestInferenceWiring(unittest.TestCase):
 
     def test_num_grg_labels_reaches_the_classifier(self):
         kwargs = self._built_kwargs(
-            {"classifier_type": "dismir", "grg_label_column": "grg_cluster25_label",
-             "num_grg_labels": 383}
+            {
+                "classifier_type": "dismir",
+                "grg_label_column": "grg_cluster25_label",
+                "num_grg_labels": 383,
+            }
         )
         self.assertEqual(kwargs["num_grg_labels"], 383)
         self.assertEqual(kwargs["grg_label_column"], "grg_cluster25_label")
 
     def test_num_grg_labels_left_to_default_when_unset(self):
-        self.assertNotIn("num_grg_labels", self._built_kwargs({"classifier_type": "dismir"}))
+        self.assertNotIn(
+            "num_grg_labels", self._built_kwargs({"classifier_type": "dismir"})
+        )
 
 
 if __name__ == "__main__":

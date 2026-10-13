@@ -187,7 +187,13 @@ class TestTrainDeduplication(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             shared = _rows("r1", 10, "ACGTACGT", "01010101", "train", 3)
             other = dict(shared, dmr_ctype_label=[7] * 3)
-            _bucket(d, 0, _concat(shared, other, _rows("r1", 10, "ACGTACGT", "01010101", "valid", 1)))
+            _bucket(
+                d,
+                0,
+                _concat(
+                    shared, other, _rows("r1", 10, "ACGTACGT", "01010101", "valid", 1)
+                ),
+            )
             pipeline = ClassifierFittingPipeline(
                 _config(d, deduplicate_train=True), logging.getLogger("t")
             )

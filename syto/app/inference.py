@@ -284,7 +284,8 @@ class InferencePipeline:
         )
         if self.region_annotation_columns and self.atlas is not None:
             missing = [
-                c for c in self.region_annotation_columns
+                c
+                for c in self.region_annotation_columns
                 if c not in self.atlas.atlas.columns
             ]
             if missing:

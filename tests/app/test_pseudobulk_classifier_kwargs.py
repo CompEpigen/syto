@@ -26,18 +26,14 @@ class TestClassifierKwargs(unittest.TestCase):
         pipeline = _pipeline(
             {"num_prediction_classes": 7, "num_grg_labels": 50, "seq_length": 256}
         )
-        with patch(
-            "syto.app.pseudobulk_pipeline.read_classifier_factory"
-        ) as factory:
+        with patch("syto.app.pseudobulk_pipeline.read_classifier_factory") as factory:
             pipeline._get_classifier()
         self.assertEqual(factory.call_args.kwargs["num_grg_labels"], 50)
 
     def test_absent_num_grg_labels_is_not_passed_as_none(self):
         """Classifiers default it themselves; an explicit None would break that."""
         pipeline = _pipeline({"num_prediction_classes": 40})
-        with patch(
-            "syto.app.pseudobulk_pipeline.read_classifier_factory"
-        ) as factory:
+        with patch("syto.app.pseudobulk_pipeline.read_classifier_factory") as factory:
             pipeline._get_classifier()
         self.assertNotIn("num_grg_labels", factory.call_args.kwargs)
 

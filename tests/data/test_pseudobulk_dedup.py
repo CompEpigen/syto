@@ -43,9 +43,15 @@ class TestDeduplicatedLoading(unittest.TestCase):
         pd.concat(
             [
                 _reads("r1", 10, "ACGTACGT", "0101", 0, 0, "train", 3, file="a"),
-                _reads("r1", 10, "ACGTACGT", "0101", 0, 0, "train", 2, file="b"),  # other sample
-                _reads("r1", 10, "ACGTACGT", "0101", 5, 0, "train", 4),  # other cell type
-                _reads("r1", 10, "ACGTACGT", "0101", 0, 7, "train", 1),  # shared region copy
+                _reads(
+                    "r1", 10, "ACGTACGT", "0101", 0, 0, "train", 2, file="b"
+                ),  # other sample
+                _reads(
+                    "r1", 10, "ACGTACGT", "0101", 5, 0, "train", 4
+                ),  # other cell type
+                _reads(
+                    "r1", 10, "ACGTACGT", "0101", 0, 7, "train", 1
+                ),  # shared region copy
                 _reads("r1", 10, "ACGTACGT", "1", 0, 0, "train", 9),  # filtered out
                 _reads("r1", 10, "ACGTACGT", "0101", 0, 0, "valid", 6),
             ]
@@ -58,7 +64,11 @@ class TestDeduplicatedLoading(unittest.TestCase):
         return load_raw_splits(
             self.dir,
             ["train", "valid"],
-            classifier_required_columns=["input_ids", "methylation_ids", "dmr_ctype_label"],
+            classifier_required_columns=[
+                "input_ids",
+                "methylation_ids",
+                "dmr_ctype_label",
+            ],
             min_pattern_length=2,
             **kwargs,
         )
@@ -122,13 +132,18 @@ class TestCountWeightedSampling(unittest.TestCase):
                 **{f"prediction_{i}": rng.random(n_rows) for i in range(n_classes)},
             }
         )
-        expanded = dedup.loc[dedup.index.repeat(dedup.read_count)].drop(columns="read_count")
+        expanded = dedup.loc[dedup.index.repeat(dedup.read_count)].drop(
+            columns="read_count"
+        )
         expanded = expanded.reset_index(drop=True)
 
         def mean_features(df, n_pseudobulks=300):
             gen = PseudobulkGenerator.__new__(PseudobulkGenerator)
             gen.splits_df = {"s": df}
-            gen.class_label_column, gen.grg_label_column = "original_label", "dmr_ctype_label"
+            gen.class_label_column, gen.grg_label_column = (
+                "original_label",
+                "dmr_ctype_label",
+            )
             gen.num_prediction_classes = n_classes
             gen.parameters = MagicMock(gr_groups_mapping={})
             gen.logger = logging.getLogger("t")
@@ -144,12 +159,16 @@ class TestCountWeightedSampling(unittest.TestCase):
                     numpy_arrays=gen._numpy_arrays_per_split["s"],
                     target_proportions=np.full(n_classes, 1 / n_classes),
                     grg_label_column="dmr_ctype_label",
-                ).aggregated_features[[f"prediction_{i}_wavg" for i in range(n_classes)]].to_numpy()
+                )
+                .aggregated_features[[f"prediction_{i}_wavg" for i in range(n_classes)]]
+                .to_numpy()
                 for _ in range(n_pseudobulks)
             ]
             return np.mean(feats, axis=0)
 
-        np.testing.assert_allclose(mean_features(dedup), mean_features(expanded), atol=0.01)
+        np.testing.assert_allclose(
+            mean_features(dedup), mean_features(expanded), atol=0.01
+        )
 
 
 class TestBlockPrediction(unittest.TestCase):

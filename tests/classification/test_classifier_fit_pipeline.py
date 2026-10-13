@@ -286,8 +286,11 @@ class TestClassifierFitPipelineRunSummary(unittest.TestCase):
     def _pipe(self):
         return ClassifierFittingPipeline(
             {
-                "model": {"architecture": "dismir", "soft_labels": True,
-                          "grg_label_column": "dmr_ctype_label"},
+                "model": {
+                    "architecture": "dismir",
+                    "soft_labels": True,
+                    "grg_label_column": "dmr_ctype_label",
+                },
                 "training": {},
                 "output": {"output_dir": str(Path(self.tmp.name) / "out")},
                 "mlflow": {"enabled": False},
@@ -326,6 +329,4 @@ class TestClassifierFitPipelineRunSummary(unittest.TestCase):
 
     def test_epoch_callback_absent_by_default(self):
         self._pipe().run()
-        self.assertIsNone(
-            _HistoryStubClassifier.last.fit_kwargs.get("epoch_callback")
-        )
+        self.assertIsNone(_HistoryStubClassifier.last.fit_kwargs.get("epoch_callback"))

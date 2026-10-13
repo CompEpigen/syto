@@ -46,7 +46,10 @@ def _write(chunk_rows, path, df):
         return (
             g["numeric_data"][()],
             g["string_data"].asstr()[()],
-            {k: (list(v) if hasattr(v, "__len__") and not isinstance(v, str) else v) for k, v in g.attrs.items()},
+            {
+                k: (list(v) if hasattr(v, "__len__") and not isinstance(v, str) else v)
+                for k, v in g.attrs.items()
+            },
             g["numeric_data"].dtype,
         )
 

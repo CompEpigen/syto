@@ -80,14 +80,14 @@ def stage_bam_file(
     cell_type_match_dict=None,
 ):
     """Takes the BAM file and analyzes it over the different regions of the atlas, carries out the staging process, and then writes out the results.
-    Each read is given a sample-level ``ctype''. The BAM is processed one region bucket at a time: since the buckets are contiguous genomic intervals, 
-    each fetch remains local and only the reads from one bucket are kept in memory. 
-    
-    For a large atlas a complete pass through the file would require tens of GB, a amount that wouldn't fit alongside several parallel workers. 
-    ``padding'' extends every region so that mates which fall outside it are still fetched and can then be merged. 
-    The regions used in the atlas have ``chrN'' names; if the BAM header lacks a ``chr'' prefix (for example, hs37d5) 
+    Each read is given a sample-level ``ctype''. The BAM is processed one region bucket at a time: since the buckets are contiguous genomic intervals,
+    each fetch remains local and only the reads from one bucket are kept in memory.
+
+    For a large atlas a complete pass through the file would require tens of GB, a amount that wouldn't fit alongside several parallel workers.
+    ``padding'' extends every region so that mates which fall outside it are still fetched and can then be merged.
+    The regions used in the atlas have ``chrN'' names; if the BAM header lacks a ``chr'' prefix (for example, hs37d5)
     then the prefix is removed when fetching but put back on the reads.
-    
+
     In contrast to :func:`stage_file`, this `n_reads` value counts the staged rows (those reads that overlap a region)
     since reads are only ever encountered on a per-bucket basis. Both of them are used for the same split planning.
     """

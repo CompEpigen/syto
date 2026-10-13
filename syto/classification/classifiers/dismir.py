@@ -630,10 +630,9 @@ class Dismir(AbstractReadClassifier):
                 seq[: self.max_sequence_length].encode("latin-1"), dtype=np.uint8
             )
             row = _BASE_CODES[seq]
-            methylated = (
-                np.frombuffer(methylation[: len(seq)].encode("latin-1"), dtype=np.uint8)
-                == ord("1")
-            )
+            methylated = np.frombuffer(
+                methylation[: len(seq)].encode("latin-1"), dtype=np.uint8
+            ) == ord("1")
             row[: len(methylated)][methylated] = _METHYLATED_C_CODE
             codes[i, : len(row)] = row
         return codes
@@ -743,7 +742,9 @@ class Dismir(AbstractReadClassifier):
         if monitor_mode is None:
             monitor_mode = "min" if monitor_metric.endswith("loss") else "max"
         if monitor_mode not in ("min", "max"):
-            raise ValueError(f"monitor_mode must be 'min' or 'max', got {monitor_mode!r}")
+            raise ValueError(
+                f"monitor_mode must be 'min' or 'max', got {monitor_mode!r}"
+            )
         self.monitor_metric_used = monitor_metric
         self.monitor_mode_used = monitor_mode
         self.best_monitored_epoch = None

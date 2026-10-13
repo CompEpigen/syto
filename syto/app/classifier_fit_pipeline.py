@@ -385,9 +385,10 @@ class ClassifierFittingPipeline:
         Filtering (and, for a de-duplicated train split, collapsing) runs per
         part file, so peak RAM is bounded by one part rather than the split.
         """
-        deduplicate = {"train": self.deduplicate_train, "valid": self.deduplicate_valid}.get(
-            split, False
-        )
+        deduplicate = {
+            "train": self.deduplicate_train,
+            "valid": self.deduplicate_valid,
+        }.get(split, False)
         reduce_part = self._part_reducer(declared_columns, deduplicate)
         if fmt == "legacy":
             df = reduce_part(load_legacy_split(dataset_path, split))
@@ -446,4 +447,3 @@ class ClassifierFittingPipeline:
             return part
 
         return reduce_part
-

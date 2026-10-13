@@ -218,7 +218,9 @@ class PseudoBulkPipeline:
 
         for name, df in splits_data.items():
             self.logger.info(f"  Predicting {name} split ({len(df)} reads) ...")
-            predicted = self._predict_in_blocks(read_level_classifier, df, classifier_config)
+            predicted = self._predict_in_blocks(
+                read_level_classifier, df, classifier_config
+            )
 
             # Save intermediate predicted split
             intermediate_path = self.output_dir / f"{name}_predicted.pkl"
