@@ -102,8 +102,9 @@ class _TrainerCase(unittest.TestCase):
 
 
 def _comparable(metrics):
+    """Model metrics only: wall-clock entries (runtime, preparation time, rates) vary."""
     return {
-        k: v for k, v in metrics.items() if "runtime" not in k and "per_second" not in k
+        k: v for k, v in metrics.items() if "time" not in k and "per_second" not in k
     }
 
 
