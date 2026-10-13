@@ -1,5 +1,6 @@
 """ """
 
+import copy
 import logging
 import warnings
 from typing import Dict, List, Optional, Union
@@ -8,6 +9,7 @@ import numpy as np
 import pandas as pd
 
 from syto.data.atlases.abstract_atlas import AbstractMethylationAtlas
+from syto.data.atlases.region_clustering import BalancedRegionClusterer
 from syto.data.dataset import resolve_column
 
 _module_logger = logging.getLogger(__name__)
@@ -287,14 +289,15 @@ class UXMMethylationAtlas(AbstractMethylationAtlas):
     def from_wgbstools_markers(
         cls, marker_paths: List[str], atlas_name: str, reference_genome: str, **kwargs
     ) -> "UXMMethylationAtlas":
-        """Deprecated alias of :meth:`from_block_table`.
-        """
+        """Deprecated alias of :meth:`from_block_table`."""
         warnings.warn(
             "from_wgbstools_markers is deprecated; use from_block_table",
             DeprecationWarning,
             stacklevel=2,
         )
-        return cls.from_block_table(marker_paths, atlas_name, reference_genome, **kwargs)
+        return cls.from_block_table(
+            marker_paths, atlas_name, reference_genome, **kwargs
+        )
 
     # ------------------------------------------------------------------
     # Factory: build atlas from labeled reads
@@ -515,6 +518,109 @@ class UXMMethylationAtlas(AbstractMethylationAtlas):
         )
 
     # ------------------------------------------------------------------
+    # Derived region columns: GR groups
+    # ------------------------------------------------------------------
+
+    def with_region_groups(
+        self,
+        clusterer: BalancedRegionClusterer,
+        column: str,
+        *,
+        label_column: Optional[str] = None,
+        output_path: Optional[str] = None,
+        sep: str = "\t",
+    ) -> "UXMMethylationAtlas":
+        """Return a copy of the atlas with each region's GR group in ``column``.
+
+        The regions of each target are clustered separately by ``clusterer``
+        on their values in the ``ref_cells`` columns, and named
+        ``"<target>__<k>"``. ``k`` runs from 0 within each target, ordered by
+        descending mean value in the target's own column: ``__0`` holds the
+        regions most specific to the target, those with the highest fraction
+        of reads in the region's ``direction`` (U reads for ``U`` markers, M
+        reads for ``M`` markers).
+
+        Missing values are imputed with the column median over the same
+        target's regions (over all regions if the whole column is missing for
+        that target); a column missing everywhere is dropped. A region marking
+        several targets has one atlas row per target, and each row is grouped
+        with its own target.
+
+        Parameters
+        ----------
+        clusterer : BalancedRegionClusterer
+            Splits one target's region feature matrix into groups.
+        column : str
+            Atlas column receiving the group names.
+        label_column : str, optional
+            Also write the groups as dense integer codes, encoded as
+            ``build_dataset``'s ``region_annotations`` encodes ``column``
+            (sorted factorization), so inference can read the labels the
+            classifier was trained on straight from the atlas through
+            ``region_annotation_columns``.
+        output_path : str, optional
+            If given, write the resulting atlas TSV to this path (the atlas as
+            loaded: rows of ignored or excluded targets are not written).
+        sep : str
+            Column separator of the optional output.
+        """
+        features = self._region_features()
+        groups = pd.Series(index=self._atlas.index, dtype=object)
+        for target, idx in self._atlas.groupby("target", sort=True).groups.items():
+            ids = clusterer.fit_predict(features.loc[idx].to_numpy())
+            own = features.loc[idx, target] if target in features.columns else None
+            rank = self._rank_groups(ids, own)
+            groups.loc[idx] = [f"{target}__{rank[c]}" for c in ids]
+
+        grouped = copy.copy(self)
+        # pylint: disable=protected-access
+        grouped._atlas = self._atlas.assign(**{column: groups})
+        if label_column is not None:
+            # Same encoding as dataset_build.filters.load_region_annotations.
+            codes, _ = pd.factorize(groups, sort=True)
+            grouped._atlas[label_column] = codes
+
+        _module_logger.info(
+            "Atlas '%s': %d region row(s) in %d GR group(s) over %d target(s)",
+            self.atlas_name,
+            len(groups),
+            groups.nunique(),
+            self._atlas["target"].nunique(),
+        )
+        if output_path is not None:
+            grouped._atlas.to_csv(output_path, sep=sep, index=False, na_rep="NA")
+        return grouped
+
+    def _region_features(self) -> pd.DataFrame:
+        """The ``ref_cells`` values of every region row, imputed per target."""
+        features = self._atlas[self._ref_cells].astype(np.float64)
+        per_target = features.groupby(self._atlas["target"]).transform("median")
+        features = features.fillna(per_target).fillna(features.median())
+        # A column with no values at all carries no information.
+        features = features.dropna(axis=1, how="all")
+        if features.shape[1] == 0:
+            raise ValueError(
+                f"Atlas '{self.atlas_name}' has no cell-type values to group "
+                "regions on; fill them with from_reads first."
+            )
+        return features
+
+    @staticmethod
+    def _rank_groups(ids: np.ndarray, own: Optional[pd.Series]) -> np.ndarray:
+        """Map cluster ids to ``0..k-1`` by descending mean of ``own``.
+
+        Keeps the clusterer's ids when the target has no column of its own.
+        """
+        k = int(ids.max()) + 1
+        if own is None:
+            return np.arange(k)
+        values = own.to_numpy()
+        means = np.array([values[ids == c].mean() for c in range(k)])
+        rank = np.empty(k, dtype=int)
+        rank[np.argsort(-means, kind="stable")] = np.arange(k)
+        return rank
+
+    # ------------------------------------------------------------------
     # AbstractAtlas interface
     # ------------------------------------------------------------------
 
@@ -653,7 +759,10 @@ class UXMMethylationAtlas(AbstractMethylationAtlas):
         if stale_cols:
             df = df.drop(columns=stale_cols)
         df = pd.merge(
-            df, self._atlas[["name", "target", *annotation_columns]], on="name", how="left"
+            df,
+            self._atlas[["name", "target", *annotation_columns]],
+            on="name",
+            how="left",
         )
         df.rename(columns={"target": "dmr_ctype"}, inplace=True)
 
