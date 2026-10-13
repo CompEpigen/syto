@@ -9,6 +9,7 @@ EpigenBERT2) use all of it through ``syto.classification.hf_training``.
 """
 
 import logging
+from typing import Optional
 
 import numpy as np
 import torch
@@ -146,3 +147,52 @@ class CountWeightedBalancedBatchSampler(Sampler):
 
     def __len__(self):
         return self.num_batches
+
+
+class ReadWeightedLossMixin:
+    """Per-read loss weighting for models that compute their loss in ``forward``.
+
+    Every loss call goes through :meth:`_loss`. Given ``sample_weight`` (each
+    row's read count over its dataset's mean count, see
+    :class:`ReadCountDatasetMixin`), the batch loss is the mean of the weighted
+    per-row losses: an unbiased estimate of the duplicated data's mean loss in
+    training and, because the HF Trainer averages batch losses by row, the
+    exact per-read mean over an evaluation pass. Without a weight the loss is
+    ``loss_fct(*args)`` unchanged.
+    """
+
+    @staticmethod
+    def _loss(loss_fct, *args, sample_weight=None):
+        if sample_weight is None:
+            return loss_fct(*args)
+        per_row = per_row_loss(loss_fct, *args)
+        return (per_row * sample_weight.to(per_row.dtype)).mean()
+
+
+class ReadCountDatasetMixin:
+    """Read counts of a dataset of de-duplicated rows.
+
+    ``read_counts`` holds each row's multiplicity (``None`` when the rows are
+    not de-duplicated). Items then carry ``sample_weight``, the row's count over
+    the dataset's mean count, which :class:`ReadWeightedLossMixin` multiplies
+    into the loss; trainers read ``read_counts`` for sampling and metric
+    weights.
+    """
+
+    read_counts: Optional[np.ndarray] = None
+    _sample_weights: Optional[np.ndarray] = None
+
+    def _set_read_counts(self, counts) -> None:
+        if counts is None:
+            self.read_counts = None
+            self._sample_weights = None
+            return
+        self.read_counts = _validated_counts(counts)
+        self._sample_weights = normalised_weights(self.read_counts)
+
+    def _with_sample_weight(self, item: dict, index: int) -> dict:
+        if self._sample_weights is not None:
+            item["sample_weight"] = torch.tensor(
+                self._sample_weights[index], dtype=torch.float32
+            )
+        return item

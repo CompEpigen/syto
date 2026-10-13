@@ -6,9 +6,12 @@ import numpy as np
 import torch
 import torch.nn as nn
 
+from syto.classification.loss import ConfidenceWeightedCrossEntropy, FocalLoss
 from syto.classification.read_counts import (
     CountWeightedBalancedBatchSampler,
     CountWeightedSampler,
+    ReadCountDatasetMixin,
+    ReadWeightedLossMixin,
     normalised_weights,
     per_row_loss,
 )
@@ -97,6 +100,78 @@ class TestNormalisedWeights(unittest.TestCase):
     def test_rejects_non_positive_counts(self):
         with self.assertRaises(ValueError):
             normalised_weights([1, 0])
+
+
+def _loss_cases():
+    """(name, loss_fct, logits, targets) for every loss the BERT models use."""
+    torch.manual_seed(0)
+    logits = torch.randn(3, 3)
+    hard = torch.tensor([0, 2, 1])
+    onehot = nn.functional.one_hot(hard, 3).float()
+    soft = torch.tensor([[0.8, 0.1, 0.1], [0.2, 0.7, 0.1], [0.1, 0.1, 0.8]])
+    return [
+        ("ce", nn.CrossEntropyLoss(), logits, hard),
+        ("bce", nn.BCEWithLogitsLoss(), logits, onehot),
+        ("focal_bce", FocalLoss(), logits, onehot),
+        ("cwce", ConfidenceWeightedCrossEntropy(3), logits, soft),
+        ("mse", nn.MSELoss(), torch.randn(3), torch.randn(3)),
+    ]
+
+
+class TestReadWeightedLossMixin(unittest.TestCase):
+    COUNTS = torch.tensor([2, 1, 3])
+
+    def test_without_weight_the_loss_is_unchanged(self):
+        for name, loss_fct, logits, targets in _loss_cases():
+            with self.subTest(name):
+                self.assertTrue(
+                    torch.equal(
+                        ReadWeightedLossMixin._loss(loss_fct, logits, targets),
+                        loss_fct(logits, targets),
+                    )
+                )
+
+    def test_normalised_counts_reproduce_the_duplicated_mean(self):
+        w = torch.as_tensor(
+            normalised_weights(self.COUNTS.numpy()), dtype=torch.float32
+        )
+        for name, loss_fct, logits, targets in _loss_cases():
+            with self.subTest(name):
+                weighted = ReadWeightedLossMixin._loss(
+                    loss_fct, logits, targets, sample_weight=w
+                )
+                duplicated = loss_fct(
+                    logits.repeat_interleave(self.COUNTS, dim=0),
+                    targets.repeat_interleave(self.COUNTS, dim=0),
+                )
+                self.assertTrue(torch.isclose(weighted, duplicated, atol=1e-6))
+                self.assertEqual(loss_fct.reduction, "mean")
+
+
+class _Rows(ReadCountDatasetMixin):
+    def __init__(self, n, counts=None):
+        self.n = n
+        self._set_read_counts(counts)
+
+    def __getitem__(self, i):
+        return self._with_sample_weight({"x": i}, i)
+
+
+class TestReadCountDatasetMixin(unittest.TestCase):
+    def test_items_carry_normalised_weights(self):
+        rows = _Rows(3, counts=[2, 1, 3])
+        np.testing.assert_array_equal(rows.read_counts, [2.0, 1.0, 3.0])
+        self.assertAlmostEqual(float(rows[2]["sample_weight"]), 1.5)
+        self.assertEqual(rows[2]["sample_weight"].dtype, torch.float32)
+
+    def test_without_counts_items_are_unchanged(self):
+        rows = _Rows(3)
+        self.assertIsNone(rows.read_counts)
+        self.assertEqual(rows[0], {"x": 0})
+
+    def test_rejects_non_positive_counts(self):
+        with self.assertRaises(ValueError):
+            _Rows(2, counts=[1, 0])
 
 
 if __name__ == "__main__":
