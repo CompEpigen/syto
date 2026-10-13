@@ -626,6 +626,9 @@ class PseudobulkHDF5BatchWriter:
 class PseudobulkHDF5ConsolidationWriter:
     """Consolidates batch files into the final HDF5 output."""
 
+    #: Rows per write when storing the input DataFrames (bounds peak RAM).
+    INPUT_WRITE_CHUNK_ROWS = 1_000_000
+
     def __init__(
         self,
         output_path: Path,
@@ -648,7 +651,22 @@ class PseudobulkHDF5ConsolidationWriter:
         input_dfs: Dict[str, pd.DataFrame],
         pure_profiles: Dict[str, PureProfileResult],
     ) -> Path:
-        """Consolidate all batch files into final HDF5."""
+        """Consolidate all batch files into final HDF5.
+
+        Refuses (before writing anything) when a split's checkpoint lists fewer
+        completed batches than it has: the caller deletes the batch files after
+        consolidating, so an incomplete consolidation would lose them.
+        """
+        config = checkpoint_manager.load_config()
+        for split_name in config.splits_order:
+            checkpoint = checkpoint_manager.load_split_checkpoint(split_name)
+            done = 0 if checkpoint is None else len(checkpoint.completed_batches)
+            total = None if checkpoint is None else checkpoint.total_batches
+            if checkpoint is None or done != total:
+                raise ValueError(
+                    f"Split {split_name!r} has {done} of {total} batches recorded "
+                    "as completed; refusing to consolidate (batch files are kept)."
+                )
         temp_path = self.output_path.with_suffix(".h5.tmp")
 
         try:
@@ -708,29 +726,43 @@ class PseudobulkHDF5ConsolidationWriter:
         for split_name, df in input_dfs.items():
             split_grp = inputs_grp.create_group(split_name)
 
-            # Separate numeric and string columns
-            numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-            string_cols = df.select_dtypes(include=[object]).columns.tolist()
+            # Separate numeric and string columns. Selected on an empty row
+            # slice: select_dtypes (like df[cols]) copies the data it returns.
+            header = df.iloc[:0]
+            numeric_cols = header.select_dtypes(include=[np.number]).columns.tolist()
+            string_cols = header.select_dtypes(include=[object]).columns.tolist()
 
+            # Both tables are written in row chunks into preallocated datasets,
+            # and columns are selected per chunk, so a large split is never
+            # copied whole (copies of a 23M-row U250 split exhausted RAM).
+            # Shapes, dtypes and compression match writing the full arrays at once.
             # Store numeric columns
             if numeric_cols:
-                split_grp.create_dataset(
+                dataset = split_grp.create_dataset(
                     "numeric_data",
-                    data=df[numeric_cols].values,
+                    shape=(len(df), len(numeric_cols)),
+                    dtype=header[numeric_cols].values.dtype,
                     compression=PseudobulkHDF5Schema.COMPRESSION,
                     compression_opts=PseudobulkHDF5Schema.COMPRESSION_LEVEL,
                 )
+                for start in range(0, len(df), self.INPUT_WRITE_CHUNK_ROWS):
+                    stop = start + self.INPUT_WRITE_CHUNK_ROWS
+                    dataset[start:stop] = df.iloc[start:stop][numeric_cols].values
                 split_grp.attrs["numeric_columns"] = numeric_cols
 
             # Store string columns as variable-length strings
             if string_cols:
                 str_dtype = h5py.special_dtype(vlen=str)
-                str_data = df[string_cols].astype(str).values
-                split_grp.create_dataset(
+                dataset = split_grp.create_dataset(
                     "string_data",
-                    data=str_data,
+                    shape=(len(df), len(string_cols)),
                     dtype=str_dtype,
                 )
+                for start in range(0, len(df), self.INPUT_WRITE_CHUNK_ROWS):
+                    stop = start + self.INPUT_WRITE_CHUNK_ROWS
+                    dataset[start:stop] = (
+                        df.iloc[start:stop][string_cols].astype(str).values
+                    )
                 split_grp.attrs["string_columns"] = string_cols
 
             split_grp.attrs["n_rows"] = len(df)

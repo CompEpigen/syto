@@ -35,6 +35,11 @@ from syto.classification.classification_heads import (
     GRGAttentionClassificationHead,
 )
 from syto.classification.loss import ConfidenceWeightedCrossEntropy, FocalLoss
+from syto.classification.fit_data import READ_COUNT_COLUMN
+from syto.classification.read_counts import (
+    ReadCountDatasetMixin,
+    ReadWeightedLossMixin,
+)
 from syto.classification.classifiers.abstract_read_classifier import (
     AbstractReadClassifier,
 )
@@ -136,6 +141,7 @@ def prepare_methylbert_list(
     is_binary=False,
     grg_ctype_label="dmr_ctype_label",
     include_labels=True,
+    read_count_column=None,
 ):
     """
     Prepares inference data with sliding window chunking.
@@ -147,6 +153,10 @@ def prepare_methylbert_list(
             dataset carries through to a batch with no ``labels`` key so the
             Trainer skips compute_metrics instead of scoring against a
             fabricated class.
+        read_count_column: Column with the multiplicity of de-duplicated
+            reads. When given, every chunk row ends with its read's count
+            under a trailing ``"read_count"`` header. Left None (prediction),
+            the layout is unchanged.
     """
     if "read_name" not in results_df.columns:
         results_df["read_name"] = range(len(results_df))
@@ -164,6 +174,8 @@ def prepare_methylbert_list(
             "on_target_mask",
         ]
     ]
+    if read_count_column is not None:
+        data_list[0].append("read_count")
 
     for i, row in results_df.iterrows():
         # 1. Get the CLEAN stream of tokens (Ns removed)
@@ -192,19 +204,20 @@ def prepare_methylbert_list(
             grg_label = row[grg_label_column]
             grg_ctype = row[grg_ctype_label]
 
-            data_list.append(
-                [
-                    dna,
-                    methyl,
-                    grg_ctype,
-                    grg_label,
-                    label,
-                    o_label,
-                    read_name,
-                    ncpgs_marked,
-                    o_label == grg_ctype,
-                ]
-            )
+            chunk_row = [
+                dna,
+                methyl,
+                grg_ctype,
+                grg_label,
+                label,
+                o_label,
+                read_name,
+                ncpgs_marked,
+                o_label == grg_ctype,
+            ]
+            if read_count_column is not None:
+                chunk_row.append(int(row[read_count_column]))
+            data_list.append(chunk_row)
 
     return data_list
 
@@ -237,6 +250,9 @@ def methylbert_finetune_collator(features):
 
     if "on_target_mask" in features[0]:
         batch["on_target_mask"] = torch.stack([f["on_target_mask"] for f in features])
+
+    if "sample_weight" in features[0]:
+        batch["sample_weight"] = torch.stack([f["sample_weight"] for f in features])
 
     # Prediction-only data carries no labels; leaving the key out is what makes
     # the Trainer skip compute_metrics instead of scoring against placeholders.
@@ -375,7 +391,7 @@ class VanillaClassifier(nn.Module):
         return logits, sequence_output_with_gr
 
 
-class MethylBertEmbeddedGRG(BertPreTrainedModel):
+class MethylBertEmbeddedGRG(ReadWeightedLossMixin, BertPreTrainedModel):
     """
     Extended MethylBERT with support for both vanilla and attention-based classifiers.
     """
@@ -511,6 +527,7 @@ class MethylBertEmbeddedGRG(BertPreTrainedModel):
         labels=None,  # Cell Type labels
         grg_ids=None,  # GRG labels
         on_target_mask=None,  # Whether or not the read is on target
+        sample_weight=None,  # read count / mean count of de-duplicated rows
     ):
         outputs = self.bert(
             input_ids,
@@ -547,25 +564,44 @@ class MethylBertEmbeddedGRG(BertPreTrainedModel):
             )
             grg_logits = None  # Not applicable for attention-based
 
-        # Calculate loss if labels are provided
+        # Calculate loss if labels are provided. Every call goes through
+        # _loss, which weighs rows by sample_weight when it is given.
         loss = None
         loss_ce = None
         if labels is not None:
+            w = sample_weight
             if self.num_labels == 1:
-                loss = self.classification_loss_fct(
-                    ctype_logits.squeeze(), labels.float()
+                loss = self._loss(
+                    self.classification_loss_fct,
+                    ctype_logits.squeeze(),
+                    labels.float(),
+                    sample_weight=w,
                 )
             elif labels.ndim >= 2 and labels.shape[-1] == self.num_labels:
                 # Soft labels: already a [B, C] probability distribution
                 if self.loss == "on_target_ce":
-                    loss = self.classification_loss_fct(
-                        ctype_logits, labels.float(), on_target_mask
+                    loss = self._loss(
+                        self.classification_loss_fct,
+                        ctype_logits,
+                        labels.float(),
+                        on_target_mask,
+                        sample_weight=w,
                     )
                 else:
-                    loss = self.classification_loss_fct(ctype_logits, labels.float())
+                    loss = self._loss(
+                        self.classification_loss_fct,
+                        ctype_logits,
+                        labels.float(),
+                        sample_weight=w,
+                    )
 
                 if self.loss == "focal_bce":
-                    loss_ce = F.cross_entropy(ctype_logits, labels.float())
+                    loss_ce = self._loss(
+                        nn.CrossEntropyLoss(),
+                        ctype_logits,
+                        labels.float(),
+                        sample_weight=w,
+                    )
                 elif self.loss == "ce":
                     loss_ce = loss
 
@@ -574,12 +610,21 @@ class MethylBertEmbeddedGRG(BertPreTrainedModel):
                 ctype_label_onehot = F.one_hot(
                     labels, num_classes=self.num_labels
                 ).float()
-                loss = self.classification_loss_fct(ctype_logits, ctype_label_onehot)
+                loss = self._loss(
+                    self.classification_loss_fct,
+                    ctype_logits,
+                    ctype_label_onehot,
+                    sample_weight=w,
+                )
                 if self.loss == "focal_bce":
-                    loss_ce = F.cross_entropy(ctype_logits, labels)
+                    loss_ce = self._loss(
+                        nn.CrossEntropyLoss(), ctype_logits, labels, sample_weight=w
+                    )
             else:
                 # Hard labels with CE
-                loss = self.classification_loss_fct(ctype_logits, labels)
+                loss = self._loss(
+                    self.classification_loss_fct, ctype_logits, labels, sample_weight=w
+                )
                 if self.loss == "ce":
                     loss_ce = loss
 
@@ -600,7 +645,9 @@ def build_on_target_recorder(config, output_dir, logger=None):
     ``config`` is the ``training.on_target_score_plots`` block. A missing block
     (``None``) means enabled with defaults; ``enabled: false`` disables the
     diagnostic entirely, in which case no directory is created and the trainer
-    hook reduces to one ``is None`` check per evaluation.
+    hook reduces to one ``is None`` check per evaluation. On de-duplicated
+    rows the plotted densities are over unique rows, not weighted by
+    read_count.
 
     Plots land in a subdirectory of the training output dir (where checkpoints
     are written) rather than inside ``checkpoint-N/``, which ``save_total_limit``
@@ -620,6 +667,8 @@ class MethylBert(AbstractReadClassifier):
     """
     High-level wrapper class for MethylBERT with support for classifier selection.
     """
+
+    supports_read_counts = True
 
     def __init__(
         self,
@@ -815,6 +864,8 @@ class MethylBert(AbstractReadClassifier):
         signal_mask=None,
         bg_ratio=0.3,
         eval_diagnostics=None,
+        count_weighting="sampler",
+        samples_per_epoch=None,
     ):
         """
         Internal method to build a HF Trainer.
@@ -855,6 +906,8 @@ class MethylBert(AbstractReadClassifier):
                 ),
                 callbacks=callbacks,
                 eval_diagnostics=eval_diagnostics,
+                count_weighting=count_weighting,
+                samples_per_epoch=samples_per_epoch,
             )
 
         else:
@@ -875,6 +928,8 @@ class MethylBert(AbstractReadClassifier):
                 signal_mask=signal_mask,
                 bg_ratio=bg_ratio,
                 eval_diagnostics=eval_diagnostics,
+                count_weighting=count_weighting,
+                samples_per_epoch=samples_per_epoch,
             )
 
         use_table_progress_callback(trainer)
@@ -892,6 +947,8 @@ class MethylBert(AbstractReadClassifier):
         signal_mask=None,
         bg_ratio=0.3,
         eval_diagnostics=None,
+        count_weighting="sampler",
+        samples_per_epoch=None,
     ):
         """
         Fine-tune your model on a training set, optional validation set, etc.
@@ -924,6 +981,8 @@ class MethylBert(AbstractReadClassifier):
             signal_mask=signal_mask,
             bg_ratio=bg_ratio,
             eval_diagnostics=eval_diagnostics,
+            count_weighting=count_weighting,
+            samples_per_epoch=samples_per_epoch,
         )
         checkpoint_path = None
         if resume_from_checkpoint is not None:
@@ -1121,6 +1180,9 @@ class MethylBert(AbstractReadClassifier):
             stride=int(self.seq_len / 2),
             soft_labels=self.soft_labels,
             is_binary=True if self.num_labels == 2 else False,
+            read_count_column=(
+                READ_COUNT_COLUMN if READ_COUNT_COLUMN in train_df_renamed.columns else None
+            ),
         )
         train_dataset = MethylBertFinetuneDataset(
             data_source=train_data_list,
@@ -1145,6 +1207,9 @@ class MethylBert(AbstractReadClassifier):
                 stride=int(self.seq_len / 2),
                 soft_labels=self.soft_labels,
                 is_binary=True if self.num_labels == 2 else False,
+                read_count_column=(
+                    READ_COUNT_COLUMN if READ_COUNT_COLUMN in val_df_renamed.columns else None
+                ),
             )
             val_dataset = MethylBertFinetuneDataset(
                 data_source=val_data_list,
@@ -1213,6 +1278,8 @@ class MethylBert(AbstractReadClassifier):
             signal_mask=signal_mask,
             bg_ratio=kwargs.get("bg_ratio", 0.3),
             eval_diagnostics=eval_diagnostics,
+            count_weighting=kwargs.get("count_weighting", "sampler"),
+            samples_per_epoch=kwargs.get("samples_per_epoch"),
         )
 
         # Optionally compute train-set metrics with a final evaluation pass
@@ -1564,7 +1631,7 @@ class MethylBertPretrainDataset(MethylBertDataset):
         return inputs, labels, masked_indices
 
 
-class MethylBertFinetuneDataset(MethylBertDataset):
+class MethylBertFinetuneDataset(ReadCountDatasetMixin, MethylBertDataset):
     def __init__(
         self,
         data_source: Union[str, List[List[Union[str, int]]]],
@@ -1642,6 +1709,10 @@ class MethylBertFinetuneDataset(MethylBertDataset):
         if n_seqs is not None:
             raw_seqs = raw_seqs[:n_seqs]
 
+        # De-duplicated rows end with a ``read_count`` (prepare_methylbert_list
+        # with read_count_column); it weighs their chunks in loss and metrics.
+        self._set_read_counts(self._column_values(raw_seqs, "read_count"))
+
         _module_logger.info(f"Total number of sequences: {len(raw_seqs)}")
 
         if lazy_tokenization:
@@ -1714,6 +1785,16 @@ class MethylBertFinetuneDataset(MethylBertDataset):
             self.set_grg_labels = None
             self.ctype_label_count = None
 
+    def _column_values(self, rows, column):
+        """One column of the raw rows (TSV lines or lists), or None if absent."""
+        if column not in self.headers:
+            return None
+        idx = self.headers.index(column)
+        return [
+            float(row.split("\t")[idx] if isinstance(row, str) else row[idx])
+            for row in rows
+        ]
+
     def _tokenize_single_line(self, index):
         """
         Tokenize a single line (used in lazy mode).
@@ -1777,6 +1858,8 @@ class MethylBertFinetuneDataset(MethylBertDataset):
             self.raw_lines = self.raw_lines[:n_seq]
         else:
             self.lines = self.lines[:n_seq]
+        if self.read_counts is not None:
+            self._set_read_counts(self.read_counts[:n_seq])
 
     def save_cache(self):
         """Manually save cache to disk (useful in lazy mode)."""
@@ -1841,7 +1924,7 @@ class MethylBertFinetuneDataset(MethylBertDataset):
             else:
                 result["labels"] = item["ctype_label"]
 
-        return result
+        return self._with_sample_weight(result, index)
 
     def __del__(self):
         """Save cache when object is destroyed."""

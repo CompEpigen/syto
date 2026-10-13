@@ -15,6 +15,11 @@ logger = logging.getLogger(__name__)
 class AbstractReadClassifier(ABC):
     """Abstract base class for read-level classifiers."""
 
+    #: Whether ``fit_classificaton`` honours a ``read_count`` column on
+    #: ``train_df`` (multiplicities of de-duplicated reads). Classifiers that
+    #: would ignore it must not be fed de-duplicated data.
+    supports_read_counts = False
+
     @abstractmethod
     def predict_split(self, split_df: pd.DataFrame, **kwargs) -> pd.DataFrame:
         """Run the classifier on a prepared split DataFrame.

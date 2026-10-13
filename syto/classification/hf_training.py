@@ -3,7 +3,8 @@
 These were originally written for MethylBERT but depend only on the generic HF
 Trainer surface plus a boolean ``signal_mask`` over dataset indices, so any
 classifier that trains through ``transformers.Trainer`` (MethylBERT, EpigenBERT)
-can reuse them. Dismir trains through a hand-written loop and does NOT use these.
+can reuse them. Dismir trains through a hand-written loop and does NOT use these
+(it shares only ``syto.classification.read_counts``).
 """
 
 import logging
@@ -12,6 +13,11 @@ from dataclasses import replace
 import numpy as np
 from torch.utils.data import DataLoader, Sampler
 from transformers import Trainer, EarlyStoppingCallback
+
+from syto.classification.read_counts import (
+    CountWeightedBalancedBatchSampler,
+    CountWeightedSampler,
+)
 
 _module_logger = logging.getLogger(__name__)
 
@@ -208,6 +214,9 @@ class BalancedBackgroundBatchSampler(Sampler):
         return n
 
 
+COUNT_WEIGHTINGS = ("sampler", "loss")
+
+
 class AuxLossLoggingTrainer(Trainer):
     """
     Custom Trainer that optionally logs an additional loss_ce metric if provided
@@ -218,17 +227,78 @@ class AuxLossLoggingTrainer(Trainer):
     ``eval_diagnostics`` recorder (see ``syto.classification.fit_diagnostics``),
     reusing predictions the eval already computed rather than re-running the
     model.
+
+    Datasets exposing ``read_counts`` (de-duplicated rows, see
+    ``syto.classification.read_counts``) are trained on as Dismir does:
+    ``count_weighting="sampler"`` draws training rows in proportion to their
+    counts (``samples_per_epoch`` draws per epoch, default the total read count)
+    and drops their ``sample_weight``; ``"loss"`` shuffles rows once per epoch
+    and keeps the weights in the loss. Evaluation always weighs rows by their
+    counts, in the loss (through the model) and in ``compute_metrics``.
     """
 
-    def __init__(self, *args, eval_diagnostics=None, **kwargs):
+    def __init__(
+        self,
+        *args,
+        eval_diagnostics=None,
+        count_weighting="sampler",
+        samples_per_epoch=None,
+        **kwargs,
+    ):
+        if count_weighting not in COUNT_WEIGHTINGS:
+            raise ValueError(
+                f"count_weighting must be 'sampler' or 'loss', got {count_weighting!r}"
+            )
         super().__init__(*args, **kwargs)
         self.eval_diagnostics = eval_diagnostics
+        self.count_weighting = count_weighting
+        self.samples_per_epoch = samples_per_epoch
         self._custom_loss_ce_train = 0.0
         self._custom_loss_ce_train_steps = 0
         self._custom_loss_ce_eval = 0.0
         self._custom_loss_ce_eval_steps = 0
 
+    def _read_counts(self, dataset):
+        """``dataset.read_counts`` (``None`` for rows that are not de-duplicated)."""
+        counts = getattr(dataset, "read_counts", None)
+        if counts is not None and self.args.world_size > 1:
+            raise ValueError(
+                "Training on de-duplicated reads (read_counts) needs a single "
+                "process: distributed evaluation gathers rows out of dataset "
+                "order, so their read-count weights would no longer line up."
+            )
+        return counts
+
+    def _log_read_counts(self, counts, samples_per_epoch):
+        _module_logger.info(
+            "Training on %d unique rows standing for %d reads "
+            "(count_weighting=%s, %d samples per epoch)",
+            len(counts),
+            int(counts.sum()),
+            self.count_weighting,
+            samples_per_epoch,
+        )
+
+    def _get_train_sampler(self, train_dataset=None):
+        dataset = self.train_dataset if train_dataset is None else train_dataset
+        counts = self._read_counts(dataset)
+        if counts is None:
+            return super()._get_train_sampler(train_dataset)
+        if self.count_weighting == "sampler":
+            sampler = CountWeightedSampler(counts, self.samples_per_epoch)
+            self._log_read_counts(counts, len(sampler))
+            return sampler
+        self._log_read_counts(counts, len(counts))
+        return super()._get_train_sampler(train_dataset)
+
     def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
+        if (
+            model.training
+            and self.count_weighting == "sampler"
+            and "sample_weight" in inputs
+        ):
+            # The sampler already draws rows in proportion to their counts.
+            inputs = {k: v for k, v in inputs.items() if k != "sample_weight"}
         loss, outputs = super().compute_loss(
             model, inputs, return_outputs=True, **kwargs
         )
@@ -260,7 +330,21 @@ class AuxLossLoggingTrainer(Trainer):
         self._custom_loss_ce_eval = 0.0
         self._custom_loss_ce_eval_steps = 0
 
-        output = super().evaluation_loop(*args, **kwargs)
+        dataloader = args[0] if args else kwargs.get("dataloader")
+        counts = self._read_counts(getattr(dataloader, "dataset", None))
+        if counts is None or self.compute_metrics is None:
+            output = super().evaluation_loop(*args, **kwargs)
+        else:
+            # Evaluation reads rows in dataset order, so the counts line up
+            # with the predictions.
+            compute_metrics = self.compute_metrics
+            self.compute_metrics = lambda eval_pred: compute_metrics(
+                eval_pred, sample_weight=counts
+            )
+            try:
+                output = super().evaluation_loop(*args, **kwargs)
+            finally:
+                self.compute_metrics = compute_metrics
 
         if (
             getattr(self, "_custom_loss_ce_eval_steps", 0) > 0
@@ -286,6 +370,9 @@ class AuxLossLoggingTrainer(Trainer):
 class BalancedTrainer(AuxLossLoggingTrainer):
     """
     HF Trainer that uses BalancedBackgroundBatchSampler for training.
+
+    With read counts and ``count_weighting="sampler"`` it draws each group in
+    proportion to the counts (``CountWeightedBalancedBatchSampler``).
     """
 
     def __init__(self, *args, signal_mask=None, bg_ratio=0.3, **kwargs):
@@ -298,13 +385,27 @@ class BalancedTrainer(AuxLossLoggingTrainer):
             # Fall back to default behavior
             return super().get_train_dataloader()
 
-        batch_sampler = BalancedBackgroundBatchSampler(
-            signal_mask=self.signal_mask,
-            batch_size=self.args.per_device_train_batch_size,
-            bg_ratio=self.bg_ratio,
-            shuffle=True,
-            drop_last=self.args.dataloader_drop_last,
-        )
+        batch_size = self.args.per_device_train_batch_size
+        counts = self._read_counts(self.train_dataset)
+        if counts is not None and self.count_weighting == "sampler":
+            batch_sampler = CountWeightedBalancedBatchSampler(
+                signal_mask=self.signal_mask,
+                counts=counts,
+                batch_size=batch_size,
+                bg_ratio=self.bg_ratio,
+                num_samples=self.samples_per_epoch,
+            )
+            self._log_read_counts(counts, len(batch_sampler) * batch_size)
+        else:
+            if counts is not None:
+                self._log_read_counts(counts, len(counts))
+            batch_sampler = BalancedBackgroundBatchSampler(
+                signal_mask=self.signal_mask,
+                batch_size=batch_size,
+                bg_ratio=self.bg_ratio,
+                shuffle=True,
+                drop_last=self.args.dataloader_drop_last,
+            )
 
         return DataLoader(
             self.train_dataset,

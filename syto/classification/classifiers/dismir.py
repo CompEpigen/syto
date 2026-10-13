@@ -33,8 +33,29 @@ from syto.classification.prediction_aggregation import (
 )
 
 from syto.data.dataset import resolve_column
+from syto.classification.fit_data import READ_COUNT_COLUMN
+from syto.classification.read_counts import CountWeightedSampler, per_row_loss
 
 _module_logger = logging.getLogger(__name__)
+
+#: ``uint8`` code of each base in a compact input: 0 is padding / any other
+#: character, 1-4 are A/T/C/G and 5 a methylated C. ``_CODE_TO_FEATURES`` maps
+#: codes back to the exact 5-channel rows ``Dismir.conv_onehot`` produces.
+_BASE_CODES = np.zeros(256, dtype=np.uint8)
+for _code, _base in enumerate("ATCG", start=1):
+    _BASE_CODES[ord(_base)] = _code
+_METHYLATED_C_CODE = 5
+_CODE_TO_FEATURES = torch.tensor(
+    [
+        [0, 0, 0, 0, 0],  # padding / other
+        [1, 0, 0, 0, 0],  # A
+        [0, 1, 0, 0, 0],  # T
+        [0, 0, 1, 0, 0],  # C
+        [0, 0, 0, 1, 0],  # G
+        [0, 0, 1, 0, 1],  # Methylated C
+    ],
+    dtype=torch.float32,
+)
 
 
 class DISMIRConfig:
@@ -461,6 +482,8 @@ class Dismir(AbstractReadClassifier):
     Supports both vanilla and GRG attention-based classifiers.
     """
 
+    supports_read_counts = True
+
     def __init__(
         self,
         max_sequence_length,
@@ -474,6 +497,8 @@ class Dismir(AbstractReadClassifier):
         num_grg_labels=None,
         grg_label_column=None,
         soft_labels=False,
+        dropout_prob=0.2,
+        penalty_scale=1.0,
     ):
         self.max_sequence_length = max_sequence_length
         self.num_labels = num_labels
@@ -509,7 +534,9 @@ class Dismir(AbstractReadClassifier):
                     _module_logger.info(
                         "Soft Labels were selected as labeling scheme. The model will be trained with ConfidenceWeightedCrossEntropy"
                     )
-                    self.criterion = ConfidenceWeightedCrossEntropy(num_labels)
+                    self.criterion = ConfidenceWeightedCrossEntropy(
+                        num_labels, penalty_scale=penalty_scale
+                    )
                 else:
                     self.criterion = nn.CrossEntropyLoss()
 
@@ -528,6 +555,7 @@ class Dismir(AbstractReadClassifier):
             num_labels,
             classifier_type=classifier_type,
             num_grg_labels=num_grg_labels,
+            dropout_prob=dropout_prob,
         ).to(self.device)
 
     def conv_onehot(self, dna_seq, c_methylation_seq):
@@ -562,6 +590,30 @@ class Dismir(AbstractReadClassifier):
                     onehot[i, j] = module[3]
         return onehot
 
+    def encode_codes(self, dna_seq, c_methylation_seq):
+        """Compact ``uint8`` equivalent of ``conv_onehot``: one code per base.
+
+        Costs 1 byte per position instead of 20; ``expand_codes`` restores the
+        exact ``conv_onehot`` features on the training device.
+        """
+        codes = np.zeros((len(dna_seq), self.max_sequence_length), dtype=np.uint8)
+        for i, (seq, methylation) in enumerate(zip(dna_seq, c_methylation_seq)):
+            seq = np.frombuffer(
+                seq[: self.max_sequence_length].encode("latin-1"), dtype=np.uint8
+            )
+            row = _BASE_CODES[seq]
+            methylated = np.frombuffer(
+                methylation[: len(seq)].encode("latin-1"), dtype=np.uint8
+            ) == ord("1")
+            row[: len(methylated)][methylated] = _METHYLATED_C_CODE
+            codes[i, : len(row)] = row
+        return codes
+
+    @staticmethod
+    def expand_codes(codes: torch.Tensor) -> torch.Tensor:
+        """Map ``encode_codes`` output to ``conv_onehot`` features, on ``codes``' device."""
+        return _CODE_TO_FEATURES.to(codes.device)[codes.long()]
+
     def load_and_transform_input(
         self, data_path, return_grg_labels=False, soft_labels=False
     ):
@@ -581,9 +633,13 @@ class Dismir(AbstractReadClassifier):
         return self._transform_input_df(data, return_grg_labels, soft_labels)
 
     def _transform_input_df(
-        self, data: pd.DataFrame, return_grg_labels=False, soft_labels=False
+        self,
+        data: pd.DataFrame,
+        return_grg_labels=False,
+        soft_labels=False,
+        compact_inputs=False,
     ):
-        """Transform dataframe into one-hot + methylation."""
+        """Transform dataframe into one-hot + methylation (or its compact codes)."""
         cols = list(data.columns)
         dna_col = resolve_column(cols, "input_ids")
         meth_col = resolve_column(cols, "methylation_ids")
@@ -593,7 +649,10 @@ class Dismir(AbstractReadClassifier):
             labels = np.array(data["soft_label"].to_list())
         else:
             labels = np.array(data["label"].to_list())
-        features = self.conv_onehot(dna, methylation)
+        if compact_inputs:
+            features = self.encode_codes(dna, methylation)
+        else:
+            features = self.conv_onehot(dna, methylation)
 
         if return_grg_labels:
             if self.grg_label_column is None:
@@ -623,13 +682,57 @@ class Dismir(AbstractReadClassifier):
         reset_history=False,
         train_df=None,
         valid_df=None,
+        epoch_callback=None,
+        monitor_metric="val_loss",
+        monitor_mode=None,
+        count_weighting="sampler",
+        samples_per_epoch=None,
+        compact_inputs=False,
     ):
+        """Enhanced training method with support for variable-length sequences.
+
+        ``epoch_callback`` is called with each epoch's history record once the
+        epoch's validation metrics are in. Returning ``False`` stops training --
+        the hook an external hyperparameter tuner uses to prune a trial that is
+        clearly not going to win. Only the fixed-length path supports it; the
+        variable-length path has no grg_attention_based implementation.
+
+        If ``train_df`` carries a ``read_count`` column (de-duplicated reads),
+        each row stands for that many identical reads. ``count_weighting``
+        selects how: ``"sampler"`` draws rows proportionally to their counts
+        (``samples_per_epoch`` draws per epoch, default the total read count),
+        so every batch is distributed as in the duplicated data; ``"loss"``
+        visits each row once per epoch and scales its loss by its count, which
+        gives the same expected gradient in fewer, noisier steps.
+        ``compact_inputs`` stores inputs as ``uint8`` codes and expands them per
+        batch on the device; the model sees identical features.
         """
-        Enhanced training method with support for variable-length sequences.
-        """
+        # Which metric drives checkpointing and early stopping. Defaults to
+        # val_loss (the historical behaviour). A tuner sweeping penalty_scale
+        # must override it: that parameter rescales the loss, so val_loss is
+        # incomparable across trials while val_f1 is not.
+        if monitor_mode is None:
+            monitor_mode = "min" if monitor_metric.endswith("loss") else "max"
+        if monitor_mode not in ("min", "max"):
+            raise ValueError(
+                f"monitor_mode must be 'min' or 'max', got {monitor_mode!r}"
+            )
+        self.monitor_metric_used = monitor_metric
+        self.monitor_mode_used = monitor_mode
+        self.best_monitored_epoch = None
+
+        if count_weighting not in ("sampler", "loss"):
+            raise ValueError(
+                f"count_weighting must be 'sampler' or 'loss', got {count_weighting!r}"
+            )
         if reset_history:
             self.history = []
         if variable_length:
+            if train_df is not None and READ_COUNT_COLUMN in train_df.columns:
+                raise NotImplementedError(
+                    "Read counts (de-duplicated training) are only supported by "
+                    "fixed-length training."
+                )
             return self._train_variable_length(
                 train_dir,
                 verbose,
@@ -658,6 +761,12 @@ class Dismir(AbstractReadClassifier):
                 nesterov,
                 train_df,
                 valid_df,
+                epoch_callback=epoch_callback,
+                monitor_metric=monitor_metric,
+                monitor_mode=monitor_mode,
+                count_weighting=count_weighting,
+                samples_per_epoch=samples_per_epoch,
+                compact_inputs=compact_inputs,
             )
 
     def _train_fixed_length(
@@ -674,6 +783,12 @@ class Dismir(AbstractReadClassifier):
         nesterov,
         train_df=None,
         valid_df=None,
+        epoch_callback=None,
+        monitor_metric="val_loss",
+        monitor_mode="min",
+        count_weighting="sampler",
+        samples_per_epoch=None,
+        compact_inputs=False,
     ):
         """
         Fixed-length training method with GRG support.
@@ -685,13 +800,21 @@ class Dismir(AbstractReadClassifier):
         use_grg = self.classifier_type == "grg_attention_based"
 
         def _get_data(df, path):
-            if df is not None:
-                return self._transform_input_df(
-                    df, return_grg_labels=use_grg, soft_labels=self.soft_labels
-                )
-            return self.load_and_transform_input(
-                path, return_grg_labels=use_grg, soft_labels=self.soft_labels
+            if df is None:
+                df = pd.read_parquet(path)
+            return self._transform_input_df(
+                df,
+                return_grg_labels=use_grg,
+                soft_labels=self.soft_labels,
+                compact_inputs=compact_inputs,
             )
+
+        def _counts(df):
+            if df is None or READ_COUNT_COLUMN not in df.columns:
+                return None
+            return df[READ_COUNT_COLUMN].to_numpy(dtype=np.float64)
+
+        train_counts, valid_counts = _counts(train_df), _counts(valid_df)
 
         if use_grg:
             self.train_x, self.train_y, self.train_grg = _get_data(
@@ -735,20 +858,56 @@ class Dismir(AbstractReadClassifier):
             optimizer_type, lr, weight_decay, momentum, nesterov
         )
 
-        # DataLoaders
+        # DataLoaders. Batches are (x, y[, grg][, count]); ``_unpack_batch``
+        # mirrors this layout.
+        train_tensors = [self.train_x, self.train_y]
+        valid_tensors = [self.valid_x, self.valid_y]
         if use_grg:
-            train_dataset = torch.utils.data.TensorDataset(
-                self.train_x, self.train_y, self.train_grg
+            train_tensors.append(self.train_grg)
+            valid_tensors.append(self.valid_grg)
+
+        loss_counts = train_counts is not None and count_weighting == "loss"
+        if loss_counts:
+            train_tensors.append(torch.from_numpy(train_counts).float())
+        # Validation rows always carry their count when they have one: the
+        # model is deterministic in eval mode, so count-weighted loss and
+        # metrics over unique rows equal those over every read.
+        if valid_counts is not None:
+            valid_tensors.append(torch.from_numpy(valid_counts).float())
+            _module_logger.info(
+                "Validating on %d unique rows standing for %d reads",
+                len(valid_counts),
+                int(valid_counts.sum()),
             )
-            valid_dataset = torch.utils.data.TensorDataset(
-                self.valid_x, self.valid_y, self.valid_grg
+        train_dataset = torch.utils.data.TensorDataset(*train_tensors)
+        valid_dataset = torch.utils.data.TensorDataset(*valid_tensors)
+
+        if train_counts is not None and count_weighting == "sampler":
+            sampler = CountWeightedSampler(train_counts, samples_per_epoch)
+            train_loader = DataLoader(
+                train_dataset, batch_size=batch_size, sampler=sampler
             )
         else:
-            train_dataset = torch.utils.data.TensorDataset(self.train_x, self.train_y)
-            valid_dataset = torch.utils.data.TensorDataset(self.valid_x, self.valid_y)
-
-        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+            train_loader = DataLoader(
+                train_dataset, batch_size=batch_size, shuffle=True
+            )
         valid_loader = DataLoader(valid_dataset, batch_size=batch_size, shuffle=False)
+
+        if train_counts is not None:
+            _module_logger.info(
+                "Training on %d unique rows standing for %d reads "
+                "(count_weighting=%s, %d samples per epoch)",
+                len(train_counts),
+                int(train_counts.sum()),
+                count_weighting,
+                len(train_loader.sampler),
+            )
+        # Batch losses are scaled by mean count so their expectation equals
+        # the original per-read mean loss (see ``_batch_loss``).
+        self._mean_train_count = float(train_counts.mean()) if loss_counts else None
+        self._compact_inputs = compact_inputs
+        self._loss_counts = loss_counts
+        self._valid_counts = valid_counts is not None
 
         return self._training_loop(
             train_loader,
@@ -760,6 +919,9 @@ class Dismir(AbstractReadClassifier):
             verbose,
             train_dir,
             "fixed",
+            epoch_callback=epoch_callback,
+            monitor_metric=monitor_metric,
+            monitor_mode=monitor_mode,
         )
 
     def _train_variable_length(
@@ -842,7 +1004,7 @@ class Dismir(AbstractReadClassifier):
             train_dir,
         )
 
-    def _compute_epoch_metrics(self, all_outputs, all_labels, prefix):
+    def _compute_epoch_metrics(self, all_outputs, all_labels, prefix, all_weights=None):
         """
         Compute sklearn metrics from accumulated epoch outputs.
 
@@ -854,6 +1016,8 @@ class Dismir(AbstractReadClassifier):
                          per batch, concatenated along dim 0.
             all_labels:  list of numpy arrays – ground-truth labels per batch.
             prefix:      'train' or 'val' – prepended to each metric key.
+            all_weights: optional list of per-batch sample weights (read
+                         counts of de-duplicated rows).
 
         Returns:
             dict with keys like '{prefix}_f1', '{prefix}_precision', etc.
@@ -861,11 +1025,12 @@ class Dismir(AbstractReadClassifier):
         outputs = np.concatenate(all_outputs, axis=0)
         labels = np.concatenate(all_labels, axis=0)
         eval_pred = (outputs, labels)
+        weights = np.concatenate(all_weights, axis=0) if all_weights else None
 
         if self.soft_labels:
-            metrics = compute_metrics_soft_labels(eval_pred)
+            metrics = compute_metrics_soft_labels(eval_pred, sample_weight=weights)
         else:
-            metrics = compute_metrics(eval_pred)
+            metrics = compute_metrics(eval_pred, sample_weight=weights)
 
         return {f"{prefix}_{k}": v for k, v in metrics.items()}
 
@@ -895,9 +1060,12 @@ class Dismir(AbstractReadClassifier):
         verbose,
         train_dir,
         mode,
+        epoch_callback=None,
+        monitor_metric="val_loss",
+        monitor_mode="min",
     ):
         """Standard training loop for fixed-length sequences with GRG support."""
-        best_val_loss = float("inf")
+        best_monitored = float("inf") if monitor_mode == "min" else float("-inf")
         patience_counter = 0
         session_start_time = time.time()
         use_grg = self.classifier_type == "grg_attention_based"
@@ -924,15 +1092,9 @@ class Dismir(AbstractReadClassifier):
             train_all_labels = []
 
             for batch in train_loader:
-                if use_grg:
-                    X_batch, y_batch, grg_batch = batch
-                    X_batch = X_batch.to(self.device)
-                    y_batch = y_batch.to(self.device)
-                    grg_batch = grg_batch.to(self.device)
-                else:
-                    X_batch, y_batch = batch
-                    X_batch = X_batch.to(self.device)
-                    y_batch = y_batch.to(self.device)
+                X_batch, y_batch, grg_batch, count_batch = self._unpack_batch(
+                    batch, use_grg, with_counts=getattr(self, "_loss_counts", False)
+                )
 
                 optimizer.zero_grad()
 
@@ -941,7 +1103,7 @@ class Dismir(AbstractReadClassifier):
                 else:
                     outputs = self.model(X_batch)
 
-                loss = criterion(outputs, y_batch)
+                loss = self._batch_loss(criterion, outputs, y_batch, count_batch)
                 loss.backward()
                 optimizer.step()
 
@@ -972,7 +1134,9 @@ class Dismir(AbstractReadClassifier):
                     correct += (preds == y_batch).sum().item()
                 total += y_batch.size(0)
 
-            train_loss = epoch_loss / len(train_loader.dataset)
+            # Divide by reads seen, not dataset rows: a count sampler draws
+            # more samples per epoch than the de-duplicated dataset holds.
+            train_loss = epoch_loss / total
             train_acc = correct / total
             train_metrics = self._compute_epoch_metrics(
                 train_all_outputs, train_all_labels, "train"
@@ -984,23 +1148,27 @@ class Dismir(AbstractReadClassifier):
             val_correct, val_total = 0, 0
             val_all_outputs = []
             val_all_labels = []
+            val_all_weights = []
+            valid_counts = getattr(self, "_valid_counts", False)
 
             with torch.no_grad():
                 for batch in valid_loader:
+                    X_val, y_val, grg_val, val_w = self._unpack_batch(
+                        batch, use_grg, with_counts=valid_counts
+                    )
                     if use_grg:
-                        X_val, y_val, grg_val = batch
-                        X_val = X_val.to(self.device)
-                        y_val = y_val.to(self.device)
-                        grg_val = grg_val.to(self.device)
                         val_outputs, _ = self.model(X_val, grg_ids=grg_val)
                     else:
-                        X_val, y_val = batch
-                        X_val = X_val.to(self.device)
-                        y_val = y_val.to(self.device)
                         val_outputs = self.model(X_val)
 
-                    v_loss = criterion(val_outputs, y_val)
-                    val_loss += v_loss.item() * X_val.size(0)
+                    # Every row weighs its read count (1 without counts), so
+                    # the loss, accuracy and metrics are per-read averages.
+                    if val_w is None:
+                        val_w = torch.ones(X_val.size(0), device=X_val.device)
+                    else:
+                        val_all_weights.append(val_w.cpu().numpy())
+                    v_loss = self._per_row_loss(criterion, val_outputs, y_val)
+                    val_loss += (v_loss * val_w).sum().item()
 
                     # Collect outputs for metrics
                     batch_val_outputs = val_outputs.detach()
@@ -1018,18 +1186,19 @@ class Dismir(AbstractReadClassifier):
                             )
                         else:
                             val_preds = (val_outputs >= 0.5).float().squeeze()
-                        val_correct += (val_preds == y_val.squeeze()).sum().item()
+                        val_hits = val_preds == y_val.squeeze()
                     else:
                         val_preds = val_outputs.argmax(dim=1)
                         if self.soft_labels:
                             y_val = y_val.argmax(dim=1)
-                        val_correct += (val_preds == y_val).sum().item()
-                    val_total += y_val.size(0)
+                        val_hits = val_preds == y_val
+                    val_correct += (val_hits.reshape(-1) * val_w).sum().item()
+                    val_total += val_w.sum().item()
 
-            val_loss /= len(valid_loader.dataset)
+            val_loss /= val_total
             val_acc = val_correct / val_total
             val_metrics = self._compute_epoch_metrics(
-                val_all_outputs, val_all_labels, "val"
+                val_all_outputs, val_all_labels, "val", val_all_weights
             )
             epoch_time = time.time() - session_start_time
 
@@ -1051,9 +1220,23 @@ class Dismir(AbstractReadClassifier):
                     epoch, epochs, train_loss, val_loss, val_metrics
                 )
 
-            # Early stopping
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
+            # Early stopping, on whichever metric is being monitored. The
+            # checkpoint follows the same metric, so the weights on disk are
+            # always the best epoch by the criterion the caller selected.
+            if monitor_metric not in epoch_record:
+                raise ValueError(
+                    f"monitor_metric {monitor_metric!r} is not among the epoch "
+                    f"metrics: {sorted(epoch_record)}"
+                )
+            monitored = epoch_record[monitor_metric]
+            improved = (
+                monitored < best_monitored
+                if monitor_mode == "min"
+                else monitored > best_monitored
+            )
+            if improved:
+                best_monitored = monitored
+                self.best_monitored_epoch = epoch
                 patience_counter = 0
                 torch.save(
                     self.model.state_dict(), os.path.join(train_dir, "weight.pt")
@@ -1065,6 +1248,45 @@ class Dismir(AbstractReadClassifier):
                 if verbose > 0:
                     _module_logger.info("Early stopping triggered.")
                 break
+
+            # External hook (e.g. an Optuna pruner) sees the completed epoch
+            # and may stop the run. Called after checkpointing so a stopped
+            # trial still leaves its best weights on disk.
+            if epoch_callback is not None and epoch_callback(epoch_record) is False:
+                if verbose > 0:
+                    _module_logger.info("Training stopped by epoch_callback.")
+                break
+
+    def _unpack_batch(self, batch, use_grg, with_counts=False):
+        """Split a fixed-length batch into device tensors ``(X, y, grg, counts)``.
+
+        ``grg``/``counts`` are None when absent. Compact ``uint8`` inputs are
+        expanded to ``conv_onehot`` features here, on the device.
+        """
+        batch = [t.to(self.device) for t in batch]
+        X, y = batch[0], batch[1]
+        grg = batch[2] if use_grg else None
+        counts = batch[-1] if with_counts else None
+        if getattr(self, "_compact_inputs", False):
+            X = self.expand_codes(X)
+        return X, y, grg, counts
+
+    def _batch_loss(self, criterion, outputs, targets, counts=None):
+        """Batch loss, optionally weighting each row by its read count.
+
+        With counts, per-row losses are weighted by ``count / mean_count`` and
+        averaged, an unbiased estimate of the duplicated dataset's mean loss
+        (and of its gradient).
+        """
+        if counts is None:
+            return criterion(outputs, targets)
+        per_row = self._per_row_loss(criterion, outputs, targets)
+        return (per_row * counts).mean() / self._mean_train_count
+
+    @staticmethod
+    def _per_row_loss(criterion, outputs, targets):
+        """Unreduced loss, one value per row (see ``read_counts.per_row_loss``)."""
+        return per_row_loss(criterion, outputs, targets)
 
     def _training_loop_variable_length(
         self,
@@ -1465,6 +1687,8 @@ class Dismir(AbstractReadClassifier):
             num_grg_labels=kwargs.get("num_grg_labels", 39),
             grg_label_column=grg_label_column,
             soft_labels=kwargs.get("soft_labels", False),
+            dropout_prob=kwargs.get("dropout_prob", 0.2),
+            penalty_scale=kwargs.get("penalty_scale", 1.0),
         )
         # Load pre-trained weights, if a checkpoint path was provided
         if path is not None:
@@ -1593,6 +1817,12 @@ class Dismir(AbstractReadClassifier):
             variable_length=kwargs.get("variable_length", False),
             reset_history=kwargs.get("reset_history", False),
             verbose=kwargs.get("verbose", 1),
+            epoch_callback=kwargs.get("epoch_callback"),
+            monitor_metric=kwargs.get("monitor_metric", "val_loss"),
+            monitor_mode=kwargs.get("monitor_mode"),
+            count_weighting=kwargs.get("count_weighting", "sampler"),
+            samples_per_epoch=kwargs.get("samples_per_epoch"),
+            compact_inputs=kwargs.get("compact_inputs", False),
         )
         return self
 

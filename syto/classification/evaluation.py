@@ -13,6 +13,7 @@ def _safe_average_precision(
     labels: np.ndarray,
     predictions_proba: np.ndarray,
     append_background_probability: bool = False,
+    sample_weight: Optional[np.ndarray] = None,
 ) -> float:
     """Compute average_precision_score, handling multi-class edge cases.
 
@@ -34,6 +35,8 @@ def _safe_average_precision(
     append_background_probability : bool, default False
         If ``True``, synthesize and append a background probability column
         (``1 - max(proba)``) before computing per-class AP.
+    sample_weight : np.ndarray, optional
+        Per-sample weights, e.g. multiplicities of de-duplicated reads.
     """
     if predictions_proba.ndim >= 2:
         if append_background_probability:
@@ -51,7 +54,7 @@ def _safe_average_precision(
             y_true_c = (labels == c).astype(int)
             if len(np.unique(y_true_c)) == 2:
                 ap_c = sklearn.metrics.average_precision_score(
-                    y_true_c, predictions_proba[:, c]
+                    y_true_c, predictions_proba[:, c], sample_weight=sample_weight
                 )
                 class_aps.append(ap_c)
 
@@ -64,7 +67,9 @@ def _safe_average_precision(
         if len(labels) == 0 or len(np.unique(labels)) < 2:
             return float("nan")
 
-        return sklearn.metrics.average_precision_score(labels, predictions_proba)
+        return sklearn.metrics.average_precision_score(
+            labels, predictions_proba, sample_weight=sample_weight
+        )
 
 
 def calculate_metric_with_sklearn(
@@ -72,32 +77,54 @@ def calculate_metric_with_sklearn(
     predictions: np.ndarray,
     labels: np.ndarray,
     append_background_probability: bool = False,
+    sample_weight: Optional[np.ndarray] = None,
 ):
+    """sklearn metrics over non-padding samples, optionally sample-weighted.
+
+    With ``sample_weight`` set to read multiplicities, every metric equals the
+    one computed on the data with each sample repeated that many times.
+    """
     valid_mask = (
         labels != -100
     )  # Exclude padding tokens (assuming -100 is the padding token ID)
     valid_predictions = predictions[valid_mask]
     valid_labels = labels[valid_mask]
     valid_predictions_proba = predictions_proba[valid_mask]
+    w = None if sample_weight is None else np.asarray(sample_weight)[valid_mask]
 
     return {
-        "accuracy": sklearn.metrics.accuracy_score(valid_labels, valid_predictions),
+        "accuracy": sklearn.metrics.accuracy_score(
+            valid_labels, valid_predictions, sample_weight=w
+        ),
         "f1": sklearn.metrics.f1_score(
-            valid_labels, valid_predictions, average="macro", zero_division=0
+            valid_labels,
+            valid_predictions,
+            average="macro",
+            zero_division=0,
+            sample_weight=w,
         ),
         "matthews_correlation": sklearn.metrics.matthews_corrcoef(
-            valid_labels, valid_predictions
+            valid_labels, valid_predictions, sample_weight=w
         ),
         "precision": sklearn.metrics.precision_score(
-            valid_labels, valid_predictions, average="macro", zero_division=0
+            valid_labels,
+            valid_predictions,
+            average="macro",
+            zero_division=0,
+            sample_weight=w,
         ),
         "recall": sklearn.metrics.recall_score(
-            valid_labels, valid_predictions, average="macro", zero_division=0
+            valid_labels,
+            valid_predictions,
+            average="macro",
+            zero_division=0,
+            sample_weight=w,
         ),
         "average_precision": _safe_average_precision(
             valid_labels,
             valid_predictions_proba,
             append_background_probability=append_background_probability,
+            sample_weight=w,
         ),
     }
 
@@ -138,11 +165,11 @@ def make_compute_metrics(
     Returns
     -------
     callable
-        ``compute_metrics(eval_pred) -> dict``
+        ``compute_metrics(eval_pred, sample_weight=None) -> dict``
     """
     append_background_probability = background_threshold_func is not None
 
-    def compute_metrics(eval_pred):
+    def compute_metrics(eval_pred, sample_weight=None):
         predictions_proba, labels = eval_pred
         num_classes = predictions_proba.shape[-1]
 
@@ -198,6 +225,7 @@ def make_compute_metrics(
             predictions,
             labels,
             append_background_probability=append_background_probability,
+            sample_weight=sample_weight,
         )
 
     return compute_metrics

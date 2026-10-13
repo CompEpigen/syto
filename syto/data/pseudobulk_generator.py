@@ -16,6 +16,7 @@ from dask import delayed
 import pandas as pd
 import numpy as np
 
+from syto.classification.fit_data import READ_COUNT_COLUMN
 from syto.classification.prediction_aggregation import (
     aggregate_by_grg_from_np_arrays,
     fill_in_missing_gr_groups,
@@ -84,6 +85,7 @@ def _sample_read_ids_from_grouped_dataframe(
     n_samples_per_class_per_grg: np.ndarray,
     indices_per_class_and_grg: Dict[Tuple[int, int], np.ndarray],
     seed: int,
+    count_cdf_per_class_and_grg: Optional[Dict[Tuple[int, int], np.ndarray]] = None,
 ) -> np.ndarray:
     """
     Reproducibly sample read IDs from a grouped dataframe based on the specified
@@ -97,6 +99,12 @@ def _sample_read_ids_from_grouped_dataframe(
             to arrays of row indices corresponding to that group in the original dataframe.
             Keys must be integer indices (0-based), not raw label values.
         seed: An integer seed for the random number generator to ensure reproducibility.
+        count_cdf_per_class_and_grg: Optional cumulative read counts of each
+            group's rows (aligned with ``indices_per_class_and_grg``), for
+            de-duplicated data where a row stands for ``read_count`` identical
+            reads. Rows are then drawn proportionally to their counts --
+            equivalent to drawing reads uniformly from the duplicated data.
+            Without it every row is equally likely.
     """
     n_reads_to_sample = n_samples_per_class_per_grg.sum()
     read_ids = np.full(n_reads_to_sample, -1, dtype=np.int64)
@@ -114,9 +122,15 @@ def _sample_read_ids_from_grouped_dataframe(
                     f"({class_label}, {grg_label}) with size 0."
                 )
             continue
-        read_ids[current_index : current_index + n_reads_to_sample] = rng.choice(
-            indices, size=n_reads_to_sample, replace=True
-        )
+        if count_cdf_per_class_and_grg is None:
+            drawn = rng.choice(indices, size=n_reads_to_sample, replace=True)
+        else:
+            cdf = count_cdf_per_class_and_grg[(class_label, grg_label)]
+            positions = np.searchsorted(
+                cdf, rng.random(n_reads_to_sample) * cdf[-1], side="right"
+            )
+            drawn = indices[positions]
+        read_ids[current_index : current_index + n_reads_to_sample] = drawn
         current_index += n_reads_to_sample
     return read_ids
 
@@ -213,11 +227,14 @@ class PseudobulkGenerator:
 
         # Initialize checkpoint manager
         self.checkpoint_manager = CheckpointManager(self.output_directory, self.logger)
-        # Pre-heating checkpoints for target splits
+        # Pre-heating checkpoints for target splits. An existing checkpoint is
+        # kept: recreating it would forget its completed batches, so a resumed
+        # run that skips completed splits would consolidate none of them.
         for split_name, proportions in self.target_proportions_per_split.items():
-            _ = self.checkpoint_manager.create_split_checkpoint(
-                split_name, len(proportions), batch_size
-            )
+            if self.checkpoint_manager.load_split_checkpoint(split_name) is None:
+                self.checkpoint_manager.create_split_checkpoint(
+                    split_name, len(proportions), batch_size
+                )
 
         # Pre-compute indices and numpy arrays for each split
         self._precompute_group_indices()
@@ -296,6 +313,14 @@ class PseudobulkGenerator:
                     df[pred_cols].values.astype(np.float64)
                 ),
             }
+            # De-duplicated reads: each row stands for ``read_count`` reads,
+            # sampled proportionally (see _sample_read_ids_from_grouped_dataframe).
+            if READ_COUNT_COLUMN in df.columns:
+                counts = df[READ_COUNT_COLUMN].to_numpy(dtype=np.float64)
+                arrays["count_cdf_per_class_and_grg"] = {
+                    key: np.cumsum(counts[rows])
+                    for key, rows in self._indices_per_split[split_name].items()
+                }
             self._numpy_arrays_per_split[split_name] = arrays
 
             self.logger.debug(
@@ -701,6 +726,7 @@ class PseudobulkGenerator:
             n_samples_per_class_per_grg,
             indices_per_class_and_grg,
             seed=seed,
+            count_cdf_per_class_and_grg=numpy_arrays.get("count_cdf_per_class_and_grg"),
         )  # shape (n_reads_sampled,)
 
         # Aggregate directly from pre-extracted numpy arrays (no DataFrame slicing)

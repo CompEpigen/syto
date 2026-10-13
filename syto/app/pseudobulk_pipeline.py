@@ -33,6 +33,7 @@ from syto.classification.classifiers.lazy_classifier_factory import (
     read_classifier_factory,
 )
 from syto.data.dataset import resolve_column
+from syto.classification.fit_data import READ_COUNT_COLUMN
 
 
 class PseudoBulkPipeline:
@@ -93,6 +94,15 @@ class PseudoBulkPipeline:
 
         # [for Debug] parameter to generate n pseudobulks by sampling first n from the target proportions
         self.n_pseudobulks_to_sample = config.get("n_pseudobulks_to_sample", None)
+
+        # Collapse identical reads into one row with a ``read_count`` when
+        # loading raw splits; the generator then samples rows proportionally to
+        # their counts, which is equivalent to sampling reads uniformly. Each
+        # unique read is predicted once.
+        self.deduplicate_reads = bool(config.get("deduplicate_reads", False))
+        # Reads per classifier call. Bounds the classifier's input encoding
+        # (e.g. Dismir's one-hot tensors) to one block instead of a whole split.
+        self.prediction_block_size = config.get("prediction_block_size")
 
     # ═══════════════════════════════════════════════════════════════
     #  Public API
@@ -187,7 +197,7 @@ class PseudoBulkPipeline:
             atlas_path=atlas_path,
             sep="\t",
             # Atlases built from other marker sets carry their own groups
-            # instead of the 39 Loyfer cell types (see from_block_table).
+            # instead of the 39 Loyfer cell types
             cell_types=self.config.get("atlas_cell_types"),
         )
 
@@ -208,7 +218,9 @@ class PseudoBulkPipeline:
 
         for name, df in splits_data.items():
             self.logger.info(f"  Predicting {name} split ({len(df)} reads) ...")
-            predicted = read_level_classifier.predict_split(df, **classifier_config)
+            predicted = self._predict_in_blocks(
+                read_level_classifier, df, classifier_config
+            )
 
             # Save intermediate predicted split
             intermediate_path = self.output_dir / f"{name}_predicted.pkl"
@@ -219,6 +231,51 @@ class PseudoBulkPipeline:
             splits_data[name] = predicted
 
         return splits_data
+
+    def _predict_in_blocks(self, classifier, df, classifier_config):
+        """Run ``predict_split`` on consecutive row blocks, filling preallocated columns.
+
+        Bounds the classifier's input encoding to one block, and never holds
+        more than one block's output frame: the columns each block adds are
+        written into arrays spanning the split, placed by a ``read_name`` that
+        is unique across the split (assigned here when absent). Reads a block's
+        prediction drops are dropped from the result too, matching the inner
+        merge in ``predict_split``. Without ``prediction_block_size`` the split
+        is predicted in one call, as before.
+        """
+        block = self.prediction_block_size
+        if not block or len(df) <= block:
+            return classifier.predict_split(df, **classifier_config)
+        result = df.copy(deep=False)
+        if "read_name" not in result.columns:
+            result["read_name"] = np.arange(len(result))
+        position_of = pd.Index(result["read_name"])
+        if not position_of.is_unique:
+            raise ValueError("read_name must be unique across the split")
+
+        added, filled = {}, np.zeros(len(result), dtype=bool)
+        for start in range(0, len(result), block):
+            stop = min(start + block, len(result))
+            self.logger.info(f"    block {start}-{stop} of {len(result)}")
+            part = result.iloc[start:stop]
+            out = classifier.predict_split(part.copy(), **classifier_config)
+            if not added:
+                for col in out.columns.difference(part.columns, sort=False):
+                    added[col] = np.empty(len(result), dtype=out[col].dtype)
+            rows = position_of.get_indexer(out["read_name"])
+            for col, values in added.items():
+                values[rows] = out[col].to_numpy()
+            filled[rows] = True
+            del out
+
+        for col, values in added.items():
+            result[col] = values
+        if not filled.all():
+            self.logger.warning(
+                "    %d reads got no prediction and are dropped", int((~filled).sum())
+            )
+            result = result[filled].reset_index(drop=True)
+        return result
 
     def _get_classifier(self):
         """Build (once) and cache the read-level classifier."""
@@ -238,10 +295,6 @@ class PseudoBulkPipeline:
                 soft_labels=classifier_config.get("soft_labels", True),
                 dismir_flavor=classifier_config.get("dismir_flavor", "lstm"),
                 batch_size=classifier_config.get("batch_size"),
-                # The GRG attention head sizes an embedding by this, so a
-                # checkpoint trained on a different number of groups fails to
-                # load without it. Passed only when configured: the classifiers
-                # read it with a default, which an explicit None would defeat.
                 **(
                     {"num_grg_labels": classifier_config["num_grg_labels"]}
                     if classifier_config.get("num_grg_labels") is not None
@@ -288,6 +341,8 @@ class PseudoBulkPipeline:
             base_cols.append("file")
         if "name" in sample_df.columns:
             base_cols.append("name")
+        if READ_COUNT_COLUMN in sample_df.columns:
+            base_cols.append(READ_COUNT_COLUMN)
 
         for split_name, df in splits_data.items():
             keep_cols = [c for c in base_cols + pred_cols if c in df.columns]
@@ -308,7 +363,12 @@ class PseudoBulkPipeline:
         data_stats = {}
         for split_name, df in splits_data.items():
             data_stats[split_name] = {
-                "n_reads": len(df),
+                "n_reads": (
+                    int(df[READ_COUNT_COLUMN].sum())
+                    if READ_COUNT_COLUMN in df.columns
+                    else len(df)
+                ),
+                "n_rows": len(df),
                 "n_unique_labels": (
                     df["original_label"].nunique()
                     if "original_label" in df.columns
@@ -384,6 +444,7 @@ class PseudoBulkPipeline:
             data_format=self.config.get("data_format", "auto"),
             split_column=self.config.get("split_column", "split"),
             min_pattern_length=self.config.get("min_pattern_length"),
+            deduplicate=self.deduplicate_reads,
         )
 
     def _load_pre_predicted_splits(self) -> Dict[str, pd.DataFrame]:

@@ -177,3 +177,156 @@ class TestClassifierFitPipelinePatternFilter(unittest.TestCase):
         self.assertEqual(set(clf.train_df["methylation_ids"]), {"0101", "10"})
         # valid read has count 4 -> retained.
         self.assertEqual(len(clf.val_df), 1)
+
+
+class TestClassifierFitPipelineTuningKnobs(unittest.TestCase):
+    """Tuning hyperparameters must reach the classifier, and runs must be seedable."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _config(self, model_extra=None, **top):
+        cfg = {
+            "model": {
+                "architecture": "dismir",
+                "soft_labels": True,
+                "grg_label_column": "cluster_label",
+                **(model_extra or {}),
+            },
+            "training": {},
+            "output": {"output_dir": str(Path(self.tmp.name) / "out")},
+            "mlflow": {"enabled": False},
+            "data_path": str(Path(self.tmp.name) / "ds"),
+            "datasets": "all",
+            "label_column": "soft_label_pooled",
+        }
+        cfg.update(top)
+        return cfg
+
+    def test_penalty_scale_forwarded_to_classifier(self):
+        pipe = ClassifierFittingPipeline(
+            self._config({"penalty_scale": 0.25}), logging.getLogger("t")
+        )
+        self.assertEqual(pipe._classifier_kwargs()["penalty_scale"], 0.25)
+
+    def test_dropout_prob_forwarded_to_classifier(self):
+        pipe = ClassifierFittingPipeline(
+            self._config({"dropout_prob": 0.35}), logging.getLogger("t")
+        )
+        self.assertEqual(pipe._classifier_kwargs()["dropout_prob"], 0.35)
+
+    def test_tuning_knobs_default_to_current_behaviour(self):
+        pipe = ClassifierFittingPipeline(self._config(), logging.getLogger("t"))
+        kwargs = pipe._classifier_kwargs()
+        self.assertEqual(kwargs["penalty_scale"], 1.0)
+        self.assertEqual(kwargs["dropout_prob"], 0.2)
+
+    def test_seed_makes_torch_initialisation_reproducible(self):
+        import torch
+
+        def first_weight(seed):
+            ClassifierFittingPipeline(
+                self._config(seed=seed), logging.getLogger("t")
+            ).seed_everything()
+            return torch.nn.Linear(8, 8).weight.detach().clone()
+
+        self.assertTrue(torch.equal(first_weight(1234), first_weight(1234)))
+        self.assertFalse(torch.equal(first_weight(1234), first_weight(99)))
+
+    def test_run_seeds_before_fitting(self):
+        pipe = ClassifierFittingPipeline(self._config(seed=7), logging.getLogger("t"))
+        calls = []
+        pipe.seed_everything = lambda: calls.append("seeded") or 7
+        pipe.datasets = []  # no datasets: isolate the seeding step
+        pipe.run()
+        self.assertEqual(calls, ["seeded"])
+
+
+class _HistoryStubClassifier(_StubClassifier):
+    """Stub exposing a ``history`` like Dismir's: one record per epoch."""
+
+    def fit_classificaton(self, train_df, val_df=None, output_dir=None, **kwargs):
+        super().fit_classificaton(train_df, val_df, output_dir, **kwargs)
+        self.history = [
+            {"epoch": 1, "val_loss": 0.50, "val_f1": 0.10},
+            {"epoch": 2, "val_loss": 0.20, "val_f1": 0.80},  # best
+            {"epoch": 3, "val_loss": 0.30, "val_f1": 0.40},  # last
+        ]
+        return self
+
+
+class TestClassifierFitPipelineRunSummary(unittest.TestCase):
+    """run() must hand back the BEST epoch per dataset, not the last."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.data_dir = Path(self.tmp.name) / "ds"
+        part = self.data_dir / "region_bucket=0"
+        part.mkdir(parents=True)
+        pd.DataFrame(
+            {
+                "input_ids": ["A", "B"],
+                "methylation_ids": ["0101", "1100"],
+                "dmr_ctype_label": [0, 0],
+                "soft_label_pooled": [[0.2, 0.8], [0.7, 0.3]],
+                "split": ["train", "valid"],
+                "region_bucket": [0, 0],
+            }
+        ).to_parquet(part / "part-0.parquet")
+        self._orig = pipeline_mod.read_classifier_factory
+        pipeline_mod.read_classifier_factory = lambda **kw: _HistoryStubClassifier()
+
+    def tearDown(self):
+        pipeline_mod.read_classifier_factory = self._orig
+        self.tmp.cleanup()
+
+    def _pipe(self):
+        return ClassifierFittingPipeline(
+            {
+                "model": {
+                    "architecture": "dismir",
+                    "soft_labels": True,
+                    "grg_label_column": "dmr_ctype_label",
+                },
+                "training": {},
+                "output": {"output_dir": str(Path(self.tmp.name) / "out")},
+                "mlflow": {"enabled": False},
+                "data_path": str(self.data_dir),
+                "datasets": "all",
+                "label_column": "soft_label_pooled",
+            },
+            logging.getLogger("t"),
+        )
+
+    def test_run_returns_best_epoch_metrics_per_dataset(self):
+        summary = self._pipe().run()
+        self.assertIn("all", summary)
+        self.assertEqual(summary["all"]["best_epoch"], 2)
+        self.assertAlmostEqual(summary["all"]["val_loss"], 0.20)
+        self.assertAlmostEqual(summary["all"]["val_f1"], 0.80)
+
+    def test_run_summary_selects_on_a_configurable_metric(self):
+        pipe = self._pipe()
+        pipe.config["best_metric"] = "val_f1"
+        pipe.config["best_mode"] = "max"
+        summary = pipe.run()
+        self.assertEqual(summary["all"]["best_epoch"], 2)
+
+    def test_epoch_callback_attribute_is_forwarded_to_the_classifier(self):
+        pipe = self._pipe()
+
+        def hook(_record):
+            return True
+
+        pipe.epoch_callback = hook
+        pipe.run()
+        self.assertIs(
+            _HistoryStubClassifier.last.fit_kwargs.get("epoch_callback"), hook
+        )
+
+    def test_epoch_callback_absent_by_default(self):
+        self._pipe().run()
+        self.assertIsNone(_HistoryStubClassifier.last.fit_kwargs.get("epoch_callback"))

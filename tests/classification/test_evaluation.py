@@ -278,5 +278,48 @@ class TestMakeComputeMetrics(unittest.TestCase):
         self.assertAlmostEqual(metrics["accuracy"], 1.0)
 
 
+class TestSampleWeightedMetrics(unittest.TestCase):
+    """Count weights on unique rows must reproduce metrics on the repeated rows."""
+
+    def _data(self, num_classes, soft):
+        rng = np.random.default_rng(0)
+        n = 60
+        proba = rng.dirichlet(np.ones(num_classes), size=n).astype(np.float32)
+        if soft:
+            labels = rng.dirichlet(np.ones(num_classes) * 0.3, size=n)
+        else:
+            labels = rng.integers(0, num_classes, size=n)
+        counts = rng.integers(1, 8, size=n)
+        return proba, labels, counts
+
+    def _assert_weighted_equals_expanded(self, fn, num_classes, soft):
+        proba, labels, counts = self._data(num_classes, soft)
+        weighted = fn((proba, labels), sample_weight=counts)
+        expanded = fn(
+            (np.repeat(proba, counts, axis=0), np.repeat(labels, counts, axis=0))
+        )
+        self.assertEqual(weighted.keys(), expanded.keys())
+        for key in expanded:
+            self.assertAlmostEqual(weighted[key], expanded[key], places=6, msg=key)
+
+    def test_hard_labels_multiclass(self):
+        self._assert_weighted_equals_expanded(compute_metrics, 5, soft=False)
+
+    def test_hard_labels_binary(self):
+        self._assert_weighted_equals_expanded(compute_metrics, 2, soft=False)
+
+    def test_soft_labels_with_background(self):
+        self._assert_weighted_equals_expanded(compute_metrics_soft_labels, 5, soft=True)
+
+    def test_padding_rows_drop_their_weights(self):
+        proba = np.array([[0.9, 0.1], [0.2, 0.8], [0.6, 0.4]])
+        preds = proba.argmax(axis=1)
+        labels = np.array([0, -100, 1])
+        weighted = calculate_metric_with_sklearn(
+            proba[:, 1], preds, labels, sample_weight=np.array([3, 100, 1])
+        )
+        self.assertAlmostEqual(weighted["accuracy"], 0.75)
+
+
 if __name__ == "__main__":
     unittest.main()

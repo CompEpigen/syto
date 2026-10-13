@@ -45,7 +45,9 @@ def load_region_annotations(atlas_path, columns, sep="\t"):
         values = atlas[source]
         codes, uniques = pd.factorize(values, sort=True)
         out[dest] = codes
-        mappings[dest] = {int(code): _plain(value) for code, value in enumerate(uniques)}
+        mappings[dest] = {
+            int(code): _plain(value) for code, value in enumerate(uniques)
+        }
     return out, mappings
 
 
