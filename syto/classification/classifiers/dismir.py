@@ -11,7 +11,7 @@ from tqdm import tqdm
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import Dataset, DataLoader, Sampler
+from torch.utils.data import Dataset, DataLoader
 
 from syto.classification.training_progress import (
     TrainingProgressTracker,
@@ -34,6 +34,7 @@ from syto.classification.prediction_aggregation import (
 
 from syto.data.dataset import resolve_column
 from syto.classification.fit_data import READ_COUNT_COLUMN
+from syto.classification.read_counts import CountWeightedSampler, per_row_loss
 
 _module_logger = logging.getLogger(__name__)
 
@@ -55,35 +56,6 @@ _CODE_TO_FEATURES = torch.tensor(
     ],
     dtype=torch.float32,
 )
-
-
-class CountWeightedSampler(Sampler):
-    """Draw row indices with replacement, proportionally to read counts.
-
-    Over de-duplicated reads this reproduces the distribution of the original,
-    duplicated dataset: each draw is a read picked uniformly from the original
-    data. Unlike ``WeightedRandomSampler`` it has no 2**24-category limit. The
-    per-epoch seed is drawn from torch's global RNG, so seeding torch makes the
-    draw order reproducible.
-    """
-
-    def __init__(self, counts, num_samples=None):
-        counts = np.asarray(counts, dtype=np.float64)
-        if counts.ndim != 1 or len(counts) == 0 or (counts <= 0).any():
-            raise ValueError("counts must be a non-empty 1-D array of positive values")
-        self.probabilities = counts / counts.sum()
-        self.num_samples = int(num_samples or round(counts.sum()))
-
-    def __iter__(self):
-        seed = int(torch.randint(0, 2**63 - 1, (1,)).item())
-        rng = np.random.default_rng(seed)
-        draws = rng.choice(
-            len(self.probabilities), size=self.num_samples, p=self.probabilities
-        )
-        return iter(draws.tolist())
-
-    def __len__(self):
-        return self.num_samples
 
 
 class DISMIRConfig:
@@ -1313,18 +1285,8 @@ class Dismir(AbstractReadClassifier):
 
     @staticmethod
     def _per_row_loss(criterion, outputs, targets):
-        """Unreduced loss, one value per row (averaged over any trailing dims).
-
-        ``criterion``'s reduction is switched to ``"none"`` for the call and
-        restored afterwards; its ``"mean"`` equals the mean of these values.
-        """
-        reduction = criterion.reduction
-        criterion.reduction = "none"
-        try:
-            per_row = criterion(outputs, targets)
-        finally:
-            criterion.reduction = reduction
-        return per_row.reshape(per_row.shape[0], -1).mean(dim=1)
+        """Unreduced loss, one value per row (see ``read_counts.per_row_loss``)."""
+        return per_row_loss(criterion, outputs, targets)
 
     def _training_loop_variable_length(
         self,
