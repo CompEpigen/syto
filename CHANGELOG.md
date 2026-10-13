@@ -18,7 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `deduplicate_valid` does the same for the validation split, with
   count-weighted loss and metrics that equal the read-by-read values. The
   de-duplication key (`dedup_keys`) includes every scalar classifier column,
-  such as a GRG label, so reads seen differently are never merged.
+  such as a GRG label, so reads seen differently are never merged. MethylBERT
+  and EpigenBERT2 support the same options (MethylBERT weighs each chunk by its
+  read's count; with `use_balanced_trainer`, sampler mode draws on-target and
+  background rows in proportion to their counts).
 - Pseudobulk generation on de-duplicated reads (`deduplicate_reads`): raw
   splits are loaded de-duplicated, reads are sampled in proportion to their
   counts, and each unique read is predicted once. `prediction_block_size`

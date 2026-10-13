@@ -50,6 +50,11 @@ from syto.classification.classification_heads import (
     GRGAttentionClassificationHead,
 )
 from syto.classification.loss import ConfidenceWeightedCrossEntropy
+from syto.classification.fit_data import READ_COUNT_COLUMN
+from syto.classification.read_counts import (
+    ReadCountDatasetMixin,
+    ReadWeightedLossMixin,
+)
 from syto.classification.classifiers.abstract_read_classifier import (
     AbstractReadClassifier,
 )
@@ -81,7 +86,7 @@ def extract_signal_mask(dataset) -> np.ndarray:
     return np.asarray(dataset.on_target_mask, dtype=bool)
 
 
-class DNABERT2FineTuneDataset(Dataset):
+class DNABERT2FineTuneDataset(ReadCountDatasetMixin, Dataset):
     """Dataset for supervised fine-tuning or predicting with DNABERT2 (EpigenBERT)."""
 
     def __init__(
@@ -95,12 +100,16 @@ class DNABERT2FineTuneDataset(Dataset):
         include_grg_ids=False,
         grg_label_column=None,
         soft_labels=False,
+        read_count_column=None,
     ):
         """
         Args:
             data_path_or_list (str or list): Path to the CSV file or a structured list.
             tokenizer (transformers.PreTrainedTokenizer): Tokenizer for encoding inputs.
             kmer (int, optional): K-mer size. Defaults to -1.
+            read_count_column (str, optional): pandas column holding the
+                multiplicity of de-duplicated rows; items then carry
+                ``sample_weight``.
         """
 
         super(DNABERT2FineTuneDataset, self).__init__()
@@ -212,6 +221,8 @@ class DNABERT2FineTuneDataset(Dataset):
             self.labels = labels.to_list()
             self.cpg_methylation = methylation.to_list()
             texts = dna.to_list()
+            if read_count_column is not None:
+                self._set_read_counts(data[read_count_column].to_numpy())
             if (
                 "original_label" in data.columns
                 and self.grg_label_column is not None
@@ -312,7 +323,7 @@ class DNABERT2FineTuneDataset(Dataset):
             item["on_target_mask"] = torch.tensor(
                 bool(self.on_target_mask[i]), dtype=torch.bool
             )
-        return item
+        return self._with_sample_weight(item, i)
 
 
 @dataclass
@@ -352,6 +363,8 @@ class DataCollatorForFineTunedDataset:
             batch["grg_ids"] = torch.tensor(batch["grg_ids"], dtype=torch.long)
         if "on_target_mask" in batch:
             batch["on_target_mask"] = torch.stack(batch["on_target_mask"])
+        if "sample_weight" in batch:
+            batch["sample_weight"] = torch.stack(batch["sample_weight"])
 
         return batch
 
@@ -574,7 +587,7 @@ class BertModel(BertPreTrainedModel):
         return encoder_outputs, None
 
 
-class BertForSequenceClassification(BertPreTrainedModel):
+class BertForSequenceClassification(ReadWeightedLossMixin, BertPreTrainedModel):
     """Bert Model transformer with a sequence classification/regression head.
     This head is just a linear layer on top of the pooled output. Used for,
     e.g., GLUE tasks.
@@ -623,6 +636,7 @@ class BertForSequenceClassification(BertPreTrainedModel):
         return_dict: Optional[bool] = None,
         grg_ids: Optional[torch.Tensor] = None,  # DMR labels
         on_target_mask: Optional[torch.Tensor] = None,  # accepted; unused for now
+        sample_weight: Optional[torch.Tensor] = None,  # read count / mean count
     ) -> Union[Tuple[torch.Tensor], SequenceClassifierOutput]:
         # labels (`torch.LongTensor` of shape `(batch_size,)`, *optional*):
         # Labels for computing the sequence classification/regression loss.
@@ -676,18 +690,30 @@ class BertForSequenceClassification(BertPreTrainedModel):
             if self.config.problem_type == "regression":
                 loss_fct = nn.MSELoss()
                 if self.num_labels == 1:
-                    loss = loss_fct(logits.squeeze(), labels.squeeze())
+                    loss = self._loss(
+                        loss_fct,
+                        logits.squeeze(),
+                        labels.squeeze(),
+                        sample_weight=sample_weight,
+                    )
                 else:
-                    loss = loss_fct(logits, labels)
+                    loss = self._loss(
+                        loss_fct, logits, labels, sample_weight=sample_weight
+                    )
             elif self.config.problem_type == "single_label_classification":
                 if self.soft_labels:
                     loss_fct = ConfidenceWeightedCrossEntropy(self.num_labels)
                 else:
                     loss_fct = nn.CrossEntropyLoss()
-                loss = loss_fct(logits.view(-1, self.num_labels), labels)
+                loss = self._loss(
+                    loss_fct,
+                    logits.view(-1, self.num_labels),
+                    labels,
+                    sample_weight=sample_weight,
+                )
             elif self.config.problem_type == "multi_label_classification":
                 loss_fct = nn.BCEWithLogitsLoss()
-                loss = loss_fct(logits, labels)
+                loss = self._loss(loss_fct, logits, labels, sample_weight=sample_weight)
 
         if not return_dict:
             output = (logits,) + outputs[2:]
@@ -761,6 +787,8 @@ def initialize_model_with_custom_embeddings(
 
 
 class EpigenDnabert2(AbstractReadClassifier):
+    supports_read_counts = True
+
     def __init__(
         self,
         foundation_model_huggingface: str = "zhihan1996/DNABERT-2-117M",
@@ -908,6 +936,8 @@ class EpigenDnabert2(AbstractReadClassifier):
         ),
         signal_mask=None,
         bg_ratio: float = 0.3,
+        count_weighting="sampler",
+        samples_per_epoch=None,
     ):
         common_kwargs = dict(
             model=self.model,
@@ -921,6 +951,8 @@ class EpigenDnabert2(AbstractReadClassifier):
             tokenizer=self.tokenizer,
             preprocess_logits_for_metrics=preprocess_logits_for_prediction,
             compute_metrics=compute_metrics,
+            count_weighting=count_weighting,
+            samples_per_epoch=samples_per_epoch,
         )
 
         if signal_mask is None:
@@ -1026,6 +1058,8 @@ class EpigenDnabert2(AbstractReadClassifier):
         resume_from_checkpoint: Optional[Union[bool, str]] = None,
         signal_mask=None,
         bg_ratio: float = 0.3,
+        count_weighting="sampler",
+        samples_per_epoch=None,
     ):
 
         # Ensure that either data_path is provided or all datasets are provided
@@ -1060,6 +1094,8 @@ class EpigenDnabert2(AbstractReadClassifier):
             callbacks=callbacks,
             signal_mask=signal_mask,
             bg_ratio=bg_ratio,
+            count_weighting=count_weighting,
+            samples_per_epoch=samples_per_epoch,
         )
 
         print("All datasets are successfully initiated")
@@ -1113,6 +1149,9 @@ class EpigenDnabert2(AbstractReadClassifier):
             include_grg_ids=self.num_grg_labels is not None,
             grg_label_column=kwargs.get("grg_label_column", "dmr_ctype_label"),
             soft_labels=self.soft_labels,
+            read_count_column=(
+                READ_COUNT_COLUMN if READ_COUNT_COLUMN in train_df.columns else None
+            ),
         )
 
         # fine_tune() requires non-None train/val/test datasets when no data_path is
@@ -1128,6 +1167,9 @@ class EpigenDnabert2(AbstractReadClassifier):
                 include_grg_ids=self.num_grg_labels is not None,
                 grg_label_column=kwargs.get("grg_label_column", "dmr_ctype_label"),
                 soft_labels=self.soft_labels,
+                read_count_column=(
+                    READ_COUNT_COLUMN if READ_COUNT_COLUMN in val_df.columns else None
+                ),
             )
 
         # Apply any training_args overrides (e.g. from a YAML config dict) on
@@ -1166,6 +1208,8 @@ class EpigenDnabert2(AbstractReadClassifier):
             resume_from_checkpoint=kwargs.get("resume_from_checkpoint", None),
             signal_mask=signal_mask,
             bg_ratio=kwargs.get("bg_ratio", 0.3),
+            count_weighting=kwargs.get("count_weighting", "sampler"),
+            samples_per_epoch=kwargs.get("samples_per_epoch"),
         )
 
         # Optionally compute train-set metrics with a final evaluation pass
