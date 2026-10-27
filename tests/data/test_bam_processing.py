@@ -1098,7 +1098,7 @@ class TestBamRegionReaderContigNaming(unittest.TestCase):
         """chr1 regions fetch as 1, and reads come back labelled chr1."""
         read = FakeRead(
             reference_name="1",
-            tags={"MM": "C+m?,0;", "ML": [255]},
+            tags={"MM": "C+m?,0,0;", "ML": [255, 255]},
             forward_sequence="ACGCGT",
         )
         reader, bam = self._reader(("1", "2"), [read])
@@ -1121,3 +1121,76 @@ class TestBamRegionReaderContigNaming(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestOntCombineMods(unittest.TestCase):
+    """5mC + 5hmC calling (``ont_combine_mods``) and call/CpG consistency."""
+
+    # Two CpGs; dorado 5mCG_5hmCG layout: all C+h calls, then all C+m calls.
+    TAGS = {"MM": "C+h?,0,0;C+m?,0,0", "ML": [100, 10, 150, 10]}
+
+    def _states(self, **kwargs):
+        read = build_read(forward_sequence="ACGCGT", tags=dict(self.TAGS))
+        result = bp.process_single_read(
+            read, "ont", methyl_tr=240, unmethyl_tr=25, **kwargs
+        )
+        return result[0]["meth_states"]
+
+    def test_default_calls_5mc_only(self):
+        # 5mC alone: 150 is between the thresholds (unknown), 10 unmethylated
+        self.assertEqual(self._states(), [2, 0])
+
+    def test_combine_mods_sums_5mc_and_5hmc(self):
+        # 150 + 100 = 250 -> methylated; 10 + 10 = 20 -> unmethylated
+        self.assertEqual(self._states(combine_mods=True), [1, 0])
+
+    def test_combined_probability_is_capped(self):
+        read = build_read(
+            forward_sequence="ACGT",
+            tags={"MM": "C+h?,0;C+m?,0", "ML": [200, 200]},
+        )
+        result = bp.process_single_read(
+            read, "ont", methyl_tr=240, unmethyl_tr=25, combine_mods=True
+        )
+        self.assertEqual(result[0]["meth_states"], [1])
+
+    def test_combine_mods_without_5hmc_calls_uses_5mc(self):
+        read = build_read(
+            forward_sequence="ACGCGT", tags={"MM": "C+m?,0,0", "ML": [250, 10]}
+        )
+        result = bp.process_single_read(
+            read, "ont", methyl_tr=240, unmethyl_tr=25, combine_mods=True
+        )
+        self.assertEqual(result[0]["meth_states"], [1, 0])
+
+    def test_skips_reads_whose_calls_do_not_match_their_cpgs(self):
+        # A hard-clipped supplementary alignment keeps the full read's MM/ML
+        # tags but only part of its sequence: calls cannot be placed.
+        read = build_read(
+            forward_sequence="ACGCGT", tags={"MM": "C+m?,0,0,0", "ML": [250, 10, 10]}
+        )
+        self.assertEqual(bp.process_single_read(read, "ont"), [])
+
+    def test_parsing_params_carry_the_option(self):
+        params = bp.resolve_bam_parsing_params(None, "ont", {"ont_combine_mods": True})
+        self.assertTrue(params["combine_mods"])
+        params = bp.resolve_bam_parsing_params(None, "ont", {})
+        self.assertFalse(params["combine_mods"])
+
+    def test_region_reader_passes_the_option(self):
+        read = build_read(
+            reference_start=100, forward_sequence="ACGCGT", tags=dict(self.TAGS)
+        )
+        fake = FakeAlignmentFile(references=["chr1"], fetch_reads=[read])
+        with patch.object(bp.pysam, "AlignmentFile", return_value=fake):
+            for combine, expected in [(False, [2, 0]), (True, [1, 0])]:
+                with bp.BamRegionReader(
+                    "x.bam",
+                    "ont",
+                    methyl_tr=240,
+                    unmethyl_tr=25,
+                    require_flags=0,
+                    combine_mods=combine,
+                ) as reader:
+                    df = reader.read_regions([("chr1", 90, 110)])
+                self.assertEqual(list(df["meth_states"].iloc[0]), expected)
