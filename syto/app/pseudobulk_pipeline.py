@@ -472,7 +472,14 @@ class PseudoBulkPipeline:
         return splits_data
 
     def _load_target_proportions(self) -> Dict[str, np.ndarray]:
-        """Load target proportions for each split."""
+        """Load, or generate and save, the target proportions for each split.
+
+        A split gives either ``target_proportions_path`` (an ``.npz`` with a
+        ``proportions`` array) or ``generate_proportions`` (``n_pseudobulks``,
+        ``seed``, optional ``max_cell_types`` / ``min_cell_types``). Generated
+        proportions are saved as ``target_proportions_<split>.npz`` in the
+        output directory, so another run can reuse them by path.
+        """
         target_proportions_per_split = {}
 
         splits_configs = self.config["split_information"]
@@ -480,9 +487,14 @@ class PseudoBulkPipeline:
         # Per-split target proportions
         for split_name, split_cfg in splits_configs.items():
 
-            tp_path = split_cfg["target_proportions_path"]
-            tp_data = np.load(tp_path)
-            proportions = tp_data["proportions"]
+            if "generate_proportions" in split_cfg:
+                proportions = self._generate_target_proportions(
+                    split_name, split_cfg["generate_proportions"]
+                )
+            else:
+                tp_path = split_cfg["target_proportions_path"]
+                tp_data = np.load(tp_path)
+                proportions = tp_data["proportions"]
             if self.n_pseudobulks_to_sample is not None:
                 self.logger.info(
                     "  n_pseudobulks_to_sample was set in config. Sampling first %d pseudobulks",
@@ -497,3 +509,45 @@ class PseudoBulkPipeline:
             target_proportions_per_split[split_name] = proportions
 
         return target_proportions_per_split
+
+    def _generate_target_proportions(
+        self, split_name: str, generation_cfg: Dict[str, Any]
+    ) -> np.ndarray:
+        """Draw a split's target proportions and save them to the output directory.
+
+        The draw is seeded, so a resumed run regenerates the same proportions;
+        an existing file that differs from them (e.g. the seed was changed) is
+        refused rather than overwritten.
+        """
+        n_classes = len(self.labels_dict)
+        max_cell_types = generation_cfg.get("max_cell_types") or n_classes
+        min_cell_types = generation_cfg.get("min_cell_types", 1)
+        proportions = PseudobulkGenerator.sample_target_proportions(
+            n_pseudobulks=int(generation_cfg["n_pseudobulks"]),
+            n_classes=n_classes,
+            max_cell_types=max_cell_types,
+            min_cell_types=min_cell_types,
+            seed=generation_cfg["seed"],
+        )
+
+        path = self.output_dir / f"target_proportions_{split_name}.npz"
+        if path.exists():
+            existing = np.load(path)["proportions"]
+            if not np.array_equal(existing, proportions):
+                raise ValueError(
+                    f"{path} holds different proportions than generate_proportions "
+                    f"{generation_cfg} draws for {split_name!r}; remove it or use "
+                    "target_proportions_path"
+                )
+        else:
+            np.savez(path, proportions=proportions)
+        self.logger.info(
+            "  Generated %d proportions for %s (%d..%d cell types, seed %s) -> %s",
+            len(proportions),
+            split_name,
+            min_cell_types,
+            max_cell_types,
+            generation_cfg["seed"],
+            path,
+        )
+        return proportions

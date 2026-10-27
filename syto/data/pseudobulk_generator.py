@@ -613,6 +613,50 @@ class PseudobulkGenerator:
             string_columns=string_cols if string_cols else None,
         )
 
+    @staticmethod
+    def sample_target_proportions(
+        n_pseudobulks: int,
+        n_classes: int,
+        max_cell_types: Optional[int] = None,
+        min_cell_types: int = 1,
+        seed: int = 0,
+    ) -> np.ndarray:
+        """Draw random cell-type mixtures to use as target proportions.
+
+        Each mixture has ``k`` cell types, ``k`` uniform on
+        ``min_cell_types..max_cell_types`` (default ``n_classes``); the cell
+        types are chosen uniformly without replacement and get uniform(0, 1)
+        weights normalized to sum to 1. This is the recipe of the 39-class
+        ``target_proportions_{train,valid}.npz`` files used for the U25/U250
+        pseudobulks (there with ``max_cell_types=10``).
+
+        Args:
+            n_pseudobulks: Number of mixtures to draw.
+            n_classes: Number of cell types (columns of each mixture).
+            max_cell_types: Largest number of cell types in a mixture.
+            min_cell_types: Smallest number of cell types in a mixture.
+            seed: Seed of the random generator.
+
+        Returns:
+            Array of shape (n_pseudobulks, n_classes) whose rows sum to 1.
+        """
+        max_cell_types = n_classes if max_cell_types is None else max_cell_types
+        if not 1 <= min_cell_types <= max_cell_types <= n_classes:
+            raise ValueError(
+                "Need 1 <= min_cell_types <= max_cell_types <= n_classes, got "
+                f"{min_cell_types}, {max_cell_types}, {n_classes}"
+            )
+        rng = np.random.default_rng(seed)
+        proportions = np.zeros((n_pseudobulks, n_classes))
+        n_cell_types = rng.integers(
+            min_cell_types, max_cell_types + 1, size=n_pseudobulks
+        )
+        for row, k in zip(proportions, n_cell_types):
+            cell_types = rng.choice(n_classes, size=k, replace=False)
+            weights = rng.random(k)
+            row[cell_types] = weights / weights.sum()
+        return proportions
+
     @classmethod
     def generate_single_pseudobulk(
         cls,

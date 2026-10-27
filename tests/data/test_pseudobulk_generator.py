@@ -825,3 +825,39 @@ class TestResumeAfterConsolidationFailure(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestSampleTargetProportions(unittest.TestCase):
+    sample = staticmethod(PseudobulkGenerator.sample_target_proportions)
+
+    def test_rows_are_mixtures_of_up_to_max_cell_types(self):
+        p = self.sample(5000, n_classes=11, max_cell_types=4, seed=0)
+        self.assertEqual(p.shape, (5000, 11))
+        np.testing.assert_allclose(p.sum(axis=1), 1.0)
+        self.assertTrue((p >= 0).all())
+        k = (p > 0).sum(axis=1)
+        self.assertEqual(sorted(set(k)), [1, 2, 3, 4])
+        # cell-type counts and cell types are both drawn uniformly
+        self.assertLess(np.ptp(np.bincount(k)[1:]) / len(p), 0.05)
+        self.assertLess(np.ptp((p > 0).mean(axis=0)), 0.05)
+
+    def test_default_max_is_all_cell_types(self):
+        p = self.sample(1000, n_classes=3, seed=0)
+        self.assertEqual(sorted(set((p > 0).sum(axis=1))), [1, 2, 3])
+
+    def test_weights_are_normalized_uniforms(self):
+        # Same recipe as the existing 39-class proportion files: for two cell
+        # types the larger weight of u1/(u1+u2) has median 2/3.
+        p = self.sample(20000, n_classes=2, min_cell_types=2, seed=0)
+        self.assertAlmostEqual(np.median(p.max(axis=1)), 2 / 3, delta=0.01)
+
+    def test_seeded(self):
+        a = self.sample(10, n_classes=5, seed=7)
+        np.testing.assert_array_equal(a, self.sample(10, n_classes=5, seed=7))
+        self.assertFalse(np.array_equal(a, self.sample(10, n_classes=5, seed=8)))
+
+    def test_rejects_bad_cell_type_range(self):
+        with self.assertRaises(ValueError):
+            self.sample(10, n_classes=3, max_cell_types=4)
+        with self.assertRaises(ValueError):
+            self.sample(10, n_classes=3, min_cell_types=3, max_cell_types=2)

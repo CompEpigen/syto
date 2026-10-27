@@ -1,8 +1,10 @@
 import json
+import logging
 import tempfile
 import unittest
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from syto.app.pseudobulk_pipeline import PseudoBulkPipeline
@@ -97,3 +99,62 @@ class TestRawSplitsLoading(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestPipelineGeneratedProportions(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        labels = self.root / "labels.json"
+        labels.write_text(json.dumps({"0": "a", "1": "b", "2": "c"}))
+        self.base = {
+            "labels_dict_path": str(labels),
+            "batch_size": 10,
+            "n_workers": 1,
+            "n_reads_to_sample": 100,
+            "class_label_column": "original_label",
+            "grg_label_column": "dmr_ctype_label",
+            "classifier_config": {"num_prediction_classes": 3},
+        }
+        self.logger = logging.getLogger("test_target_proportions")
+        self.logger.addHandler(logging.NullHandler())
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _pipeline(self, out, split_information):
+        cfg = {
+            **self.base,
+            "output_dir": str(self.root / out),
+            "split_information": split_information,
+        }
+        return PseudoBulkPipeline(cfg, self.logger)
+
+    def test_generated_proportions_are_saved_and_reusable(self):
+        gen = {
+            "train": {"generate_proportions": {"n_pseudobulks": 50, "seed": 1}},
+            "valid": {"generate_proportions": {"n_pseudobulks": 20, "seed": 2}},
+        }
+        first = self._pipeline("run1", gen)._load_target_proportions()
+        self.assertEqual(first["train"].shape, (50, 3))
+        self.assertEqual(first["valid"].shape, (20, 3))
+        self.assertFalse(np.array_equal(first["train"][:20], first["valid"]))
+
+        saved = {s: self.root / "run1" / f"target_proportions_{s}.npz" for s in gen}
+        reuse = {s: {"target_proportions_path": str(p)} for s, p in saved.items()}
+        second = self._pipeline("run2", reuse)._load_target_proportions()
+        for split in gen:
+            np.testing.assert_array_equal(first[split], second[split])
+
+    def test_existing_file_with_other_proportions_is_refused(self):
+        gen = {"train": {"generate_proportions": {"n_pseudobulks": 50, "seed": 1}}}
+        self._pipeline("run1", gen)._load_target_proportions()
+        changed = {"train": {"generate_proportions": {"n_pseudobulks": 50, "seed": 3}}}
+        with self.assertRaisesRegex(ValueError, "target_proportions_train.npz"):
+            self._pipeline("run1", changed)._load_target_proportions()
+
+    def test_regenerating_identical_proportions_resumes(self):
+        gen = {"train": {"generate_proportions": {"n_pseudobulks": 50, "seed": 1}}}
+        a = self._pipeline("run1", gen)._load_target_proportions()
+        b = self._pipeline("run1", gen)._load_target_proportions()
+        np.testing.assert_array_equal(a["train"], b["train"])
