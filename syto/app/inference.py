@@ -271,6 +271,9 @@ class InferencePipeline:
                 reference_genome="hg38" if "hg38" in atlas_path else "hg19",
                 atlas_path=atlas_path,
                 sep="\t",
+                # Atlases over a subset of the Loyfer cell types (e.g. a
+                # tissue-restricted label set) list their own columns.
+                cell_types=self.syto_cfg.get("atlas_cell_types"),
             )
             self.logger.info(
                 f"Loaded syto atlas with {len(self.atlas.atlas)} regions from {atlas_path}"
@@ -554,6 +557,7 @@ class InferencePipeline:
             exclude_flags=params["exclude_flags"],
             min_cpgs=params["min_cpgs"],
             merge_pairs=params["merge_pairs"],
+            combine_mods=params["combine_mods"],
         )
         if not len(df):
             self.logger.warning(
@@ -573,6 +577,7 @@ class InferencePipeline:
                 exclude_flags=None,
                 min_cpgs=params["min_cpgs"],
                 merge_pairs=params["merge_pairs"],
+                combine_mods=params["combine_mods"],
             )
         if not len(df):
             self.logger.warning(
@@ -989,6 +994,7 @@ class InferencePipeline:
             exclude_flags=None if relax_flag_filters else params["exclude_flags"],
             min_cpgs=params["min_cpgs"],
             merge_pairs=params["merge_pairs"],
+            combine_mods=params["combine_mods"],
         )
 
     def _fetch_intervals(self, regions: pd.DataFrame) -> List[Tuple[str, int, int]]:

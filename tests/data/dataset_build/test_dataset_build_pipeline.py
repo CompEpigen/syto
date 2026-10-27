@@ -388,3 +388,86 @@ class TestRegionAnnotations(unittest.TestCase):
             self.assertEqual(list(table["cluster_label"]), [0, 1, 0])
             self.assertEqual(mappings["cluster_label"], {0: 7, 1: 42})
             self.assertEqual(sorted(table.columns), ["cluster_label", "name"])
+
+
+class TestFinalizeLabelsDict(unittest.TestCase):
+    """finalize_labels_dict_path restricts the label set and re-indexes labels."""
+
+    def test_finalize_restricts_and_reindexes_labels(self):
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            _write_atlas(d / "atlas.tsv")  # Adipocytes / Gallbladder regions
+            (d / "labels.json").write_text(
+                json.dumps({"0": "Adipocytes", "1": "Bladder-Ep", "2": "Gallbladder"})
+            )
+            (d / "labels_sub.json").write_text(json.dumps({"0": "Gallbladder"}))
+            inp = d / "in"
+            inp.mkdir()
+
+            def reads(pos, ctype):
+                return pd.DataFrame(
+                    {
+                        "ref_name": ["chr1"] * 4,
+                        "ref_pos": [pos] * 4,
+                        "original_seq": ["ACGTACGTAC"] * 4,
+                        "methyl_seq": ["0101010101"] * 4,
+                        "ctype": [ctype] * 4,
+                    }
+                )
+
+            for s in ["s1", "s2", "s3"]:
+                # Gallbladder reads at both regions, Adipocytes reads at both
+                pd.concat(
+                    [
+                        reads(1000, "Gallbladder"),
+                        reads(2000, "Gallbladder"),
+                        reads(1000, "Adipocytes"),
+                        reads(2000, "Adipocytes"),
+                    ]
+                ).to_csv(inp / f"{s}.csv", sep="\t", index=False)
+
+            base = {
+                "input_dir": str(inp),
+                "output_dir": str(d / "out"),
+                "atlas_path": str(d / "atlas.tsv"),
+                "reference_genome": "hg38",
+                "labels_dict_path": str(d / "labels.json"),
+                "n_buckets": 2,
+                "n_workers": 1,
+                "seed": 42,
+                "signature": {
+                    "start_column": "read_start",
+                    "methylation_pattern_column": "methylation_ids",
+                },
+                "labelers": {
+                    "soft_label": {
+                        "type": "data_driven_soft",
+                        "distance_name": "jaccard",
+                        "perform_pooling": True,
+                        "min_reads": 1,
+                        "max_distance": 0.0,
+                    },
+                    "label": {"type": "hard_with_background"},
+                },
+            }
+            DatasetBuildPipeline(
+                {**base, "phase": "stage"}, logging.getLogger("t")
+            ).run()
+            DatasetBuildPipeline(
+                {
+                    **base,
+                    "phase": "finalize",
+                    "finalize_labels_dict_path": str(d / "labels_sub.json"),
+                },
+                logging.getLogger("t"),
+            ).run()
+
+            finals = list((d / "out" / "final").rglob("*.parquet"))
+            out = pd.concat([pd.read_parquet(p) for p in finals], ignore_index=True)
+            # Only Gallbladder reads in the Gallbladder region survive.
+            self.assertEqual(set(out["name"]), {"chr1:2001-2010"})
+            self.assertEqual(len(out), 12)
+            self.assertEqual(set(out["original_label"]), {0})
+            self.assertEqual(set(out["dmr_ctype_label"]), {0})
+            self.assertEqual({len(v) for v in out["soft_label"]}, {1})
+            self.assertTrue(set(out["split"]).issubset({"train", "valid", "test"}))
