@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-11-05
+
+### Added
+
+- Dataset finalization on a subset of the staged cell types.
+  `finalize_labels_dict_path` names a labels dict over the subset: reads of
+  other samples, or in regions marking other cell types, are dropped and the
+  labels are re-indexed, so a classifier sees only these classes. Inference
+  reads atlases over such a subset through `atlas_cell_types`.
+- `ont_combine_mods` calls ONT CpGs on P(5mC) + P(5hmC), counting 5hmC as
+  methylated as bisulfite sequencing does. It needs `C+h` calls in the tags
+  (e.g. from dorado's 5mCG_5hmCG models) and otherwise uses 5mC alone. Off by
+  default.
+- Pseudobulk generation can draw its own target proportions. A split gives
+  `generate_proportions` (`n_pseudobulks`, `seed`, optional `max_cell_types`
+  and `min_cell_types`) instead of `target_proportions_path`; the draw is saved
+  as `target_proportions_<split>.npz` in the output directory, so another run
+  can reuse it.
+- `output_format: columnar` makes pseudobulk generation write a
+  `pseudobulk_columnar/` Parquet store instead of `pseudobulk.h5`.
+- One read split can be sampled several times, for example at different
+  coverages: a split sets `source_split` and its own `n_reads_to_sample`.
+  Splits sampled from one source share a single inputs file in a columnar store.
+- `uniform_prior_source` (`path`, `split`) substitutes missing GR groups in
+  every split using the pure-profile prior of another store's split, as
+  inference does. Without it, each split uses its own prior.
+
+### Fixed
+
+- ONT reads whose modification calls do not match their CpGs one to one are now
+  skipped, because their calls cannot be placed. An example is a hard-clipped
+  supplementary alignment that carries the full read's MM/ML tags but only part
+  of its sequence.
+
 ## [1.3.0] - 2026-10-13
 
 ### Added
@@ -238,7 +272,8 @@ First tagged release (as methyldl).
 - Bootstrap confidence intervals.
 - End-to-end inference integration.
 
-[Unreleased]: https://github.com/CompEpigen/syto/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/CompEpigen/syto/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/CompEpigen/syto/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/CompEpigen/syto/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/CompEpigen/syto/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/CompEpigen/syto/compare/v1.0.0...v1.1.0
