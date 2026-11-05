@@ -86,6 +86,8 @@ class PseudoBulkPipeline:
         self.batch_size = config["batch_size"]
         self.n_workers = config["n_workers"]
         self.n_reads_to_sample = config["n_reads_to_sample"]
+        # hdf5 (pseudobulk.h5) or columnar (pseudobulk_columnar/ Parquet store)
+        self.output_format = config.get("output_format", "hdf5")
 
         # columns
         self.class_label_column = config["class_label_column"]
@@ -114,7 +116,8 @@ class PseudoBulkPipeline:
         Returns
         -------
         Path
-            Path to the final consolidated HDF5 file.
+            Path to the consolidated store: ``pseudobulk.h5`` or, with
+            ``output_format: columnar``, the ``pseudobulk_columnar/`` directory.
         """
         # ── Stage 1: Load splits ──────────────────────────────────
         self.logger.info("Stage 1: Loading data splits ...")
@@ -149,6 +152,11 @@ class PseudoBulkPipeline:
 
         # Filter columns to reduce memory usage
         self._filter_split_columns(splits_data)
+        # One frame per source split; splits sampling the same source (e.g.
+        # test_1000, test_2000 from test) share it.
+        splits_data = {
+            split: splits_data[source] for split, source in self._source_splits().items()
+        }
 
         # Load target proportions
         target_proportions_per_split = self._load_target_proportions()
@@ -166,11 +174,13 @@ class PseudoBulkPipeline:
             n_workers=self.n_workers,
             metadata=metadata,
             parameters=parameters,
-            n_reads_to_sample=self.n_reads_to_sample,
+            n_reads_to_sample=self._n_reads_per_split(),
             class_label_column=self.class_label_column,
             grg_label_column=self.grg_label_column,
             columns_to_keep=self.columns_to_keep,
             num_prediction_classes=self.num_prediction_classes,
+            uniform_prior=self._load_uniform_prior(),
+            output_format=self.output_format,
             logger=self.logger,
         )
 
@@ -178,6 +188,48 @@ class PseudoBulkPipeline:
         self.logger.info(f"Generation complete: {output_path}")
 
         return output_path
+
+    # ═══════════════════════════════════════════════════════════════
+    #  Split configuration
+    # ═══════════════════════════════════════════════════════════════
+
+    def _source_splits(self) -> Dict[str, str]:
+        """Map each configured split to the split its reads come from.
+
+        A split reads its own data unless it sets ``source_split``, so one
+        data split can be sampled several times, e.g. at different coverages.
+        """
+        return {
+            split: cfg.get("source_split", split)
+            for split, cfg in self.config["split_information"].items()
+        }
+
+    def _n_reads_per_split(self) -> Dict[str, int]:
+        """Reads per pseudobulk for each split: its own, else the global value."""
+        return {
+            split: int(cfg.get("n_reads_to_sample", self.n_reads_to_sample))
+            for split, cfg in self.config["split_information"].items()
+        }
+
+    def _load_uniform_prior(self):
+        """Load the prior configured under ``uniform_prior_source``, if any.
+
+        ``{path, split}`` names a pseudobulk store and the split whose
+        pure-profile prior substitutes missing GR groups in every split, as
+        inference's ``pseudobulk_path`` / ``pure_profiles_split`` does.
+        Without it, each split uses its own pure-profile prior.
+        """
+        source = self.config.get("uniform_prior_source")
+        if not source:
+            return None
+        from syto.data.pseudobulk_store import open_pseudobulk_store
+
+        split = source.get("split", "train")
+        self.logger.info(
+            "  Substitution prior: split %r of %s", split, source["path"]
+        )
+        reader = open_pseudobulk_store(source["path"], logger=self.logger)
+        return reader.read_uniform_prior(split)
 
     # ═══════════════════════════════════════════════════════════════
     #  Stage helpers
@@ -439,7 +491,7 @@ class PseudoBulkPipeline:
         # on datasets that legitimately do not carry them.
         return load_raw_splits(
             self.config["data_path"],
-            list(self.config["split_information"].keys()),
+            list(dict.fromkeys(self._source_splits().values())),
             classifier_required_columns=classifier.required_predict_columns(fit_shim),
             data_format=self.config.get("data_format", "auto"),
             split_column=self.config.get("split_column", "split"),
@@ -448,12 +500,23 @@ class PseudoBulkPipeline:
         )
 
     def _load_pre_predicted_splits(self) -> Dict[str, pd.DataFrame]:
-        """Load pre-predicted splits from per-split parquet or pickle files."""
-        splits_configs = self.config["split_information"]
+        """Load pre-predicted splits from per-split parquet or pickle files.
+
+        Keyed by source split: splits sharing a ``source_split`` load its
+        ``data_path`` once, so they must agree on it.
+        """
+        paths: Dict[str, str] = {}
+        for split, source in self._source_splits().items():
+            path = self.config["split_information"][split]["data_path"]
+            if paths.setdefault(source, path) != path:
+                raise ValueError(
+                    f"Splits sampling '{source}' give different data_path values: "
+                    f"{paths[source]} and {path}"
+                )
         splits_data = {}
 
-        for split_name, split_cfg in splits_configs.items():
-            path = Path(split_cfg["data_path"])
+        for split_name, data_path in paths.items():
+            path = Path(data_path)
             file_extension = path.suffix.lower()
             if file_extension == ".parquet":
                 splits_data[split_name] = pd.read_parquet(path)

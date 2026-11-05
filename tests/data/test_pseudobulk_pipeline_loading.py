@@ -158,3 +158,112 @@ class TestPipelineGeneratedProportions(unittest.TestCase):
         a = self._pipeline("run1", gen)._load_target_proportions()
         b = self._pipeline("run1", gen)._load_target_proportions()
         np.testing.assert_array_equal(a["train"], b["train"])
+
+
+class TestPipelineCoverageSplits(unittest.TestCase):
+    """Splits sampling one pre-predicted source at their own depths."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        labels = self.root / "labels.json"
+        labels.write_text(json.dumps({"0": "a", "1": "b", "2": "c"}))
+
+        rng = np.random.default_rng(0)
+        n = 3 * 3 * 20
+        reads = pd.DataFrame(
+            {
+                "original_label": np.repeat(np.arange(3), n // 3),
+                "dmr_ctype_label": np.tile(np.repeat(np.arange(3), 20), 3),
+                "NCPGS": rng.integers(1, 9, n),
+            }
+        )
+        for i in range(3):
+            reads[f"prediction_{i}"] = rng.random(n)
+        self.data_path = self.root / "test_predicted.pkl"
+        reads.to_pickle(self.data_path)
+        proportions = self.root / "proportions.npz"
+        np.savez(proportions, proportions=rng.dirichlet(np.ones(3), size=4))
+
+        self.config = {
+            "input_type": "pre_predicted",
+            "output_format": "columnar",
+            "labels_dict_path": str(labels),
+            "batch_size": 2,
+            "n_workers": 1,
+            "n_reads_to_sample": 300,
+            "class_label_column": "original_label",
+            "grg_label_column": "dmr_ctype_label",
+            "classifier_type": "dismir",
+            "classifier_config": {"num_prediction_classes": 3},
+            "substitution_method": "uniform_number",
+            "grg_sampling_method": "uniform_multinomial",
+            "split_information": {
+                name: {
+                    "source_split": "test",
+                    "data_path": str(self.data_path),
+                    "target_proportions_path": str(proportions),
+                    **({"n_reads_to_sample": n_reads} if n_reads else {}),
+                }
+                for name, n_reads in (("test_5", 5), ("test_300", None))
+            },
+        }
+        self.logger = logging.getLogger("test_coverage_splits")
+        self.logger.addHandler(logging.NullHandler())
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _run(self, out, **overrides):
+        cfg = {**self.config, "output_dir": str(self.root / out), **overrides}
+        return PseudoBulkPipeline(cfg, self.logger).run()
+
+    def test_sources_load_once_and_splits_get_their_depth(self):
+        from syto.data.pseudobulk_store import open_pseudobulk_store
+
+        pipeline = PseudoBulkPipeline(
+            {**self.config, "output_dir": str(self.root / "run")}, self.logger
+        )
+        self.assertEqual(list(pipeline._load_splits()), ["test"])
+        self.assertEqual(pipeline._n_reads_per_split(), {"test_5": 5, "test_300": 300})
+
+        reader = open_pseudobulk_store(self._run("run"))
+        self.assertEqual(sorted(reader.list_splits()), ["test_300", "test_5"])
+        for split, n_reads in (("test_5", 5), ("test_300", 300)):
+            for _, counts, _ in reader.iter_pseudobulk_params(split):
+                # Each cell type's share is floored, so up to n_classes - 1
+                # reads are lost.
+                self.assertIn(int(counts.sum()), range(n_reads - 2, n_reads + 1))
+
+    def test_splits_of_one_source_must_agree_on_data_path(self):
+        self.config["split_information"]["test_5"]["data_path"] = "other.pkl"
+        pipeline = PseudoBulkPipeline(
+            {**self.config, "output_dir": str(self.root / "run")}, self.logger
+        )
+        with self.assertRaisesRegex(ValueError, "different data_path"):
+            pipeline._load_splits()
+
+    def test_prior_comes_from_the_configured_store(self):
+        from syto.data.pseudobulk_store import open_pseudobulk_store
+
+        reference = self._run("reference")
+        blended = self._run(
+            "blended",
+            substitution_method="prior_blending",
+            uniform_prior_source={"path": str(reference), "split": "test_300"},
+        )
+
+        # 5 reads over 3 cell types x 3 GR groups leave some groups empty;
+        # those rows equal the reference prior exactly.
+        prior = open_pseudobulk_store(reference).read_uniform_prior("test_300")
+        expected = prior[[f"prediction_{i}_wavg" for i in range(3)]].to_numpy()
+        features, _ = open_pseudobulk_store(blended).read_pseudobulk_matrices(
+            "test_5", 3
+        )
+        reader = open_pseudobulk_store(blended)
+        n_empty = 0
+        for pb, (_, counts, _) in enumerate(reader.iter_pseudobulk_params("test_5")):
+            for grg in np.flatnonzero(counts.sum(axis=0) == 0):
+                np.testing.assert_allclose(features[pb, grg], expected[grg])
+                n_empty += 1
+        self.assertGreater(n_empty, 0)

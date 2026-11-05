@@ -161,11 +161,13 @@ class PseudobulkGenerator:
         n_workers: int,
         metadata: GenerationMetadata,
         parameters: GenerationParameters,
-        n_reads_to_sample: int = 475_000,
+        n_reads_to_sample: Union[int, Dict[str, int]] = 475_000,
         class_label_column: str = "original_label",
         grg_label_column: str = "dmr_ctype_label",
         columns_to_keep: List[str] = None,
         num_prediction_classes: Optional[int] = None,
+        uniform_prior: Optional[pd.DataFrame] = None,
+        output_format: Literal["hdf5", "columnar"] = "hdf5",
         logger: logging.Logger = _module_logger,
     ):
         """Initialize the PseudobulkGenerator.
@@ -173,7 +175,9 @@ class PseudobulkGenerator:
         Args:
             splits_df: Dictionary mapping split names to DataFrames containing
                 read-level predictions. Expected columns include predictions,
-                NCPGS, and grouping columns.
+                NCPGS, and grouping columns. Splits may share one DataFrame
+                object (e.g. one test set sampled at several coverages); its
+                sampling indices are then computed once.
             output_directory: Directory for output files (batches, checkpoints, final HDF5).
             target_proportions_per_split: Dictionary mapping split names to 2D arrays
                 of shape (n_pseudobulks, n_classes) where each row sums to 1.
@@ -181,7 +185,10 @@ class PseudobulkGenerator:
             n_workers: Number of Dask workers for parallel generation.
             metadata: Metadata about the generation (classifier, labeling scheme, etc.).
             parameters: Generation parameters (cell types mapping, substitution method, etc.).
-            n_reads_to_sample: Total reads to sample per pseudobulk.
+            n_reads_to_sample: Total reads to sample per pseudobulk, either one
+                number for every split or a ``{split_name: n_reads}`` mapping
+                covering every split. A split's pure profiles are sampled at
+                the same depth as its pseudobulks.
             class_label_column: Column name containing the class labels for each read.
             grg_label_column: Column name containing the GRG labels for grouping reads.
             columns_to_keep: Columns to keep in aggregated output. If None, uses
@@ -192,6 +199,14 @@ class PseudobulkGenerator:
                 (``len(cell_types_mapping)``): the classifier may emit extra
                 classes (e.g. a cancer class) with no cell-type entry. Defaults to
                 the cell-type count for backward compatibility.
+            uniform_prior: Prior used by the "prior_blending" and
+                "prior_imputation" substitution methods for every split, as
+                read by a store's ``read_uniform_prior`` (columns matched by
+                name). Defaults to each split's own pure-profile prior; pass
+                the training store's prior to blend like inference does.
+            output_format: Backend of the consolidated store: ``"hdf5"``
+                writes ``pseudobulk.h5``, ``"columnar"`` writes a
+                ``pseudobulk_columnar/`` Parquet store.
             logger: Logger instance.
         """
         # Validate target proportions
@@ -210,7 +225,19 @@ class PseudobulkGenerator:
         self.n_workers = n_workers
         self.metadata = metadata
         self.parameters = parameters
-        self.n_reads_to_sample = n_reads_to_sample
+        if isinstance(n_reads_to_sample, dict):
+            missing = set(target_proportions_per_split) - set(n_reads_to_sample)
+            if missing:
+                raise ValueError(f"n_reads_to_sample has no entry for {sorted(missing)}")
+            self.n_reads_per_split = {s: int(n) for s, n in n_reads_to_sample.items()}
+        else:
+            self.n_reads_per_split = {
+                s: int(n_reads_to_sample) for s in target_proportions_per_split
+            }
+        if output_format not in ("hdf5", "columnar"):
+            raise ValueError(f"Unknown output_format '{output_format}'")
+        self.output_format = output_format
+        self.uniform_prior = uniform_prior
         self.class_label_column = class_label_column
         self.grg_label_column = grg_label_column
         self.n_classes = len(parameters.cell_types_mapping)
@@ -242,6 +269,11 @@ class PseudobulkGenerator:
 
         self.output_directory.mkdir(parents=True, exist_ok=True)
 
+    def _first_split_sharing_frame(self, split_name: str) -> str:
+        """Return the first split whose DataFrame is the same object as *split_name*'s."""
+        df = self.splits_df[split_name]
+        return next(name for name, other in self.splits_df.items() if other is df)
+
     def _precompute_group_indices(self) -> None:
         """Pre-compute group indices for each split for efficient sampling.
 
@@ -259,6 +291,10 @@ class PseudobulkGenerator:
         grg_to_index = self.parameters.gr_groups_mapping
 
         for split_name, df in self.splits_df.items():
+            source = self._first_split_sharing_frame(split_name)
+            if source != split_name:
+                self._indices_per_split[split_name] = self._indices_per_split[source]
+                continue
             # Group by (class_label, grg_label) and get indices directly
             grouped = df.groupby(
                 [self.class_label_column, self.grg_label_column], sort=False
@@ -305,6 +341,12 @@ class PseudobulkGenerator:
         pred_cols = [f"prediction_{i}" for i in range(self.num_prediction_classes)]
 
         for split_name, df in self.splits_df.items():
+            source = self._first_split_sharing_frame(split_name)
+            if source != split_name:
+                self._numpy_arrays_per_split[split_name] = (
+                    self._numpy_arrays_per_split[source]
+                )
+                continue
             arrays = {
                 "gr_group_idx_array": df[self.grg_label_column].values.astype(np.int64),
                 "weight_array": df["NCPGS"].values.astype(np.float64),
@@ -340,11 +382,11 @@ class PseudobulkGenerator:
            a. Generate pseudobulk batches in parallel using Dask
            b. Generate pure profiles
            c. Mark split as completed
-        3. Consolidate all batches into final HDF5 file
+        3. Consolidate all batches into the final store (``output_format``)
         4. Cleanup intermediate files
 
         Returns:
-            Path to the final consolidated HDF5 file.
+            Path to ``pseudobulk.h5`` or the ``pseudobulk_columnar/`` store.
         """
         # Check for existing config or create new one
         config = self.checkpoint_manager.load_config()
@@ -393,17 +435,25 @@ class PseudobulkGenerator:
 
             # Generate pseudobulks for this split
             self._generate_single_split(
-                split_name, uniform_prior_matrix=pure_profile.uniform_prior
+                split_name, uniform_prior_matrix=self._prior_matrix(pure_profile)
             )
 
             # Mark split as completed
             self.checkpoint_manager.mark_split_completed(split_name)
             self.logger.info("Completed split: %s", split_name)
 
-        # Consolidate all batches into final HDF5
-        self.logger.info("Consolidating batches into final HDF5...")
-        output_path = self.output_directory / "pseudobulk.h5"
-        consolidator = PseudobulkHDF5ConsolidationWriter(output_path, self.logger)
+        # Consolidate all batches into the final store
+        self.logger.info("Consolidating batches into the %s store...", self.output_format)
+        if self.output_format == "columnar":
+            from syto.data.pseudobulk_columnar import PseudobulkColumnarWriter
+
+            consolidator = PseudobulkColumnarWriter(
+                self.output_directory / "pseudobulk_columnar", logger=self.logger
+            )
+        else:
+            consolidator = PseudobulkHDF5ConsolidationWriter(
+                self.output_directory / "pseudobulk.h5", self.logger
+            )
         final_path = consolidator.consolidate(
             checkpoint_manager=self.checkpoint_manager,
             metadata=self.metadata,
@@ -418,6 +468,27 @@ class PseudobulkGenerator:
 
         self.logger.info("Generation complete: %s", final_path)
         return final_path
+
+    def _prior_matrix(self, pure_profile: PureProfileResult) -> np.ndarray:
+        """Return the prior used to substitute missing GR groups for a split.
+
+        The configured ``uniform_prior`` when one was given, with its columns
+        put in the order of the split's pure-profile columns; otherwise the
+        split's own pure-profile prior.
+        """
+        if self.uniform_prior is None:
+            return pure_profile.uniform_prior
+        missing = set(pure_profile.numeric_columns) - set(self.uniform_prior.columns)
+        if missing:
+            raise ValueError(f"uniform_prior lacks columns {sorted(missing)}")
+        if len(self.uniform_prior) != self.n_gr_groups:
+            raise ValueError(
+                f"uniform_prior has {len(self.uniform_prior)} rows, "
+                f"expected one per GR group ({self.n_gr_groups})"
+            )
+        return self.uniform_prior[pure_profile.numeric_columns].to_numpy(
+            dtype=np.float64
+        )
 
     def _generate_single_split(
         self,
@@ -476,7 +547,7 @@ class PseudobulkGenerator:
             numpy_arrays = self._numpy_arrays_per_split[split_name]
             for idx in range(start_idx, end_idx):
                 result = delayed(self.generate_single_pseudobulk)(
-                    n_reads_to_sample=self.n_reads_to_sample,
+                    n_reads_to_sample=self.n_reads_per_split[split_name],
                     n_gr_groups=self.n_gr_groups,
                     n_classes=self.num_prediction_classes,
                     indices_per_class_and_grg=indices_dict,
@@ -538,7 +609,7 @@ class PseudobulkGenerator:
             proportions[class_idx] = 1.0
 
             result = self.generate_single_pseudobulk(
-                n_reads_to_sample=self.n_reads_to_sample,
+                n_reads_to_sample=self.n_reads_per_split[split_name],
                 n_gr_groups=self.n_gr_groups,
                 n_classes=self.num_prediction_classes,
                 indices_per_class_and_grg=indices_dict,
