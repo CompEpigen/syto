@@ -208,10 +208,10 @@ def run_pretraining(config: Dict[str, Any], logger: logging.Logger) -> None:
 
 
 def run_pseudobulk_generation(config: Dict[str, Any], logger: logging.Logger) -> None:
-    """Run pseudo-bulk generation using the HDF5-based PseudobulkGenerator."""
+    """Run pseudo-bulk generation using the PseudobulkGenerator."""
     from syto.app.pseudobulk_pipeline import PseudoBulkPipeline
 
-    logger.info("Starting pseudo-bulk generation pipeline (HDF5-based)")
+    logger.info("Starting pseudo-bulk generation pipeline")
     pipeline = PseudoBulkPipeline(config=config, logger=logger)
     output_path = pipeline.run()
 
@@ -219,7 +219,7 @@ def run_pseudobulk_generation(config: Dict[str, Any], logger: logging.Logger) ->
     logger.info("=" * 60)
     logger.info("PSEUDO-BULK GENERATION SUMMARY")
     logger.info("=" * 60)
-    logger.info(f"  Output HDF5: {output_path}")
+    logger.info(f"  Output store: {output_path}")
     logger.info("=" * 60)
 
 
