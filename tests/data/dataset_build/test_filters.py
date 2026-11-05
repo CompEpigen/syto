@@ -72,3 +72,61 @@ class TestStagedCounts(unittest.TestCase):
             )
             got = {(r.file, r.original_label): r.n_reads for r in out.itertuples()}
             self.assertEqual(got, {("f0", 0): 1, ("f0", 1): 1})
+
+
+class TestLabelRemap(unittest.TestCase):
+    def test_maps_codes_by_cell_type_name(self):
+        from syto.data.dataset_build.filters import subset_label_remap
+
+        source = {"0": "A", "1": "B", "2": "C", "3": "D"}
+        target = {"0": "B", "1": "D"}
+        self.assertEqual(subset_label_remap(source, target), {1: 0, 3: 1})
+
+    def test_rejects_cell_types_missing_from_source(self):
+        from syto.data.dataset_build.filters import subset_label_remap
+
+        with self.assertRaisesRegex(ValueError, "Z"):
+            subset_label_remap({"0": "A"}, {"0": "A", "1": "Z"})
+
+    def test_rejects_non_contiguous_target_codes(self):
+        from syto.data.dataset_build.filters import subset_label_remap
+
+        with self.assertRaisesRegex(ValueError, "0..1"):
+            subset_label_remap({"0": "A", "1": "B"}, {"0": "A", "2": "B"})
+
+
+class TestFilterAndRemapLabels(unittest.TestCase):
+    def test_drops_reads_outside_subset_and_reindexes(self):
+        from syto.data.dataset_build.filters import filter_and_remap_labels
+
+        df = pd.DataFrame(
+            {
+                "original_label": [1, 3, 1, 2, 3],
+                "dmr_ctype_label": [3, 1, 2, 1, 3],
+                "x": [0, 1, 2, 3, 4],
+            }
+        )
+        out = filter_and_remap_labels(df, {1: 0, 3: 1})
+        # row 2: region target 2 not kept; row 3: sample label 2 not kept
+        self.assertEqual(list(out["x"]), [0, 1, 4])
+        self.assertEqual(list(out["original_label"]), [0, 1, 1])
+        self.assertEqual(list(out["dmr_ctype_label"]), [1, 0, 1])
+
+
+class TestStagedCountsLabelRemap(unittest.TestCase):
+    def test_counts_use_remapped_labels(self):
+        with tempfile.TemporaryDirectory() as d:
+            b = Path(d) / "region_bucket=0"
+            b.mkdir(parents=True)
+            pd.DataFrame(
+                {
+                    "file": ["f0", "f0", "f1", "f1"],
+                    "original_label": [3, 3, 2, 3],
+                    "dmr_ctype_label": [3, 2, 3, 3],
+                    "name": ["r1"] * 4,
+                    "pat": ["0101"] * 4,
+                }
+            ).to_parquet(b / "s.parquet", index=False)
+            out = staged_counts(d, pattern_column="pat", label_remap={3: 0})
+            got = {(r.file, r.original_label): r.n_reads for r in out.itertuples()}
+            self.assertEqual(got, {("f0", 0): 1, ("f1", 0): 1})

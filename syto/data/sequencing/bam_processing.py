@@ -172,6 +172,8 @@ def resolve_bam_parsing_params(
         "chromosomes": chromosomes,
         "methyl_tr": bam_cfg.get("ont_methyl_tr", 122),
         "unmethyl_tr": bam_cfg.get("ont_unmethyl_tr"),
+        # Count 5hmC as methylated, as bisulfite sequencing does.
+        "combine_mods": bool(bam_cfg.get("ont_combine_mods", False)),
         "n_jobs": bam_cfg.get("n_jobs", 4),
         "min_mapq": bam_cfg.get("min_mapq", 10),
         "require_flags": require_flags,
@@ -205,6 +207,7 @@ class ChunkTask:
     require_flags: int
     exclude_flags: int
     min_cpgs: int
+    combine_mods: bool = False
 
 
 # ============================================================
@@ -351,6 +354,23 @@ def extract_cpg_ml_values(ml_array, mm_info):
     else:
         # Handle edge case where ML array is shorter than expected
         return np.array(ml_array[offset:])
+
+
+def extract_mod_ml_values(ml_array, mm_info, base, code):
+    """Return the ML values of the ``<base>+<code>`` modification, if present.
+
+    ML holds the calls of every MM group back to back, in MM order; ``code``
+    matches with or without the ``?``/``.`` skip-mode suffix (``"h"`` matches
+    ``C+h?``). Returns an empty array when the group is absent.
+    """
+    if mm_info is None:
+        return np.array([])
+    offset = 0
+    for mod_base, mod_code, skips in mm_info["modifications"]:
+        if mod_base == base and mod_code.rstrip("?.") == code:
+            return np.array(ml_array[offset : offset + len(skips)])
+        offset += len(skips)
+    return np.array([])
 
 
 # ============================================================
@@ -576,7 +596,7 @@ def _passes_quality_filters(
     return True
 
 
-def _extract_cpgs_ont(read, methyl_tr=122, unmethyl_tr=None):
+def _extract_cpgs_ont(read, methyl_tr=122, unmethyl_tr=None, combine_mods=False):
     """
     Extract CpG positions and methylation states from an ONT read.
 
@@ -595,11 +615,16 @@ def _extract_cpgs_ont(read, methyl_tr=122, unmethyl_tr=None):
         either state and are marked UNKNOWN. None (default) means
         ``unmethyl_tr = methyl_tr``, i.e. a single decision boundary with no
         UNKNOWN band.
+    combine_mods : bool
+        Call on P(5mC) + P(5hmC) instead of P(5mC) alone, i.e. count 5hmC as
+        methylated as bisulfite sequencing does (needs ``C+h`` calls in the
+        tags, e.g. from dorado's 5mCG_5hmCG models; otherwise 5mC alone).
 
     Returns
     -------
     tuple of (pos_in_read, meth_states, seq, read_length) or None
-        Returns None if tags are missing or no CpG modifications found.
+        Returns None if tags are missing, no CpG modifications are found, or
+        the calls do not match the read's CpGs one to one.
     """
     try:
         ml_values_full = read.get_tag("ML")
@@ -618,9 +643,22 @@ def _extract_cpgs_ont(read, methyl_tr=122, unmethyl_tr=None):
         return None
 
     seq = read.get_forward_sequence()
+    # Calls are assigned to the read's CpGs in order. A record whose calls do
+    # not match its CpGs one to one cannot be placed: e.g. a hard-clipped
+    # supplementary alignment carries the full read's MM/ML tags but only part
+    # of its sequence.
+    if seq is None or len(ml_values) != seq.count("CG"):
+        return None
     read_length = len(seq)
 
-    # Scan for CpGs using extracted C+m probabilities
+    if combine_mods:
+        hmc_values = extract_mod_ml_values(ml_values_full, mm_info, "C", "h")
+        if len(hmc_values) == len(ml_values):
+            ml_values = np.minimum(
+                ml_values.astype(np.int64) + hmc_values.astype(np.int64), 255
+            )
+
+    # Scan for CpGs using extracted C+m (or C+m + C+h) probabilities
     pos_in_read, meth_states = cpg_scan(
         seq.encode(), ml_values, methyl_tr, resolve_unmethyl_tr(methyl_tr, unmethyl_tr)
     )
@@ -780,6 +818,7 @@ def process_single_read(
     require_flags=3,
     exclude_flags=1796,
     min_cpgs=1,
+    combine_mods=False,
 ):
     """
     Process a single read and return its methylation data.
@@ -813,6 +852,8 @@ def process_single_read(
     min_cpgs : int
         Minimum number of CpG sites required in the read (default: 1).
         Reads with fewer CpGs are skipped.
+    combine_mods : bool
+        ONT only: call CpGs on P(5mC) + P(5hmC); see :func:`_extract_cpgs_ont`.
 
     Returns
     -------
@@ -828,7 +869,7 @@ def process_single_read(
 
     # Data-type-specific CpG extraction
     if data_type == DataType.ONT.value:
-        result = _extract_cpgs_ont(read, methyl_tr, unmethyl_tr)
+        result = _extract_cpgs_ont(read, methyl_tr, unmethyl_tr, combine_mods)
     elif data_type == DataType.WGBS.value:
         if ref_fasta is None:
             raise ValueError("Reference genome (ref_fasta) required for WGBS data")
@@ -898,6 +939,7 @@ def process_tabular_chunk(task):
                 require_flags=task.require_flags,
                 exclude_flags=task.exclude_flags,
                 min_cpgs=task.min_cpgs,
+                combine_mods=task.combine_mods,
             )
 
             # Add all read entries (each read returns a list with one dict)
@@ -942,6 +984,8 @@ class BamRegionReader:
         Reference FASTA, required for WGBS.
     methyl_tr, unmethyl_tr : int
         ONT calling thresholds; see :func:`cpg_scan`.
+    combine_mods : bool
+        ONT only: call CpGs on P(5mC) + P(5hmC); see :func:`_extract_cpgs_ont`.
     min_mapq, require_flags, exclude_flags, min_cpgs : int
         Read filters, matching :func:`process_bam_with_chunking`.
     merge_pairs : bool
@@ -963,6 +1007,7 @@ class BamRegionReader:
         exclude_flags=1796,
         min_cpgs=1,
         merge_pairs=False,
+        combine_mods=False,
     ):
         if data_type == DataType.WGBS.value and reference_path is None:
             raise ValueError("Reference genome path is required for WGBS data")
@@ -976,6 +1021,7 @@ class BamRegionReader:
         self.exclude_flags = exclude_flags
         self.min_cpgs = min_cpgs
         self.merge_pairs = resolve_merge_pairs(data_type, merge_pairs)
+        self.combine_mods = combine_mods
 
         self._bam = pysam.AlignmentFile(bam_path, "rb")
         if not self._bam.has_index():
@@ -1049,6 +1095,7 @@ class BamRegionReader:
                     require_flags=self.require_flags,
                     exclude_flags=self.exclude_flags,
                     min_cpgs=self.min_cpgs,
+                    combine_mods=self.combine_mods,
                 )
                 if fetch_name != chromosome:
                     # Report the caller's spelling so reads rejoin the atlas.
@@ -1131,6 +1178,7 @@ def read_bam_regions(params, intervals, log=None, verbose=True):
             exclude_flags=exclude_flags,
             min_cpgs=params["min_cpgs"],
             merge_pairs=params["merge_pairs"],
+            combine_mods=params.get("combine_mods", False),
         ) as reader:
             return reader.read_regions(intervals)
 
@@ -1170,6 +1218,7 @@ def process_bam_with_chunking(
     exclude_flags=1796,
     min_cpgs=1,
     merge_pairs=True,
+    combine_mods=False,
 ):
     """
     Process BAM file and extract read-level methylation data.
@@ -1219,6 +1268,8 @@ def process_bam_with_chunking(
         merged, spanning the full fragment. Also adds reference-based CpG counts
         including 'unknown_cpgs' for CpGs in the insert region. (default: True).
         Ignored for ONT data (see :func:`resolve_merge_pairs`).
+    combine_mods : bool
+        ONT only: call CpGs on P(5mC) + P(5hmC); see :func:`_extract_cpgs_ont`.
 
     Returns
     -------
@@ -1280,6 +1331,7 @@ def process_bam_with_chunking(
                     require_flags=require_flags,
                     exclude_flags=exclude_flags,
                     min_cpgs=min_cpgs,
+                    combine_mods=combine_mods,
                 )
             )
 

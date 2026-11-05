@@ -971,3 +971,54 @@ class TestAtlasRestrictedStageOne(BamBackedTestBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestSytoAtlasCellTypes(unittest.TestCase):
+    """An atlas over a subset of cell types loads via ``atlas_cell_types``."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        atlas = build_atlas_frame()
+        others = [c for c in UXMMethylationAtlas.EXPECTED_CTYPE_COLUMNS if c not in TARGETS]
+        atlas = atlas.drop(columns=others)
+        self.atlas_path = self.tmp / "atlas.hg38.tsv"
+        atlas.to_csv(self.atlas_path, sep="\t", index=False)
+        self.labels_path = self.tmp / "labels.json"
+        self.labels_path.write_text(json.dumps(dict(enumerate(TARGETS))))
+        self.mask_path = self.tmp / "mask.npz"
+        np.savez(self.mask_path, features_mask=np.ones(len(TARGETS) ** 2, dtype=bool))
+        self.logger = logging.getLogger("test_atlas_cell_types")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _config(self, **syto):
+        return {
+            "labels_dict_path": str(self.labels_path),
+            "features_mask_path": str(self.mask_path),
+            "checkpoint_path": "unused",
+            "num_labels": len(TARGETS),
+            "classifier": {"classifier_type": "lookup"},
+            "input": {"type": "parsed_reads", "data_path": "unused.pkl"},
+            "output_dir": str(self.tmp / "out"),
+            "fill_in_missing_labels": False,
+            "deconvolution": {
+                "syto": {
+                    "atlas_path": str(self.atlas_path),
+                    "methods": [{"name": "ls", "flavor": "nnls", "enabled": False}],
+                    **syto,
+                },
+                "baselines": [],
+            },
+        }
+
+    def test_subset_atlas_needs_its_cell_types(self):
+        with self.assertRaisesRegex(ValueError, "missing expected cell type"):
+            InferencePipeline(config=self._config(), logger=self.logger)
+
+    def test_subset_atlas_loads_with_atlas_cell_types(self):
+        pipeline = InferencePipeline(
+            config=self._config(atlas_cell_types=list(TARGETS)), logger=self.logger
+        )
+        targets = sorted(pipeline.atlas.atlas["target"].unique())
+        self.assertEqual(targets, sorted(TARGETS))

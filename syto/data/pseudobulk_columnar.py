@@ -11,6 +11,8 @@ removes the overhead and is readable without ``h5py``::
     ├── metadata.json              grg_id_column, labeling_scheme, classifier, watermark
     ├── parameters.json            cell-type / GR-group mappings, sampling methods
     ├── inputs/<split>.parquet     the per-split reads, in generation row order
+    │                              (splits sampled from one frame share one file,
+    │                              named by the manifest's ``inputs_split``)
     └── outputs/<split>/
         ├── features.parquet       n_pseudobulks*n_grg rows, one row per GR group
         ├── proportions.parquet    one row per pseudobulk (seed, target, actual)
@@ -95,10 +97,13 @@ class SplitManifest:
     feature_columns: List[str]
     has_pure_profiles: bool
     n_input_rows: int
+    # Split whose inputs/<split>.parquet holds this split's reads, when the
+    # generator sampled several splits from one frame. None: its own file.
+    inputs_split: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to a JSON-serialisable dictionary."""
-        return {
+        data = {
             "n_pseudobulks": self.n_pseudobulks,
             "n_grg": self.n_grg,
             "n_classes": self.n_classes,
@@ -106,6 +111,9 @@ class SplitManifest:
             "has_pure_profiles": self.has_pure_profiles,
             "n_input_rows": self.n_input_rows,
         }
+        if self.inputs_split is not None:
+            data["inputs_split"] = self.inputs_split
+        return data
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "SplitManifest":
@@ -117,6 +125,7 @@ class SplitManifest:
             feature_columns=list(data["feature_columns"]),
             has_pure_profiles=bool(data["has_pure_profiles"]),
             n_input_rows=int(data["n_input_rows"]),
+            inputs_split=data.get("inputs_split"),
         )
 
 
@@ -163,6 +172,7 @@ class PseudobulkColumnarWriter:
         self._metadata: Optional[Dict[str, Any]] = None
         self._parameters: Optional[Dict[str, Any]] = None
         self._input_rows: Dict[str, int] = {}
+        self._inputs_split: Dict[str, str] = {}
         self._pure_profiles: Dict[str, bool] = {}
 
     # -- Paths ---------------------------------------------------------------
@@ -224,6 +234,18 @@ class PseudobulkColumnarWriter:
         self._input_rows[split_name] = written
         return dest
 
+    def share_inputs(self, split_name: str, inputs_split: str) -> None:
+        """Record that a split's reads are the ones already written for another.
+
+        Args:
+            split_name: Name of the split without its own inputs file.
+            inputs_split: Split whose ``inputs/<split>.parquet`` holds the reads.
+        """
+        if inputs_split not in self._input_rows:
+            raise ValueError(f"No inputs written for split '{inputs_split}'.")
+        self._input_rows[split_name] = self._input_rows[inputs_split]
+        self._inputs_split[split_name] = inputs_split
+
     def write_pure_profiles(self, split_name: str, pure_profile: Any) -> Optional[Path]:
         """Write the pure profiles and uniform prior for a split.
 
@@ -270,6 +292,7 @@ class PseudobulkColumnarWriter:
     def _record_split(self, split_name: str, manifest: SplitManifest) -> None:
         manifest.has_pure_profiles = self._pure_profiles.get(split_name, False)
         manifest.n_input_rows = self._input_rows.get(split_name, 0)
+        manifest.inputs_split = self._inputs_split.get(split_name)
         self._splits[split_name] = manifest
 
     # -- Finalisation ---------------------------------------------------------
@@ -290,6 +313,7 @@ class PseudobulkColumnarWriter:
         for split_name, manifest in self._splits.items():
             manifest.has_pure_profiles = self._pure_profiles.get(split_name, False)
             manifest.n_input_rows = self._input_rows.get(split_name, 0)
+            manifest.inputs_split = self._inputs_split.get(split_name)
 
         manifest = {
             "format_version": FORMAT_VERSION,
@@ -350,8 +374,15 @@ class PseudobulkColumnarWriter:
 
         try:
             self.write_metadata(metadata, parameters)
+            # Splits sampled from one frame (one test set at several
+            # coverages) share a single inputs file.
+            written: Dict[int, str] = {}
             for split_name, df in input_dfs.items():
-                self.write_inputs(split_name, df)
+                if id(df) in written:
+                    self.share_inputs(split_name, written[id(df)])
+                else:
+                    self.write_inputs(split_name, df)
+                    written[id(df)] = split_name
 
             config = checkpoint_manager.load_config()
             for split_name in config.splits_order:
@@ -780,7 +811,9 @@ class PseudobulkColumnarReader(BasePseudobulkReader):
 
     def _read_input_dataframe(self, split_name: str) -> pd.DataFrame:
         """Read back the per-split input reads, in generation row order."""
-        path = self.path / "inputs" / f"{split_name}.parquet"
+        manifest = self._splits.get(split_name)
+        inputs_split = (manifest and manifest.inputs_split) or split_name
+        path = self.path / "inputs" / f"{inputs_split}.parquet"
         if not path.is_file():
             raise KeyError(
                 f"No input data found for split '{split_name}' in {self.path}."

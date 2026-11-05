@@ -10,6 +10,7 @@ from syto.data.omics_signatures_handlers.binary_cpg_signature import (
 from syto.data.labelers.labeler_factory import LabelerContext, apply_labelers
 from syto.data.dataset_build.splits import apply_splits
 from syto.data.dataset_build.filters import (
+    filter_and_remap_labels,
     filter_by_atlas_regions,
     filter_by_pattern_length,
 )
@@ -55,8 +56,12 @@ def finalize_bucket(
     fit_splits=None,
     fallback="uniform",
     split_remap=None,
+    label_remap=None,
 ):
     """Gather one bucket's staged shards, filter, label+split, sort, and compact.
+
+    ``label_remap`` (old -> new label code) restricts reads to a label subset
+    and re-indexes their labels before any labeler sees them.
 
     Returns the written path, or ``None`` when the bucket is empty after filtering.
     """
@@ -66,6 +71,8 @@ def finalize_bucket(
 
     if region_names is not None:
         df = filter_by_atlas_regions(df, region_names)
+    if label_remap is not None:
+        df = filter_and_remap_labels(df, label_remap)
     if region_annotations is not None:
         # Carry atlas-level region attributes (e.g. the block's cluster) onto
         # every read, so a classifier head can key on them.

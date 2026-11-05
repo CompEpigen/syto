@@ -27,6 +27,7 @@ from syto.data.dataset_build.filters import (
     staged_counts,
     load_region_names,
     load_region_annotations,
+    subset_label_remap,
 )
 from syto.data.labelers.archetype_labeler import ArchetypeLabeler
 from syto.data.sequencing.bam_processing import resolve_bam_parsing_params
@@ -227,6 +228,20 @@ class DatasetBuildPipeline:
 
     def _run_finalize(self) -> Dict[str, Any]:
         labels_dict = self._labels_dict()
+        # A labels dict over a subset of the staged cell types: reads of other
+        # samples or in regions marking other cell types are dropped, and the
+        # labels are re-indexed to it, so a classifier sees only these classes.
+        finalize_labels_path = self.config.get("finalize_labels_dict_path")
+        label_remap = None
+        if finalize_labels_path:
+            finalize_labels = json.loads(Path(finalize_labels_path).read_text())
+            label_remap = subset_label_remap(labels_dict, finalize_labels)
+            labels_dict = finalize_labels
+            self.logger.info(
+                "Restricting finalize to %d label(s) from %s",
+                len(labels_dict),
+                finalize_labels_path,
+            )
         num_classes = len(labels_dict)
         labelers_config = self.config["labelers"]
         signature_config = self.config["signature"]
@@ -258,7 +273,11 @@ class DatasetBuildPipeline:
                 self.logger.info(
                     "Region annotation %r: %d distinct value(s)", dest, len(mapping)
                 )
-        filtering_active = region_names is not None or bool(min_pattern_length)
+        filtering_active = (
+            region_names is not None
+            or bool(min_pattern_length)
+            or label_remap is not None
+        )
 
         if filtering_active:
             counts = staged_counts(
@@ -266,6 +285,7 @@ class DatasetBuildPipeline:
                 region_names=region_names,
                 min_pattern_length=min_pattern_length,
                 pattern_column=pattern_column,
+                label_remap=label_remap,
             )
         else:
             counts = pd.concat(
@@ -302,6 +322,7 @@ class DatasetBuildPipeline:
                 fit_splits=fit_splits,
                 fallback=fallback,
                 split_remap=split_remap,
+                label_remap=label_remap,
             )
             if path is not None:
                 written.append(path)

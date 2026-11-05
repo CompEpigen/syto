@@ -825,3 +825,162 @@ class TestResumeAfterConsolidationFailure(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestSampleTargetProportions(unittest.TestCase):
+    sample = staticmethod(PseudobulkGenerator.sample_target_proportions)
+
+    def test_rows_are_mixtures_of_up_to_max_cell_types(self):
+        p = self.sample(5000, n_classes=11, max_cell_types=4, seed=0)
+        self.assertEqual(p.shape, (5000, 11))
+        np.testing.assert_allclose(p.sum(axis=1), 1.0)
+        self.assertTrue((p >= 0).all())
+        k = (p > 0).sum(axis=1)
+        self.assertEqual(sorted(set(k)), [1, 2, 3, 4])
+        # cell-type counts and cell types are both drawn uniformly
+        self.assertLess(np.ptp(np.bincount(k)[1:]) / len(p), 0.05)
+        self.assertLess(np.ptp((p > 0).mean(axis=0)), 0.05)
+
+    def test_default_max_is_all_cell_types(self):
+        p = self.sample(1000, n_classes=3, seed=0)
+        self.assertEqual(sorted(set((p > 0).sum(axis=1))), [1, 2, 3])
+
+    def test_weights_are_normalized_uniforms(self):
+        # Same recipe as the existing 39-class proportion files: for two cell
+        # types the larger weight of u1/(u1+u2) has median 2/3.
+        p = self.sample(20000, n_classes=2, min_cell_types=2, seed=0)
+        self.assertAlmostEqual(np.median(p.max(axis=1)), 2 / 3, delta=0.01)
+
+    def test_seeded(self):
+        a = self.sample(10, n_classes=5, seed=7)
+        np.testing.assert_array_equal(a, self.sample(10, n_classes=5, seed=7))
+        self.assertFalse(np.array_equal(a, self.sample(10, n_classes=5, seed=8)))
+
+    def test_rejects_bad_cell_type_range(self):
+        with self.assertRaises(ValueError):
+            self.sample(10, n_classes=3, max_cell_types=4)
+        with self.assertRaises(ValueError):
+            self.sample(10, n_classes=3, min_cell_types=3, max_cell_types=2)
+
+
+class TestSplitsSampledFromOneFrame(unittest.TestCase):
+    """Several splits drawn from one frame at different depths (coverage sweep)."""
+
+    N_GRG = 20
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.output_dir = Path(self.temp_dir)
+        np.random.seed(0)
+        self.df = build_realistic_split_dataframe(
+            labels=[0, 1], n_gr_groups=self.N_GRG, n_reads_per_group=5
+        )
+
+    def tearDown(self):
+        shutil.rmtree(self.temp_dir)
+
+    def _generator(self, **kwargs):
+        proportions = np.array([[0.5, 0.5], [0.3, 0.7], [0.9, 0.1]])
+        defaults = dict(
+            splits_df={"low": self.df, "high": self.df},
+            output_directory=self.output_dir,
+            target_proportions_per_split={"low": proportions, "high": proportions},
+            batch_size=2,
+            n_workers=1,
+            metadata=GenerationMetadata(
+                grg_id_column="dmr_ctype_label",
+                labeling_scheme="test",
+                classifier="test",
+                data_watermark="test",
+            ),
+            parameters=GenerationParameters(
+                cell_types_mapping={"class_0": 0, "class_1": 1},
+                gr_groups_mapping={str(i): i for i in range(self.N_GRG)},
+                substitution_method="uniform_number",
+                grg_sampling_method="uniform_multinomial",
+            ),
+            n_reads_to_sample={"low": 10, "high": 400},
+        )
+        defaults.update(kwargs)
+        return PseudobulkGenerator(**defaults)
+
+    def _prior(self, value):
+        columns = (
+            ["dmr_ctype_label"]
+            + [f"prediction_{i}_wavg" for i in range(2)]
+            + ["methylation_level_wavg", "total_weight", "n_reads"]
+        )
+        prior = pd.DataFrame(value, index=range(self.N_GRG), columns=columns)
+        prior["dmr_ctype_label"] = np.arange(self.N_GRG, dtype=float)
+        # Column order is matched by name, not position.
+        return prior[columns[::-1]]
+
+    def test_shared_frame_is_indexed_once(self):
+        generator = self._generator()
+        self.assertIs(
+            generator._indices_per_split["low"], generator._indices_per_split["high"]
+        )
+        self.assertIs(
+            generator._numpy_arrays_per_split["low"],
+            generator._numpy_arrays_per_split["high"],
+        )
+
+    def test_n_reads_must_cover_every_split(self):
+        with self.assertRaisesRegex(ValueError, "high"):
+            self._generator(n_reads_to_sample={"low": 10})
+
+    def test_each_split_is_sampled_at_its_own_depth(self):
+        from syto.data.pseudobulk_store import open_pseudobulk_store
+
+        path = self._generator(output_format="columnar").run()
+
+        self.assertEqual(path.name, "pseudobulk_columnar")
+        reader = open_pseudobulk_store(path)
+        for split, n_reads in (("low", 10), ("high", 400)):
+            for _, counts, _ in reader.iter_pseudobulk_params(split):
+                self.assertEqual(counts.sum(), n_reads)
+            for reads, _ in reader.iter_pseudobulk_read_subsets(split):
+                self.assertEqual(len(reads), n_reads)
+
+    def test_columnar_store_writes_shared_inputs_once(self):
+        path = self._generator(output_format="columnar").run()
+
+        self.assertEqual(
+            sorted(p.name for p in (path / "inputs").iterdir()), ["low.parquet"]
+        )
+
+    def test_external_prior_fills_groups_without_reads(self):
+        from syto.data.pseudobulk_store import open_pseudobulk_store
+
+        parameters = GenerationParameters(
+            cell_types_mapping={"class_0": 0, "class_1": 1},
+            gr_groups_mapping={str(i): i for i in range(self.N_GRG)},
+            substitution_method="prior_blending",
+            grg_sampling_method="uniform_multinomial",
+        )
+        path = self._generator(
+            parameters=parameters,
+            uniform_prior=self._prior(0.123),
+            output_format="columnar",
+        ).run()
+
+        # 10 reads over 20 GR groups: at least 10 groups get no reads and
+        # collapse onto the prior.
+        features, _ = open_pseudobulk_store(path).read_pseudobulk_matrices("low", 2)
+        empty_rows = np.isclose(features, 0.123).all(axis=2)
+        self.assertTrue((empty_rows.sum(axis=1) >= 10).all())
+
+    def test_external_prior_must_have_the_feature_columns(self):
+        parameters = GenerationParameters(
+            cell_types_mapping={"class_0": 0, "class_1": 1},
+            gr_groups_mapping={str(i): i for i in range(self.N_GRG)},
+            substitution_method="prior_blending",
+            grg_sampling_method="uniform_multinomial",
+        )
+        prior = self._prior(0.1).drop(columns="prediction_1_wavg")
+        with self.assertRaisesRegex(ValueError, "prediction_1_wavg"):
+            self._generator(parameters=parameters, uniform_prior=prior).run()
+
+    def test_hdf5_remains_the_default(self):
+        path = self._generator().run()
+        self.assertEqual(path.name, "pseudobulk.h5")
